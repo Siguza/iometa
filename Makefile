@@ -6,7 +6,7 @@ SRC = src
 all: $(TARGET)
 
 $(TARGET): src/*.c
-	$(CC) -o $@ $^ -Wall -O3 $(CFLAGS)
+	$(CC) -o $@ $^ -Wall -O3 -framework CoreFoundation -framework IOKit $(CFLAGS)
 
 clean:
 	rm -rf $(TARGET)
