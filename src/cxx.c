@@ -1,0 +1,85 @@
+#include <stdbool.h>
+#include <stdio.h>              // asprintf
+#include <stdlib.h>             // malloc
+#include <string.h>             // strncmp, memcpy
+
+#include "cxx.h"
+
+static int demangle_num(const char **ptr)
+{
+    const char *sym = *ptr;
+    if(!(*sym >= '0' && *sym <= '9'))
+    {
+        return -1;
+    }
+    int ret = 0;
+    while(*sym >= '0' && *sym <= '9')
+    {
+        ret = (ret * 10) + (*sym - '0');
+        ++sym;
+    }
+    *ptr = sym;
+    return ret;
+}
+
+bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr)
+{
+    if(strncmp(sym, "__ZN", 4) != 0)
+    {
+        return false;
+    }
+    sym += 4;
+    bool cnst = false;
+    if(*sym == 'K')
+    {
+        cnst = true;
+        ++sym;
+    }
+    int clslen = demangle_num(&sym);
+    if(clslen == -1)
+    {
+        return false;
+    }
+    char *cls = malloc(clslen + 1);
+    if(!cls)
+    {
+        return false;
+    }
+    memcpy(cls, sym, clslen);
+    cls[clslen] = '\0';
+    sym += clslen;
+    char *mthd = NULL;
+    switch(*sym)
+    {
+        case 'C':
+        {
+            asprintf(&mthd, "%s()%s", cls, cnst ? " const" : "");
+            break;
+        }
+        case 'D':
+        {
+            asprintf(&mthd, "~%s()%s", cls, cnst ? " const" : "");
+            break;
+        }
+        default:
+        {
+            int mthdlen = demangle_num(&sym);
+            if(mthdlen == -1)
+            {
+                return false;
+            }
+            asprintf(&mthd, "%.*s()%s", mthdlen, sym, cnst ? " const" : "");
+            // TODO: arguments
+            break;
+        }
+    }
+    if(!mthd)
+    {
+        free(cls);
+        return false;
+    }
+
+    *classptr = cls;
+    *methodptr = mthd;
+    return true;
+}

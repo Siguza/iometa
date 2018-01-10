@@ -44,6 +44,7 @@ How this works:
 #include <sys/mman.h>           // mmap
 #include <sys/stat.h>           // fstat
 #include <mach/machine.h>       // CPU_TYPE_ARM64
+#include <mach-o/fat.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -51,6 +52,7 @@ How this works:
 extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, CFOptionFlags options, CFStringRef *errorString);
 
 #include "a64.h"
+#include "cxx.h"
 
 static bool debug = false;
 
@@ -60,9 +62,13 @@ static bool debug = false;
 #define ERR(str, args...) LOG("\x1b[1;91m[ERR] " str "\x1b[0m", ##args)
 #define ERRNO(str, args...) ERR(str ": %s", ##args, strerror(errno))
 
+#define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
+
 #define ADDR "0x%016llx"
 #define MACH_MAGIC MH_MAGIC_64
 #define MACH_SEGMENT LC_SEGMENT_64
+typedef struct fat_header fat_hdr_t;
+typedef struct fat_arch fat_arch_t;
 typedef struct mach_header_64 mach_hdr_t;
 typedef struct load_command mach_lc_t;
 typedef struct segment_command_64 mach_seg_t;
@@ -96,26 +102,43 @@ typedef struct
 } kmod_info_t;
 #pragma pack()
 
-typedef struct vtab_entry
+typedef struct
 {
-    struct vtab_entry *next;
-    const char *name;
-    kptr_t old;
-    kptr_t new;
-} vtab_entry_t;
+    const char *class;
+    const char *method;
+} vtab_entry_name_t;
 
 typedef struct
 {
     kptr_t addr;
+    vtab_entry_name_t name;
+} vtab_entry_t;
+
+typedef struct vtab_override
+{
+    struct vtab_override *next;
+    vtab_entry_name_t name;
+    kptr_t old;
+    kptr_t new;
+    uint32_t idx;
+} vtab_override_t;
+
+typedef struct metaclass
+{
+    kptr_t addr;
     kptr_t parent;
     kptr_t vtab;
+    struct metaclass *parentP;
     const char *name;
     const char *bundle;
     struct {
-        vtab_entry_t *head;
-        vtab_entry_t **nextP;
+        vtab_override_t *head;
+        vtab_override_t **nextP;
     } overrides;
     uint32_t objsize;
+    uint32_t overrides_done : 1,
+             overrides_err  : 1,
+             reserved       : 30;
 } metaclass_t;
 
 static kptr_t off2addr(void *kernel, size_t off)
@@ -340,11 +363,11 @@ int compare_bundles(const void *a, const void *b)
     return r != 0 ? r : compare_names(a, b);
 }
 
-static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bool opt_size, bool opt_vtab)
+static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bool opt_size, bool opt_vtab, bool opt_overrides)
 {
     if(opt_vtab)
     {
-        if(meta->vtab == 0 || meta->vtab == -1) // TODO: abstract class?
+        if(meta->vtab == -1)
         {
             printf("vtab=?????????????????? ");
         }
@@ -367,6 +390,13 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
         printf(" (%s)", meta->bundle ? meta->bundle : "???");
     }
     printf("\n");
+    if(opt_overrides)
+    {
+        for(vtab_override_t *ovr = meta->overrides.head; ovr != NULL; ovr = ovr->next)
+        {
+            printf("    %3u func=" ADDR " overrides=" ADDR " %s::%s\n", ovr->idx, ovr->new, ovr->old, ovr->name.class, ovr->name.method);
+        }
+    }
 }
 
 static void print_help(const char *self)
@@ -381,7 +411,7 @@ static void print_help(const char *self)
                     "    -d  Debug output\n"
                     "    -e  Filter extending ClassName\n"
                     "    -m  Print MetaClass addresses\n"
-                    "    -o  Print overridden virtual methods\n"
+                    "    -o  Print overridden/new virtual methods\n"
                     "    -p  Filter parents of ClassName\n"
                     "    -s  Print object sizes\n"
                     "    -S  Sort by class/bundle name\n"
@@ -531,17 +561,40 @@ int main(int argc, const char **argv)
         return -1;
     }
 
-    if(s.st_size < sizeof(mach_hdr_t))
+    size_t kernelsize = s.st_size;
+    if(kernelsize < sizeof(mach_hdr_t))
     {
         ERR("File is too short to be a Mach-O.");
         return -1;
     }
 
-    void *kernel = mmap(NULL, s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    void *kernel = mmap(NULL, kernelsize, PROT_READ, MAP_PRIVATE, fd, 0);
     if(kernel == MAP_FAILED)
     {
         ERRNO("mmap");
         return -1;
+    }
+
+    fat_hdr_t *fat = kernel;
+    if(fat->magic == FAT_CIGAM)
+    {
+        bool found = false;
+        fat_arch_t *arch = (fat_arch_t*)(fat + 1);
+        for(size_t i = 0; i < SWAP32(fat->nfat_arch); ++i)
+        {
+            if(SWAP32(arch[i].cputype) == CPU_TYPE_ARM64)
+            {
+                kernel = (void*)((uintptr_t)kernel + SWAP32(arch[i].offset));
+                kernelsize = SWAP32(arch[i].size);
+                found = true;
+                break;
+            }
+        }
+        if(!found)
+        {
+            ERR("No arm64 slice in fat binary.");
+            return -1;
+        }
     }
 
     mach_hdr_t *hdr = (mach_hdr_t*)kernel;
@@ -613,34 +666,37 @@ do \
            OSMetaClassVtab = 0,
            OSObjectVtab = 0,
            OSObjectGetMetaClass = 0;
+    mach_stab_t *stab = NULL;
+    nlist_t *symtab = NULL;
+    char *strtab = NULL;
     FOREACH_CMD(hdr, cmd)
     {
         if(cmd->cmd == LC_SYMTAB)
         {
-            mach_stab_t *stab = (mach_stab_t*)cmd;
-            nlist_t *sym = (nlist_t*)((uintptr_t)kernel + stab->symoff);
-            char *str = (char*)((uintptr_t)kernel + stab->stroff);
+            stab = (mach_stab_t*)cmd;
+            symtab = (nlist_t*)((uintptr_t)kernel + stab->symoff);
+            strtab = (char*)((uintptr_t)kernel + stab->stroff);
             for(size_t i = 0; i < stab->nsyms; ++i)
             {
-                char *s = &str[sym[i].n_un.n_strx];
+                char *s = &strtab[symtab[i].n_un.n_strx];
                 if(strcmp(s, "__ZN11OSMetaClassC2EPKcPKS_j") == 0)
                 {
-                    OSMetaClassConstructor = sym[i].n_value;
+                    OSMetaClassConstructor = symtab[i].n_value;
                     DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
                 }
                 else if(strcmp(s, "__ZTV11OSMetaClass") == 0)
                 {
-                    OSMetaClassVtab = sym[i].n_value + 2 * sizeof(kptr_t);
+                    OSMetaClassVtab = symtab[i].n_value + 2 * sizeof(kptr_t);
                     DBG("OSMetaClassVtab: " ADDR, OSMetaClassVtab);
                 }
                 else if(strcmp(s, "__ZTV8OSObject") == 0)
                 {
-                    OSObjectVtab = sym[i].n_value + 2 * sizeof(kptr_t);
+                    OSObjectVtab = symtab[i].n_value + 2 * sizeof(kptr_t);
                     DBG("OSObjectVtab: " ADDR, OSObjectVtab);
                 }
                 else if(strcmp(s, "__ZNK8OSObject12getMetaClassEv") == 0)
                 {
-                    OSObjectGetMetaClass = sym[i].n_value;
+                    OSObjectGetMetaClass = symtab[i].n_value;
                     DBG("OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
                 }
             }
@@ -655,7 +711,7 @@ do \
 
     ARRPUSH(aliases, OSMetaClassConstructor);
 
-    for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + s.st_size); mem < end; ++mem)
+    for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
     {
         if(*mem == OSMetaClassConstructor)
         {
@@ -774,11 +830,15 @@ do \
                                 meta->addr = state.x[0];
                                 meta->parent = state.x[2];
                                 meta->vtab = 0;
+                                meta->parentP = NULL;
                                 meta->name = addr2ptr(kernel, state.x[1]);
                                 meta->bundle = NULL;
                                 meta->overrides.head = NULL;
                                 meta->overrides.nextP = &meta->overrides.head;
                                 meta->objsize = state.x[3];
+                                meta->overrides_done = 0;
+                                meta->overrides_err = 0;
+                                meta->reserved = 0;
                                 if(!meta->name)
                                 {
                                     ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
@@ -795,17 +855,39 @@ do \
     }
 
     DBG("Got %lu metaclasses", metas.idx);
+    for(size_t i = 0; i < metas.idx; ++i)
+    {
+        metaclass_t *meta = &metas.val[i];
+        if(meta->parent == 0)
+        {
+            continue;
+        }
+        for(size_t j = 0; j < metas.idx; ++j)
+        {
+            metaclass_t *parent = &metas.val[j];
+            if(parent->addr == meta->parent)
+            {
+                meta->parentP = parent;
+                break;
+            }
+        }
+        if(!meta->parentP)
+        {
+            ERR("Failed to find parent of %s", meta->name);
+            return -1;
+        }
+    }
 
     if(opt_vtab || opt_overrides)
     {
         if(!OSObjectVtab)
         {
-            ERR("Failed to find OSObjectVtab");
+            ERR("Failed to find OSObjectVtab.");
             return -1;
         }
         if(!OSObjectGetMetaClass)
         {
-            ERR("Failed to find OSObjectGetMetaClass");
+            ERR("Failed to find OSObjectGetMetaClass.");
             return -1;
         }
         kptr_t *ovtab = addr2ptr(kernel, OSObjectVtab);
@@ -884,7 +966,7 @@ do \
                                 {
                                     DBG("Got func " ADDR " referencing MetaClass %s", func, metas.val[i].name);
                                     bool got = false;
-                                    for(kptr_t *mem2 = (kptr_t*)kernel + VtabGetMetaClassOff + 2, *end2 = (kptr_t*)((uintptr_t)kernel + s.st_size); mem2 < end2; ++mem2)
+                                    for(kptr_t *mem2 = (kptr_t*)kernel + VtabGetMetaClassOff + 2, *end2 = (kptr_t*)((uintptr_t)kernel + kernelsize); mem2 < end2; ++mem2)
                                     {
                                         if(*mem2 == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
                                         {
@@ -914,12 +996,169 @@ do \
             }
         }
 
+#if 0
+        // Just abstract classes, I guess...
         for(size_t i = 0; i < metas.idx; ++i)
         {
             if(metas.val[i].vtab == 0)
             {
                 WRN("Failed to find vtab for %s", metas.val[i].name);
             }
+        }
+#endif
+
+        if(opt_overrides)
+        {
+            ARRINIT(vtab_entry_t, fncache, 0x200);
+            for(size_t i = 0; i < metas.idx; ++i)
+            {
+                again:;
+                bool do_again = false;
+                metaclass_t *meta = &metas.val[i],
+                            *parent = meta->parentP;
+                if(meta->overrides_done || meta->overrides_err)
+                {
+                    goto done;
+                }
+                if(parent)
+                {
+                    while(!parent->overrides_err && !parent->overrides_done)
+                    {
+                        do_again = true;
+                        meta = parent;
+                        parent = meta->parentP;
+                        if(!parent)
+                        {
+                            break;
+                        }
+                    }
+                    if(parent && parent->overrides_err)
+                    {
+                        DBG("Skipping class %s because parent class was skipped.", meta->name);
+                        meta->overrides_err = 1;
+                        goto done;
+                    }
+                }
+                if(meta->vtab == 0 || meta->vtab == -1)
+                {
+                    DBG("Skipping class %s because vtable is missing.", meta->name);
+                    meta->overrides_err = 1;
+                    goto done;
+                }
+                // Parent is guaranteed to either be NULL or have a valid vtab here
+                kptr_t *mvtab = addr2ptr(kernel, meta->vtab);
+                if(!mvtab)
+                {
+                    WRN("%s vtab lies outside all segments.", meta->name);
+                    meta->overrides_err = 1;
+                    goto done;
+                }
+                kptr_t *pvtab = NULL;
+                if(parent)
+                {
+                    pvtab = addr2ptr(kernel, parent->vtab);
+                    if(!pvtab)
+                    {
+                        WRN("%s vtab lies outside all segments.", parent->name);
+                        meta->overrides_err = 1;
+                        goto done;
+                    }
+                }
+                for(size_t idx = 2; mvtab[idx] != 0; ++idx) // Skip destructors
+                {
+                    if(!pvtab || mvtab[idx] != pvtab[idx])
+                    {
+                        if(pvtab && pvtab[idx] == 0)
+                        {
+                            // Signal that we've reached end of the parent vtable
+                            pvtab = NULL;
+                        }
+                        kptr_t func = mvtab[idx];
+                        vtab_entry_t *entry = NULL;
+                        // stab, symtab and strtab are guaranteed to be non-NULL here or we would've exited long ago
+                        for(size_t n = 0; n < stab->nsyms; ++n)
+                        {
+                            if(symtab[n].n_value == func)
+                            {
+                                char *s = &strtab[symtab[n].n_un.n_strx];
+                                if(strcmp(s, "___cxa_pure_virtual") == 0)
+                                {
+                                    func = 0;
+                                    break;
+                                }
+                                const char *class = NULL,
+                                           *method = NULL;
+                                if(!cxx_demangle(s, &class, &method))
+                                {
+                                    WRN("Failed to demangle symbol: %s", s);
+                                }
+                                else
+                                {
+                                    if(strcmp(class, meta->name) != 0 && (strcmp(class, "OSMetaClassBase")) != 0)
+                                    {
+                                        WRN("Symbol name doesn't match class name in %s: %s::%s vs %s", s, class, method, meta->name);
+                                    }
+                                    ARRNEXT(fncache, entry);
+                                    entry->addr = func;
+                                    entry->name.class = class;
+                                    entry->name.method = method;
+                                }
+                                break;
+                            }
+                        }
+                        if(!entry && pvtab)
+                        {
+                            kptr_t pfunc = pvtab[idx];
+                            for(size_t n = 0; n < fncache.idx; ++n)
+                            {
+                                if(fncache.val[n].addr == pfunc)
+                                {
+                                    ARRNEXT(fncache, entry);
+                                    entry->addr = func;
+                                    entry->name.class = meta->name;
+                                    entry->name.method = fncache.val[n].name.method;
+                                    break;
+                                }
+                            }
+                        }
+                        if(!entry)
+                        {
+                            char *method = NULL;
+                            asprintf(&method, "fn_0x%lx()", idx * sizeof(kptr_t));
+                            if(!method)
+                            {
+                                ERRNO("asprintf(method)");
+                                return -1;
+                            }
+                            ARRNEXT(fncache, entry);
+                            entry->addr = func;
+                            entry->name.class = meta->name;
+                            entry->name.method = method;
+                        }
+                        vtab_override_t *ovrd = malloc(sizeof(vtab_override_t));
+                        if(!ovrd)
+                        {
+                            ERRNO("malloc(ovrd)");
+                            return -1;
+                        }
+                        ovrd->next = NULL;
+                        ovrd->name.class = entry->name.class;
+                        ovrd->name.method = entry->name.method;
+                        ovrd->old = pvtab ? pvtab[idx] : 0;
+                        ovrd->new = entry->addr;
+                        ovrd->idx = idx;
+                        *(meta->overrides.nextP) = ovrd;
+                        meta->overrides.nextP = &ovrd->next;
+                    }
+                }
+                meta->overrides_done = 1;
+                done:;
+                if(do_again)
+                {
+                    goto again;
+                }
+            }
+            free(fncache.val);
         }
     }
 
@@ -948,6 +1187,10 @@ do \
                 }
                 else if(strcmp("__PRELINK_INFO", seg->segname) == 0)
                 {
+                    if(seg->filesize == 0)
+                    {
+                        continue;
+                    }
                     const char *xml = (const char*)((uintptr_t)kernel + seg->fileoff);
                     CFStringRef err = NULL;
                     CFTypeRef plist = IOCFUnserialize(xml, NULL, 0, &err);
@@ -1147,7 +1390,7 @@ do \
     }
     if(target && !(opt_parent || opt_extend))
     {
-        printMetaClass(target, opt_bundle, opt_meta, opt_size, opt_vtab);
+        printMetaClass(target, opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides);
     }
     else
     {
@@ -1160,18 +1403,10 @@ do \
         size_t lsize = 0;
         if(opt_parent)
         {
-            list[0] = target;
-            lsize = 1;
-            for(size_t j = 0; j < lsize; ++j)
+            for(metaclass_t *meta = target; meta; )
             {
-                for(size_t i = 0; i < metas.idx; ++i)
-                {
-                    if(metas.val[i].addr == list[j]->parent)
-                    {
-                        list[lsize++] = &metas.val[i];
-                        break;
-                    }
-                }
+                list[lsize++] = meta;
+                meta = meta->parentP;
             }
         }
         else if(opt_extend)
@@ -1204,7 +1439,7 @@ do \
         {
             if(!filter || list[i]->bundle == filter)
             {
-                printMetaClass(list[i], opt_bundle, opt_meta, opt_size, opt_vtab);
+                printMetaClass(list[i], opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides);
             }
         }
     }
