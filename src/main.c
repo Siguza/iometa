@@ -96,6 +96,14 @@ typedef struct
 } kmod_info_t;
 #pragma pack()
 
+typedef struct vtab_entry
+{
+    struct vtab_entry *next;
+    const char *name;
+    kptr_t old;
+    kptr_t new;
+} vtab_entry_t;
+
 typedef struct
 {
     kptr_t addr;
@@ -103,6 +111,10 @@ typedef struct
     kptr_t vtab;
     const char *name;
     const char *bundle;
+    struct {
+        vtab_entry_t *head;
+        vtab_entry_t **nextP;
+    } overrides;
     uint32_t objsize;
 } metaclass_t;
 
@@ -363,12 +375,13 @@ static void print_help(const char *self)
                     "    %s [-abBdempsSv] kernel [ClassName/BundleName]\n"
                     "\n"
                     "Options:\n"
-                    "    -a  Print everything\n"
+                    "    -a  Synonym for -bmsv\n"
                     "    -b  Print bundle identifier\n"
                     "    -B  Filter/sort by bundle rather than class\n"
                     "    -d  Debug output\n"
                     "    -e  Filter extending ClassName\n"
                     "    -m  Print MetaClass addresses\n"
+                    "    -o  Print overridden virtual methods\n"
                     "    -p  Filter parents of ClassName\n"
                     "    -s  Print object sizes\n"
                     "    -S  Sort by class/bundle name\n"
@@ -378,14 +391,15 @@ static void print_help(const char *self)
 
 int main(int argc, const char **argv)
 {
-    bool opt_bundle = false,
-         opt_bfilt  = false,
-         opt_extend = false,
-         opt_meta   = false,
-         opt_parent = false,
-         opt_size   = false,
-         opt_sort   = false,
-         opt_vtab   = false;
+    bool opt_bundle    = false,
+         opt_bfilt     = false,
+         opt_extend    = false,
+         opt_meta      = false,
+         opt_overrides = false,
+         opt_parent    = false,
+         opt_size      = false,
+         opt_sort      = false,
+         opt_vtab      = false;
     const char *filt_class = NULL,
                *filt_bundle = NULL;
 
@@ -402,7 +416,7 @@ int main(int argc, const char **argv)
             {
                 case 'd':
                 {
-                    debug      = true;
+                    debug = true;
                     break;
                 }
                 case 'a':
@@ -430,7 +444,12 @@ int main(int argc, const char **argv)
                 }
                 case 'm':
                 {
-                    opt_meta   = true;
+                    opt_meta = true;
+                    break;
+                }
+                case 'o':
+                {
+                    opt_overrides = true;
                     break;
                 }
                 case 'p':
@@ -440,17 +459,17 @@ int main(int argc, const char **argv)
                 }
                 case 's':
                 {
-                    opt_size   = true;
+                    opt_size = true;
                     break;
                 }
                 case 'S':
                 {
-                    opt_sort   = true;
+                    opt_sort = true;
                     break;
                 }
                 case 'v':
                 {
-                    opt_vtab   = true;
+                    opt_vtab = true;
                     break;
                 }
                 default:
@@ -757,6 +776,8 @@ do \
                                 meta->vtab = 0;
                                 meta->name = addr2ptr(kernel, state.x[1]);
                                 meta->bundle = NULL;
+                                meta->overrides.head = NULL;
+                                meta->overrides.nextP = &meta->overrides.head;
                                 meta->objsize = state.x[3];
                                 if(!meta->name)
                                 {
@@ -775,7 +796,7 @@ do \
 
     DBG("Got %lu metaclasses", metas.idx);
 
-    if(opt_vtab)
+    if(opt_vtab || opt_overrides)
     {
         if(!OSObjectVtab)
         {
@@ -902,16 +923,13 @@ do \
         }
     }
 
-    bool ambiguousFilter = false;
     const char *filter = NULL;
     const char *__kernel__ = "__kernel__"; // Single ref for pointer comparisons
 
     if(opt_bundle || opt_bfilt)
     {
-        if(filt_bundle && strstr(__kernel__, filt_bundle))
-        {
-            filter = __kernel__;
-        }
+        const char **bundleList = NULL;
+        size_t bundleIdx = 0;
         FOREACH_CMD(hdr, cmd)
         {
             if(cmd->cmd == MACH_SEGMENT)
@@ -940,6 +958,15 @@ do \
                     }
                     CFArrayRef arr = CFDictionaryGetValue(plist, CFSTR("_PrelinkInfoDictionary"));
                     CFIndex arrlen = CFArrayGetCount(arr);
+                    if(filt_bundle && !bundleList)
+                    {
+                        bundleList = malloc((arrlen + 1) * sizeof(*bundleList));
+                        if(!bundleList)
+                        {
+                            ERRNO("malloc(bundleList)");
+                            return -1;
+                        }
+                    }
                     for(size_t i = 0; i < arrlen; ++i)
                     {
                         CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
@@ -968,20 +995,9 @@ do \
                             }
                             continue;
                         }
-                        if(filt_bundle && strstr(str, filt_bundle))
+                        if(bundleList)
                         {
-                            if(ambiguousFilter || filter)
-                            {
-                                if(filter)
-                                {
-                                    ERR("More than one bundle matching filter: %s", filter);
-                                    ambiguousFilter = true;
-                                    filter = NULL;
-                                }
-                                ERR("More than one bundle matching filter: %s", str);
-                                continue;
-                            }
-                            filter = str;
+                            bundleList[bundleIdx++] = str;
                         }
                         CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
                         if(!cfnum)
@@ -1034,14 +1050,55 @@ do \
                 }
             }
         }
-        if(ambiguousFilter)
+        if(filt_bundle)
         {
-            return -1;
-        }
-        if(filt_bundle && !filter)
-        {
-            ERR("No bundle matching %s.", filt_bundle);
-            return -1;
+            if(!bundleList)
+            {
+                // NULL return value by malloc would've been caught earlier
+                ERR("Failed to find __PRELINK_INFO segment.");
+                return -1;
+            }
+            bundleList[bundleIdx++] = __kernel__;
+            for(size_t i = 0; i < bundleIdx; ++i)
+            {
+                if(strcmp(bundleList[i], filt_bundle) == 0)
+                {
+                    filter = bundleList[i];
+                    break;
+                }
+            }
+            if(!filter)
+            {
+                bool ambiguousFilter = false;
+                for(size_t i = 0; i < bundleIdx; ++i)
+                {
+                    if(strstr(bundleList[i], filt_bundle))
+                    {
+                        if(ambiguousFilter || filter)
+                        {
+                            if(filter)
+                            {
+                                ERR("More than one bundle matching filter: %s", filter);
+                                ambiguousFilter = true;
+                                filter = NULL;
+                            }
+                            ERR("More than one bundle matching filter: %s", bundleList[i]);
+                            continue;
+                        }
+                        filter = bundleList[i];
+                    }
+                }
+                if(ambiguousFilter)
+                {
+                    return -1;
+                }
+            }
+            if(!filter)
+            {
+                ERR("No bundle matching %s.", filt_bundle);
+                return -1;
+            }
+            free(bundleList);
         }
     }
 
