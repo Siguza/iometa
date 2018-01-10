@@ -401,7 +401,11 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
 
 static void print_help(const char *self)
 {
-    fprintf(stderr, "Usage:\n"
+#define xstr(x) #x
+#define str(x) xstr(x)
+    fprintf(stderr, "iometa v" str(VERSION) "\n"
+                    "\n"
+                    "Usage:\n"
                     "    %s [-abBdempsSv] kernel [ClassName/BundleName]\n"
                     "\n"
                     "Options:\n"
@@ -417,6 +421,8 @@ static void print_help(const char *self)
                     "    -S  Sort by class/bundle name\n"
                     "    -v  Print object vtabs\n"
                     , self);
+#undef str
+#undef xstr
 }
 
 int main(int argc, const char **argv)
