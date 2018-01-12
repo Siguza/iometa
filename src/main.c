@@ -1069,14 +1069,23 @@ do \
                     }
                     if(parent && parent->overrides_err)
                     {
-                        DBG("Skipping class %s because parent class was skipped.", meta->name);
+                        WRN("Skipping class %s because parent class was skipped.", meta->name);
                         meta->overrides_err = 1;
                         goto done;
                     }
+                    while(parent && parent->vtab == 0) // Fall through on abstract classes
+                    {
+                        parent = parent->parentP;
+                    }
                 }
-                if(meta->vtab == 0 || meta->vtab == -1)
+                if(meta->vtab == 0)
                 {
-                    DBG("Skipping class %s because vtable is missing.", meta->name);
+                    meta->overrides_done = 1;
+                    goto done;
+                }
+                if(meta->vtab == -1)
+                {
+                    WRN("Skipping class %s because vtable is missing.", meta->name);
                     meta->overrides_err = 1;
                     goto done;
                 }
