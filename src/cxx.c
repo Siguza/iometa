@@ -22,7 +22,7 @@ static int demangle_num(const char **ptr)
     return ret;
 }
 
-bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr)
+bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr, bool *structorptr)
 {
     if(strncmp(sym, "__ZN", 4) != 0)
     {
@@ -49,16 +49,19 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
     cls[clslen] = '\0';
     sym += clslen;
     char *mthd = NULL;
+    bool structor = false;
     switch(*sym)
     {
         case 'C':
         {
             asprintf(&mthd, "%s()%s", cls, cnst ? " const" : "");
+            structor = true;
             break;
         }
         case 'D':
         {
             asprintf(&mthd, "~%s()%s", cls, cnst ? " const" : "");
+            structor = true;
             break;
         }
         default:
@@ -81,5 +84,6 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
 
     *classptr = cls;
     *methodptr = mthd;
+    *structorptr = structor;
     return true;
 }

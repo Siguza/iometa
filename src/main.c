@@ -83,25 +83,6 @@ for( \
     cmd = (mach_lc_t*)((uintptr_t)cmd + cmd->cmdsize) \
 )
 
-#define KMOD_MAX_NAME    64
-#pragma pack(4)
-typedef struct
-{
-    kptr_t      next;
-    int32_t     info_version;
-    uint32_t    id;
-    char        name[KMOD_MAX_NAME];
-    char        version[KMOD_MAX_NAME];
-    int32_t     reference_count;
-    kptr_t      reference_list;
-    kptr_t      address;
-    kptr_t      size;
-    kptr_t      hdr_size;
-    kptr_t      start;
-    kptr_t      stop;
-} kmod_info_t;
-#pragma pack()
-
 typedef struct
 {
     const char *class;
@@ -112,6 +93,8 @@ typedef struct
 {
     kptr_t addr;
     vtab_entry_name_t name;
+    uint32_t structor : 1,
+             reserved : 31;
 } vtab_entry_t;
 
 typedef struct vtab_override
@@ -382,7 +365,7 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
     }
     if(opt_meta)
     {
-        printf("self=" ADDR " parent=" ADDR " ", meta->addr, meta->parent);
+        printf("meta=" ADDR " parent=" ADDR " ", meta->addr, meta->parent);
     }
     printf("%s", meta->name);
     if(opt_bundle)
@@ -745,7 +728,7 @@ do \
                 {
                     kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
                     kptr_t addr = alias & ~0xfff;
-                    addr += get_adr_off(adrp); //(((int64_t)(adrp->immlo | (adrp->immhi << 2))) << (64 - 21)) >> (64 - 21 - 12);
+                    addr += get_adr_off(adrp);
                     addr += get_ldr_imm_uoff(ldr);
                     for(size_t i = 0; i < refs.idx; ++i)
                     {
@@ -929,6 +912,7 @@ do \
             }
         }
 
+        ARRINIT(kptr_t, candidates, 0x100);
         FOREACH_CMD(hdr, cmd)
         {
             if(cmd->cmd == MACH_SEGMENT)
@@ -942,10 +926,10 @@ do \
                     ret_t *ret1 = (ret_t*)(mem + 1);
                     ret_t *ret2 = (ret_t*)(mem + 2);
                     bool iz_adrp = is_adrp(adr),
-                         is_add  = is_add_imm(add);
+                         iz_add  = is_add_imm(add);
                     if
                     (
-                        (iz_adrp && is_add && is_ret(ret2) && adr->Rd == add->Rn && add->Rd == 0) ||
+                        (iz_adrp && iz_add && is_ret(ret2) && adr->Rd == add->Rn && add->Rd == 0) ||
                         (is_adr(adr) && (is_ret(ret1) || (is_nop(nop) && is_ret(ret2))) && adr->Rd == 0)
                     )
                     {
@@ -955,7 +939,7 @@ do \
                         {
                             addr &= ~0xfff;
                         }
-                        if(is_add)
+                        if(iz_add)
                         {
                             addr += get_adr_off(adr);
                             addr += get_add_sub_imm(add);
@@ -968,29 +952,76 @@ do \
                         {
                             for(size_t i = 0; i < metas.idx; ++i)
                             {
-                                if(metas.val[i].addr == addr)
+                                metaclass_t *meta = &metas.val[i];
+                                if(meta->addr == addr)
                                 {
-                                    DBG("Got func " ADDR " referencing MetaClass %s", func, metas.val[i].name);
-                                    bool got = false;
+                                    DBG("Got func " ADDR " referencing MetaClass %s", func, meta->name);
+                                    candidates.idx = 0;
                                     for(kptr_t *mem2 = (kptr_t*)kernel + VtabGetMetaClassOff + 2, *end2 = (kptr_t*)((uintptr_t)kernel + kernelsize); mem2 < end2; ++mem2)
                                     {
                                         if(*mem2 == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
                                         {
                                             kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassOff) - (uintptr_t)kernel);
-                                            if(!got)
+                                            if(meta->vtab == 0)
                                             {
-                                                metas.val[i].vtab = ref;
-                                                got = true;
+                                                meta->vtab = ref;
                                             }
                                             else
                                             {
-                                                if(metas.val[i].vtab != -1)
+                                                if(meta->vtab != -1)
                                                 {
-                                                    WRN("More than one vtab for %s: " ADDR, metas.val[i].name, metas.val[i].vtab);
+                                                    DBG("More than one vtab for %s: " ADDR, meta->name, meta->vtab);
+                                                    ARRPUSH(candidates, meta->vtab);
+                                                    meta->vtab = -1;
                                                 }
-                                                WRN("More than one vtab for %s: " ADDR, metas.val[i].name, ref);
-                                                metas.val[i].vtab = -1;
+                                                DBG("More than one vtab for %s: " ADDR, meta->name, ref);
+                                                ARRPUSH(candidates, ref);
                                             }
+                                        }
+                                    }
+                                    if(candidates.idx > 0)
+                                    {
+                                        kptr_t cnd = 0;
+                                        size_t numcnd = 0;
+                                        for(uint32_t *mem2 = (uint32_t*)kernel, *end2 = (uint32_t*)((uintptr_t)kernel + kernelsize - 5 * sizeof(uint32_t)); mem2 <= end2; ++mem2)
+                                        {
+                                            adr_t *adrp = (adr_t*)mem2;
+                                            add_imm_t *add1 = (add_imm_t*)(mem2 + 1);
+                                            add_imm_t *add2 = (add_imm_t*)(mem2 + 2);
+                                            str_uoff_t *str = (str_uoff_t*)(mem2 + 3);
+                                            uint32_t *ldp = mem2 + 4;
+                                            ret_t *ret1 = (ret_t*)(mem2 + 4);
+                                            ret_t *ret2 = (ret_t*)(mem2 + 5);
+                                            if
+                                            (
+                                                is_adrp(adrp) && is_add_imm(add1) && is_add_imm(add2) && is_str_uoff(str) &&
+                                                (is_ret(ret1) || (*ldp == 0xa8c17bfd /* ldp x29, x30, [sp], 0x10 */ && is_ret(ret2))) &&
+                                                adrp->Rd == add1->Rn && add1->Rd == add2->Rn && add2->Rd == str->Rt &&
+                                                get_add_sub_imm(add2) == 2 * sizeof(kptr_t)
+                                            )
+                                            {
+                                                kptr_t refloc = off2addr(kernel, (uintptr_t)adrp - (uintptr_t)kernel);
+                                                kptr_t ref = refloc & ~0xfff;
+                                                ref += get_adr_off(adrp);
+                                                ref += get_add_sub_imm(add1) + get_add_sub_imm(add2);
+                                                for(size_t j = 0; j < candidates.idx; ++j)
+                                                {
+                                                    if(candidates.val[j] == ref)
+                                                    {
+                                                        DBG("Location referencing vtab candidate " ADDR ": " ADDR, ref, refloc);
+                                                        if(cnd != ref) // One vtab may be referenced multiple times
+                                                        {
+                                                            ++numcnd;
+                                                        }
+                                                        cnd = ref;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if(numcnd == 1)
+                                        {
+                                            meta->vtab = cnd;
                                         }
                                     }
                                     break;
@@ -1001,17 +1032,15 @@ do \
                 }
             }
         }
+        free(candidates.val);
 
-#if 0
-        // Just abstract classes, I guess...
         for(size_t i = 0; i < metas.idx; ++i)
         {
-            if(metas.val[i].vtab == 0)
+            if(metas.val[i].vtab == -1)
             {
-                WRN("Failed to find vtab for %s", metas.val[i].name);
+                WRN("Multiple vtab candidates for %s", metas.val[i].name);
             }
         }
-#endif
 
         if(opt_overrides)
         {
@@ -1070,7 +1099,7 @@ do \
                         goto done;
                     }
                 }
-                for(size_t idx = 2; mvtab[idx] != 0; ++idx) // Skip destructors
+                for(size_t idx = 1; mvtab[idx] != 0; ++idx) // Skip delete function or smth
                 {
                     if(!pvtab || mvtab[idx] != pvtab[idx])
                     {
@@ -1094,7 +1123,8 @@ do \
                                 }
                                 const char *class = NULL,
                                            *method = NULL;
-                                if(!cxx_demangle(s, &class, &method))
+                                bool structor = false;
+                                if(!cxx_demangle(s, &class, &method, &structor))
                                 {
                                     WRN("Failed to demangle symbol: %s", s);
                                 }
@@ -1108,6 +1138,7 @@ do \
                                     entry->addr = func;
                                     entry->name.class = class;
                                     entry->name.method = method;
+                                    entry->structor = !!structor;
                                 }
                                 break;
                             }
@@ -1119,10 +1150,36 @@ do \
                             {
                                 if(fncache.val[n].addr == pfunc)
                                 {
+                                    const char *method = fncache.val[n].name.method;
+                                    if(fncache.val[n].structor)
+                                    {
+                                        const char *class = fncache.val[n].name.class;
+                                        bool dest = method[0] == '~';
+                                        if(dest)
+                                        {
+                                            ++method;
+                                        }
+                                        size_t clslen = strlen(class);
+                                        if(strncmp(method, class, clslen) != 0)
+                                        {
+                                            WRN("Bad %sstructor: %s::%s", dest ? "de" : "con", class, method);
+                                            continue;
+                                        }
+                                        method += clslen;
+                                        char *m = NULL;
+                                        asprintf(&m, "%s%s%s", dest ? "~" : "", meta->name, method);
+                                        if(!m)
+                                        {
+                                            ERRNO("asprintf(structor)");
+                                            return -1;
+                                        }
+                                        method = m;
+                                    }
                                     ARRNEXT(fncache, entry);
                                     entry->addr = func;
                                     entry->name.class = meta->name;
-                                    entry->name.method = fncache.val[n].name.method;
+                                    entry->name.method = method;
+                                    entry->structor = fncache.val[n].structor;
                                     break;
                                 }
                             }
@@ -1140,6 +1197,7 @@ do \
                             entry->addr = func;
                             entry->name.class = meta->name;
                             entry->name.method = method;
+                            entry->structor = 0;
                         }
                         vtab_override_t *ovrd = malloc(sizeof(vtab_override_t));
                         if(!ovrd)
