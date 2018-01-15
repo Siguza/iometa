@@ -47,6 +47,7 @@ How this works:
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
+#include <mach-o/reloc.h>
 #include <CoreFoundation/CoreFoundation.h>
 
 extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, CFOptionFlags options, CFStringRef *errorString);
@@ -73,7 +74,9 @@ typedef struct mach_header_64 mach_hdr_t;
 typedef struct load_command mach_lc_t;
 typedef struct segment_command_64 mach_seg_t;
 typedef struct symtab_command mach_stab_t;
-typedef struct nlist_64 nlist_t;
+typedef struct dysymtab_command mach_dstab_t;
+typedef struct nlist_64 mach_nlist_t;
+typedef struct relocation_info mach_reloc_t;
 typedef uint64_t kptr_t;
 
 #define FOREACH_CMD(hdr, cmd) \
@@ -82,6 +85,31 @@ for( \
     cmd <= end; \
     cmd = (mach_lc_t*)((uintptr_t)cmd + cmd->cmdsize) \
 )
+
+#define KMOD_MAX_NAME 64
+#pragma pack(4)
+typedef struct
+{
+    kptr_t      next;
+    int32_t     info_version;
+    uint32_t    id;
+    char        name[KMOD_MAX_NAME];
+    char        version[KMOD_MAX_NAME];
+    int32_t     reference_count;
+    kptr_t      reference_list;
+    kptr_t      address;
+    kptr_t      size;
+    kptr_t      hdr_size;
+    kptr_t      start;
+    kptr_t      stop;
+} kmod_info_t;
+#pragma pack()
+
+typedef struct
+{
+    kptr_t addr;
+    const char *name;
+} sym_t;
 
 typedef struct
 {
@@ -389,19 +417,21 @@ static void print_help(const char *self)
     fprintf(stderr, "iometa v" str(VERSION) "\n"
                     "\n"
                     "Usage:\n"
-                    "    %s [-abBdempsSv] kernel [ClassName/BundleName]\n"
+                    "    %s [-abBCdeGmopsSv] [ClassName] [BundleName] kernel\n"
                     "\n"
                     "Options:\n"
                     "    -a  Synonym for -bmsv\n"
                     "    -b  Print bundle identifier\n"
-                    "    -B  Filter/sort by bundle rather than class\n"
+                    "    -B  Filter by bundle identifier\n"
+                    "    -C  Filter by class name\n"
                     "    -d  Debug output\n"
-                    "    -e  Filter extending ClassName\n"
+                    "    -e  Filter extending ClassName (implies -C)\n"
+                    "    -G  Sort (group) by bundle identifier\n"
                     "    -m  Print MetaClass addresses\n"
                     "    -o  Print overridden/new virtual methods\n"
-                    "    -p  Filter parents of ClassName\n"
+                    "    -p  Filter parents of ClassName (implies -C)\n"
                     "    -s  Print object sizes\n"
-                    "    -S  Sort by class/bundle name\n"
+                    "    -S  Sort by class name\n"
                     "    -v  Print object vtabs\n"
                     , self);
 #undef str
@@ -412,12 +442,14 @@ int main(int argc, const char **argv)
 {
     bool opt_bundle    = false,
          opt_bfilt     = false,
+         opt_cfilt     = false,
+         opt_bsort     = false,
+         opt_csort     = false,
          opt_extend    = false,
          opt_meta      = false,
          opt_overrides = false,
          opt_parent    = false,
          opt_size      = false,
-         opt_sort      = false,
          opt_vtab      = false;
     const char *filt_class = NULL,
                *filt_bundle = NULL;
@@ -456,9 +488,20 @@ int main(int argc, const char **argv)
                     opt_bfilt = true;
                     break;
                 }
+                case 'C':
+                {
+                    opt_cfilt = true;
+                    break;
+                }
                 case 'e':
                 {
                     opt_extend = true;
+                    opt_cfilt  = true;
+                    break;
+                }
+                case 'G':
+                {
+                    opt_bsort = true;
                     break;
                 }
                 case 'm':
@@ -474,6 +517,7 @@ int main(int argc, const char **argv)
                 case 'p':
                 {
                     opt_parent = true;
+                    opt_cfilt  = true;
                     break;
                 }
                 case 's':
@@ -483,7 +527,7 @@ int main(int argc, const char **argv)
                 }
                 case 'S':
                 {
-                    opt_sort = true;
+                    opt_csort = true;
                     break;
                 }
                 case 'v':
@@ -502,17 +546,31 @@ int main(int argc, const char **argv)
         }
     }
 
-    if(argc - aoff < 1)
+    int wantargs = 1 + (opt_bfilt ? 1 : 0) + (opt_cfilt ? 1 : 0);
+    if(argc - aoff != wantargs)
     {
         if(argc >= 2)
         {
-            ERR("Too few arguments");
+            ERR("Too %s arguments.", (argc - aoff < wantargs) ? "few" : "many");
             fputs("\n", stderr);
         }
         print_help(argv[0]);
         return 0;
     }
 
+    if(opt_extend && opt_parent)
+    {
+        ERR("Only one of -e and -p may be given.");
+        return -1;
+    }
+
+    if(opt_bsort && opt_csort)
+    {
+        ERR("Only one of -G and -S may be given.");
+        return -1;
+    }
+
+#if 0
     if(argc - aoff >= 2)
     {
         if(opt_bfilt && !(opt_extend || opt_parent))
@@ -530,11 +588,16 @@ int main(int argc, const char **argv)
         ERR("Options -e and -p need a class name.");
         return -1;
     }
-    if(opt_extend && opt_parent)
+#else
+    if(opt_cfilt)
     {
-        ERR("Only one of -e and -p may be given.");
-        return -1;
+        filt_class = argv[aoff++];
     }
+    if(opt_bfilt)
+    {
+        filt_bundle = argv[aoff++];
+    }
+#endif
 
     int fd = open(argv[aoff], O_RDONLY);
     if(fd == -1)
@@ -598,6 +661,12 @@ int main(int argc, const char **argv)
         return -1;
     }
 
+    if(hdr->filetype != MH_EXECUTE && hdr->filetype != MH_KEXT_BUNDLE)
+    {
+        ERR("Wrong file type: 0x%x", hdr->filetype);
+        return -1;
+    }
+
 #define ARRINIT(type, name, sz) \
 struct \
 { \
@@ -656,37 +725,52 @@ do \
            OSObjectVtab = 0,
            OSObjectGetMetaClass = 0;
     mach_stab_t *stab = NULL;
-    nlist_t *symtab = NULL;
+    mach_nlist_t *symtab = NULL;
     char *strtab = NULL;
     FOREACH_CMD(hdr, cmd)
     {
         if(cmd->cmd == LC_SYMTAB)
         {
             stab = (mach_stab_t*)cmd;
-            symtab = (nlist_t*)((uintptr_t)kernel + stab->symoff);
+            symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
             strtab = (char*)((uintptr_t)kernel + stab->stroff);
             for(size_t i = 0; i < stab->nsyms; ++i)
             {
+                if((symtab[i].n_type & N_TYPE) == N_UNDF)
+                {
+                    continue;
+                }
                 char *s = &strtab[symtab[i].n_un.n_strx];
-                if(strcmp(s, "__ZN11OSMetaClassC2EPKcPKS_j") == 0)
+                if(hdr->filetype == MH_KEXT_BUNDLE)
                 {
-                    OSMetaClassConstructor = symtab[i].n_value;
-                    DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
+                    if(strcmp(s, "__ZN11OSMetaClassC2EPKcPKS_j.stub") == 0)
+                    {
+                        OSMetaClassConstructor = symtab[i].n_value;
+                        DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
+                    }
                 }
-                else if(strcmp(s, "__ZTV11OSMetaClass") == 0)
+                else
                 {
-                    OSMetaClassVtab = symtab[i].n_value + 2 * sizeof(kptr_t);
-                    DBG("OSMetaClassVtab: " ADDR, OSMetaClassVtab);
-                }
-                else if(strcmp(s, "__ZTV8OSObject") == 0)
-                {
-                    OSObjectVtab = symtab[i].n_value + 2 * sizeof(kptr_t);
-                    DBG("OSObjectVtab: " ADDR, OSObjectVtab);
-                }
-                else if(strcmp(s, "__ZNK8OSObject12getMetaClassEv") == 0)
-                {
-                    OSObjectGetMetaClass = symtab[i].n_value;
-                    DBG("OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
+                    if(strcmp(s, "__ZN11OSMetaClassC2EPKcPKS_j") == 0)
+                    {
+                        OSMetaClassConstructor = symtab[i].n_value;
+                        DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
+                    }
+                    else if(strcmp(s, "__ZTV11OSMetaClass") == 0)
+                    {
+                        OSMetaClassVtab = symtab[i].n_value + 2 * sizeof(kptr_t);
+                        DBG("OSMetaClassVtab: " ADDR, OSMetaClassVtab);
+                    }
+                    else if(strcmp(s, "__ZTV8OSObject") == 0)
+                    {
+                        OSObjectVtab = symtab[i].n_value + 2 * sizeof(kptr_t);
+                        DBG("OSObjectVtab: " ADDR, OSObjectVtab);
+                    }
+                    else if(strcmp(s, "__ZNK8OSObject12getMetaClassEv") == 0)
+                    {
+                        OSObjectGetMetaClass = symtab[i].n_value;
+                        DBG("OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
+                    }
                 }
             }
             break;
@@ -700,43 +784,46 @@ do \
 
     ARRPUSH(aliases, OSMetaClassConstructor);
 
-    for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
+    if(hdr->filetype != MH_KEXT_BUNDLE)
     {
-        if(*mem == OSMetaClassConstructor)
+        for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
         {
-            kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
-            DBG("ref: " ADDR, ref);
-            ARRPUSH(refs, ref);
-        }
-    }
-
-    FOREACH_CMD(hdr, cmd)
-    {
-        if(cmd->cmd == MACH_SEGMENT)
-        {
-            mach_seg_t *seg = (mach_seg_t*)cmd;
-            for(uint32_t *mem = (uint32_t*)((uintptr_t)kernel + seg->fileoff), *end = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize - 3 * sizeof(uint32_t)); mem <= end; ++mem)
+            if(*mem == OSMetaClassConstructor)
             {
-                adr_t *adrp = (adr_t*)mem;
-                ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
-                br_t *br = (br_t*)(mem + 2);
-                if
-                (
-                    is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
-                    adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
-                )
+                kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
+                DBG("ref: " ADDR, ref);
+                ARRPUSH(refs, ref);
+            }
+        }
+
+        FOREACH_CMD(hdr, cmd)
+        {
+            if(cmd->cmd == MACH_SEGMENT)
+            {
+                mach_seg_t *seg = (mach_seg_t*)cmd;
+                for(uint32_t *mem = (uint32_t*)((uintptr_t)kernel + seg->fileoff), *end = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize - 3 * sizeof(uint32_t)); mem <= end; ++mem)
                 {
-                    kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
-                    kptr_t addr = alias & ~0xfff;
-                    addr += get_adr_off(adrp);
-                    addr += get_ldr_imm_uoff(ldr);
-                    for(size_t i = 0; i < refs.idx; ++i)
+                    adr_t *adrp = (adr_t*)mem;
+                    ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
+                    br_t *br = (br_t*)(mem + 2);
+                    if
+                    (
+                        is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
+                        adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
+                    )
                     {
-                        if(addr == refs.val[i])
+                        kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
+                        kptr_t addr = alias & ~0xfff;
+                        addr += get_adr_off(adrp);
+                        addr += get_ldr_imm_uoff(ldr);
+                        for(size_t i = 0; i < refs.idx; ++i)
                         {
-                            DBG("alias: " ADDR, alias);
-                            ARRPUSH(aliases, alias);
-                            break;
+                            if(addr == refs.val[i])
+                            {
+                                DBG("alias: " ADDR, alias);
+                                ARRPUSH(aliases, alias);
+                                break;
+                            }
                         }
                     }
                 }
@@ -869,6 +956,39 @@ do \
 
     if(opt_vtab || opt_overrides)
     {
+        if(hdr->filetype == MH_KEXT_BUNDLE)
+        {
+            for(size_t i = 0; i < stab->nsyms; ++i)
+            {
+                if((symtab[i].n_type & N_TYPE) == N_UNDF)
+                {
+                    continue;
+                }
+                char *s = &strtab[symtab[i].n_un.n_strx];
+                size_t slen = strlen(s);
+                if(slen >= 21 && strncmp(s, "__ZNK", 5) == 0 && strcmp(s + slen - 16, "12getMetaClassEv") == 0)
+                {
+                    for(size_t j = 0; j < stab->nsyms; ++j)
+                    {
+                        if((symtab[j].n_type & N_TYPE) == N_UNDF)
+                        {
+                            continue;
+                        }
+                        char *t = &strtab[symtab[j].n_un.n_strx];
+                        if(strncmp(t, "__ZTV", 5) == 0 && strncmp(t + 5, s + 5, slen - 21) == 0)
+                        {
+                            OSObjectVtab = symtab[j].n_value + 2 * sizeof(kptr_t);
+                            OSObjectGetMetaClass = symtab[i].n_value;
+                            DBG("%s: " ADDR, t, OSObjectVtab);
+                            DBG("%s: " ADDR, s, OSObjectGetMetaClass);
+                            goto after;
+                        }
+                    }
+                }
+            }
+            after:;
+        }
+        size_t VtabGetMetaClassOff = 0;
         if(!OSObjectVtab)
         {
             ERR("Failed to find OSObjectVtab.");
@@ -885,8 +1005,7 @@ do \
             ERR("OSObjectVtab lies outside all segments.");
             return -1;
         }
-        size_t VtabGetMetaClassOff = 0;
-        for(size_t i = 0; ovtab[i] != 0; ++i)
+        for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
         {
             if(ovtab[i] == OSObjectGetMetaClass)
             {
@@ -1044,6 +1163,53 @@ do \
 
         if(opt_overrides)
         {
+            char **relocs = NULL;
+            size_t reloc_min = ~0, reloc_max = 0;
+            if(hdr->filetype == MH_KEXT_BUNDLE)
+            {
+                FOREACH_CMD(hdr, cmd)
+                {
+                    if(cmd->cmd == LC_DYSYMTAB)
+                    {
+                        mach_dstab_t *dstab = (mach_dstab_t*)cmd;
+                        mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->extreloff);
+                        for(size_t i = 0; i < dstab->nextrel; ++i)
+                        {
+                            if(!reloc[i].r_extern)
+                            {
+                                ERR("External relocation entry %lu at 0x%x does not have external bit set.", i, reloc[i].r_address);
+                                return -1;
+                            }
+                            DBG("Reloc %x: %s", reloc[i].r_address, &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx]);
+                            if(reloc[i].r_address < reloc_min)
+                            {
+                                reloc_min = reloc[i].r_address;
+                            }
+                            if(reloc[i].r_address > reloc_max)
+                            {
+                                reloc_max = reloc[i].r_address;
+                            }
+                        }
+                        if(reloc_min < reloc_max)
+                        {
+                            reloc_max += sizeof(kptr_t);
+                            size_t relocsize = sizeof(char*) * (reloc_max - reloc_min) / sizeof(kptr_t);
+                            relocs = malloc(relocsize);
+                            if(!relocs)
+                            {
+                                ERRNO("malloc(relocs)");
+                                return -1;
+                            }
+                            memset(relocs, 0, relocsize);
+                            for(size_t i = 0; i < dstab->nextrel; ++i)
+                            {
+                                relocs[(reloc[i].r_address - reloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx];
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
             ARRINIT(vtab_entry_t, fncache, 0x200);
             for(size_t i = 0; i < metas.idx; ++i)
             {
@@ -1108,9 +1274,13 @@ do \
                         goto done;
                     }
                 }
-                for(size_t idx = 1; mvtab[idx] != 0; ++idx) // Skip delete function or smth
+#define KOFF(x) ((uintptr_t)&(x) - (uintptr_t)kernel)
+                bool is_in_reloc = false;
+                for(size_t idx = 1; // Skip delete function or smth
+                    (is_in_reloc = (KOFF(mvtab[idx]) >= reloc_min && KOFF(mvtab[idx]) < reloc_max && relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)] != NULL)) || mvtab[idx] != 0;
+                    ++idx)
                 {
-                    if(!pvtab || mvtab[idx] != pvtab[idx])
+                    if(!is_in_reloc && (!pvtab || mvtab[idx] != pvtab[idx]))
                     {
                         if(pvtab && pvtab[idx] == 0)
                         {
@@ -1120,36 +1290,78 @@ do \
                         kptr_t func = mvtab[idx];
                         vtab_entry_t *entry = NULL;
                         // stab, symtab and strtab are guaranteed to be non-NULL here or we would've exited long ago
-                        for(size_t n = 0; n < stab->nsyms; ++n)
+                        char *cxx_sym = NULL;
+#if 0
+                        if(is_in_reloc)
                         {
-                            if(symtab[n].n_value == func)
+                            cxx_sym = relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)];
+                        }
+                        else
+#endif
+                        {
+                            for(size_t n = 0; n < stab->nsyms; ++n)
                             {
-                                char *s = &strtab[symtab[n].n_un.n_strx];
-                                if(strcmp(s, "___cxa_pure_virtual") == 0)
+                                if((symtab[n].n_type & N_TYPE) == N_SECT)
                                 {
-                                    func = 0;
+                                    continue;
+                                }
+                                if(symtab[n].n_value == func)
+                                {
+                                    cxx_sym = &strtab[symtab[n].n_un.n_strx];
                                     break;
                                 }
-                                const char *class = NULL,
-                                           *method = NULL;
+                            }
+                        }
+                        if(cxx_sym)
+                        {
+                            if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0)
+                            {
+                                func = 0;
+                            }
+                            else
+                            {
+                                char *class = NULL,
+                                     *method = NULL;
                                 bool structor = false;
-                                if(!cxx_demangle(s, &class, &method, &structor))
+                                if(!cxx_demangle(cxx_sym, &class, &method, &structor))
                                 {
-                                    WRN("Failed to demangle symbol: %s", s);
+#if 0
+                                    if(is_in_reloc)
+                                    {
+                                        WRN("Failed to demangle symbol: %s (from reloc)", cxx_sym);
+                                    }
+                                    else
+#endif
+                                    {
+                                        WRN("Failed to demangle symbol: %s (from symtab, addr " ADDR ")", cxx_sym, func);
+                                    }
                                 }
                                 else
                                 {
-                                    if(strcmp(class, meta->name) != 0 && (strcmp(class, "OSMetaClassBase")) != 0)
+                                    const char *cls = NULL;
+#if 0
+                                    if(is_in_reloc)
                                     {
-                                        WRN("Symbol name doesn't match class name in %s: %s::%s vs %s", s, class, method, meta->name);
+                                        free(class);
+                                        cls = meta->name;
+                                    }
+                                    else
+#endif
+                                    {
+#if 0
+                                        if(strcmp(class, meta->name) != 0 && (strcmp(class, "OSMetaClassBase")) != 0)
+                                        {
+                                            WRN("Symbol name doesn't match class name in %s: %s::%s vs %s", cxx_sym, class, method, meta->name);
+                                        }
+#endif
+                                        cls = class;
                                     }
                                     ARRNEXT(fncache, entry);
                                     entry->addr = func;
-                                    entry->name.class = class;
+                                    entry->name.class = cls;
                                     entry->name.method = method;
                                     entry->structor = !!structor;
                                 }
-                                break;
                             }
                         }
                         if(!entry && pvtab)
@@ -1232,6 +1444,10 @@ do \
                 }
             }
             free(fncache.val);
+            if(relocs)
+            {
+                free(relocs);
+            }
         }
     }
 
@@ -1240,6 +1456,31 @@ do \
 
     if(opt_bundle || opt_bfilt)
     {
+        if(hdr->filetype == MH_KEXT_BUNDLE)
+        {
+            kmod_info_t *kmod = NULL;
+            for(size_t i = 0; i < stab->nsyms; ++i)
+            {
+                if((symtab[i].n_type & N_TYPE) == N_UNDF)
+                {
+                    continue;
+                }
+                char *s = &strtab[symtab[i].n_un.n_strx];
+                if(strcmp(s, "_kmod_info") == 0)
+                {
+                    DBG("kmod: " ADDR, symtab[i].n_value);
+                    kmod = addr2ptr(kernel, symtab[i].n_value);
+                    break;
+                }
+            }
+            if(!kmod)
+            {
+                ERR("Failed to find kmod_info.");
+                return -1;
+            }
+            __kernel__ = kmod->name;
+        }
+
         const char **bundleList = NULL;
         size_t bundleIdx = 0;
         FOREACH_CMD(hdr, cmd)
@@ -1504,9 +1745,9 @@ do \
                 list[lsize++] = &metas.val[i];
             }
         }
-        if(opt_sort)
+        if(opt_bsort || opt_csort)
         {
-            qsort(list, lsize, sizeof(*list), (opt_bfilt && !filter) ? &compare_bundles : &compare_names);
+            qsort(list, lsize, sizeof(*list), opt_bsort ? &compare_bundles : &compare_names);
         }
         for(size_t i = 0; i < lsize; ++i)
         {

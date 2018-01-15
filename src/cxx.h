@@ -3,6 +3,6 @@
 
 #include <stdbool.h>
 
-bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr, bool *structorptr);
+bool cxx_demangle(const char *sym, char **classptr, char **methodptr, bool *structorptr);
 
 #endif
