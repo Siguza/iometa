@@ -555,7 +555,7 @@ int main(int argc, const char **argv)
             fputs("\n", stderr);
         }
         print_help(argv[0]);
-        return 0;
+        return -1;
     }
 
     if(opt_extend && opt_parent)
