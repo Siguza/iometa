@@ -1301,7 +1301,7 @@ do \
                         {
                             for(size_t n = 0; n < stab->nsyms; ++n)
                             {
-                                if((symtab[n].n_type & N_TYPE) == N_SECT)
+                                if((symtab[n].n_type & N_STAB) && !(symtab[n].n_type & N_EXT))
                                 {
                                     continue;
                                 }
@@ -1314,6 +1314,7 @@ do \
                         }
                         if(cxx_sym)
                         {
+                            DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
                             if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0)
                             {
                                 func = 0;
@@ -1363,6 +1364,10 @@ do \
                                     entry->structor = !!structor;
                                 }
                             }
+                        }
+                        else
+                        {
+                            DBG("Found no symbol for virtual function " ADDR, func);
                         }
                         if(!entry && pvtab)
                         {
