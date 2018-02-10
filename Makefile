@@ -1,13 +1,14 @@
 VERSION = 1.2.0
 TARGET  = iometa
-SRC     = src
+SRCDIR  = src
+FLAGS   = -Wall -O3 -DVERSION=$(VERSION) -DTIMESTAMP="`date +'%d. %B %Y %H:%M:%S'`" -framework CoreFoundation -framework IOKit $(CFLAGS)
 
 .PHONY: all clean
 
 all: $(TARGET)
 
-$(TARGET): src/*.c
-	$(CC) -o $@ $^ -Wall -O3 -DVERSION=$(VERSION) -framework CoreFoundation -framework IOKit $(CFLAGS)
+$(TARGET): $(SRCDIR)/*.c
+	$(CC) -o $@ $(FLAGS) $^
 
 clean:
 	rm -rf $(TARGET)

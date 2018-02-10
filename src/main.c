@@ -63,6 +63,9 @@ static bool debug = false;
 #define ERR(str, args...) LOG("\x1b[1;91m[ERR] " str "\x1b[0m", ##args)
 #define ERRNO(str, args...) ERR(str ": %s", ##args, strerror(errno))
 
+#define STRINGIFX(x) #x
+#define STRINGIFY(x) STRINGIFX(x)
+
 #define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
 
 #define ADDR "0x%016llx"
@@ -412,11 +415,7 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
 
 static void print_help(const char *self)
 {
-#define xstr(x) #x
-#define str(x) xstr(x)
-    fprintf(stderr, "iometa v" str(VERSION) "\n"
-                    "\n"
-                    "Usage:\n"
+    fprintf(stderr, "Usage:\n"
                     "    %s [-abBCdeGmopsSv] [ClassName] [BundleName] kernel\n"
                     "\n"
                     "Options:\n"
@@ -434,8 +433,6 @@ static void print_help(const char *self)
                     "    -S  Sort by class name\n"
                     "    -v  Print object vtabs\n"
                     , self);
-#undef str
-#undef xstr
 }
 
 int main(int argc, const char **argv)
@@ -549,10 +546,22 @@ int main(int argc, const char **argv)
     int wantargs = 1 + (opt_bfilt ? 1 : 0) + (opt_cfilt ? 1 : 0);
     if(argc - aoff != wantargs)
     {
-        if(argc >= 2)
+        if(argc > 1)
         {
             ERR("Too %s arguments.", (argc - aoff < wantargs) ? "few" : "many");
             fputs("\n", stderr);
+        }
+        else
+        {
+            fprintf(stderr, "iometa"
+#ifdef VERSION
+                            " v" STRINGIFY(VERSION)
+#endif
+#ifdef TIMESTAMP
+                            ", compiled on " STRINGIFY(TIMESTAMP)
+#endif
+                            "\n\n"
+            );
         }
         print_help(argv[0]);
         return -1;
