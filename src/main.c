@@ -416,7 +416,7 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
 static void print_help(const char *self)
 {
     fprintf(stderr, "Usage:\n"
-                    "    %s [-abBCdeGmopsSv] [ClassName] [BundleName] kernel\n"
+                    "    %s [-abBCdeGmoOpsSv] [ClassName] [OverrideName] [BundleName] kernel\n"
                     "\n"
                     "Options:\n"
                     "    -a  Synonym for -bmsv\n"
@@ -428,6 +428,7 @@ static void print_help(const char *self)
                     "    -G  Sort (group) by bundle identifier\n"
                     "    -m  Print MetaClass addresses\n"
                     "    -o  Print overridden/new virtual methods\n"
+                    "    -O  Filter by name of overridden method\n"
                     "    -p  Filter parents of ClassName (implies -C)\n"
                     "    -s  Print object sizes\n"
                     "    -S  Sort by class name\n"
@@ -445,11 +446,13 @@ int main(int argc, const char **argv)
          opt_extend    = false,
          opt_meta      = false,
          opt_overrides = false,
+         opt_ofilt     = false,
          opt_parent    = false,
          opt_size      = false,
          opt_vtab      = false;
-    const char *filt_class = NULL,
-               *filt_bundle = NULL;
+    const char *filt_class    = NULL,
+               *filt_bundle   = NULL,
+               *filt_override = NULL;
 
     int aoff = 1;
     for(; aoff < argc; ++aoff)
@@ -511,6 +514,11 @@ int main(int argc, const char **argv)
                     opt_overrides = true;
                     break;
                 }
+                case 'O':
+                {
+                    opt_ofilt = true;
+                    break;
+                }
                 case 'p':
                 {
                     opt_parent = true;
@@ -543,7 +551,7 @@ int main(int argc, const char **argv)
         }
     }
 
-    int wantargs = 1 + (opt_bfilt ? 1 : 0) + (opt_cfilt ? 1 : 0);
+    int wantargs = 1 + (opt_bfilt ? 1 : 0) + (opt_cfilt ? 1 : 0) + (opt_ofilt ? 1 : 0);
     if(argc - aoff != wantargs)
     {
         if(argc > 1)
@@ -579,25 +587,6 @@ int main(int argc, const char **argv)
         return -1;
     }
 
-#if 0
-    if(argc - aoff >= 2)
-    {
-        if(opt_bfilt && !(opt_extend || opt_parent))
-        {
-            filt_bundle = argv[aoff + 1];
-        }
-        else
-        {
-            filt_class = argv[aoff + 1];
-        }
-    }
-
-    if((opt_extend || opt_parent) && !filt_class)
-    {
-        ERR("Options -e and -p need a class name.");
-        return -1;
-    }
-#else
     if(opt_cfilt)
     {
         filt_class = argv[aoff++];
@@ -606,7 +595,10 @@ int main(int argc, const char **argv)
     {
         filt_bundle = argv[aoff++];
     }
-#endif
+    if(opt_ofilt)
+    {
+        filt_override = argv[aoff++];
+    }
 
     int fd = open(argv[aoff], O_RDONLY);
     if(fd == -1)
@@ -963,7 +955,7 @@ do \
         }
     }
 
-    if(opt_vtab || opt_overrides)
+    if(opt_vtab || opt_overrides || opt_ofilt)
     {
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
@@ -1170,7 +1162,7 @@ do \
             }
         }
 
-        if(opt_overrides)
+        if(opt_overrides || opt_ofilt)
         {
             char **relocs = NULL;
             size_t reloc_min = ~0, reloc_max = 0;
@@ -1759,16 +1751,43 @@ do \
                 list[lsize++] = &metas.val[i];
             }
         }
+        if(filter)
+        {
+            size_t nsize = 0;
+            for(size_t i = 0; i < lsize; ++i)
+            {
+                if(list[i]->bundle == filter)
+                {
+                    list[nsize++] = list[i];
+                }
+            }
+            lsize = nsize;
+        }
+        if(filt_override)
+        {
+            size_t slen = strlen(filt_override),
+                   nsize = 0;
+            for(size_t i = 0; i < lsize; ++i)
+            {
+                metaclass_t *m = list[i];
+                for(vtab_override_t *ovr = m->overrides.head; ovr != NULL; ovr = ovr->next)
+                {
+                    if(strncmp(ovr->name.method, filt_override, slen) == 0 && ovr->name.method[slen] == '(') // TODO: fix dirty hack
+                    {
+                        list[nsize++] = m;
+                        break;
+                    }
+                }
+            }
+            lsize = nsize;
+        }
         if(opt_bsort || opt_csort)
         {
             qsort(list, lsize, sizeof(*list), opt_bsort ? &compare_bundles : &compare_names);
         }
         for(size_t i = 0; i < lsize; ++i)
         {
-            if(!filter || list[i]->bundle == filter)
-            {
-                printMetaClass(list[i], opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides);
-            }
+            printMetaClass(list[i], opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides);
         }
     }
 
