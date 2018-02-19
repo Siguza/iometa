@@ -195,6 +195,7 @@ static bool is_linear_inst(void *ptr)
            is_add_imm(ptr) ||
            is_sub_imm(ptr) ||
            is_ldr_imm_uoff(ptr) ||
+           is_ldr_lit(ptr) ||
            is_bl(ptr) ||
            is_mov(ptr) ||
            is_movz(ptr) ||
@@ -279,6 +280,18 @@ static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32
                 state->valid |= 1 << ldr->Rt;
                 state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
             }
+        }
+        else if(is_ldr_lit(ptr))
+        {
+            ldr_lit_t *ldr = (ldr_lit_t*)ptr;
+            void *ldr_addr = addr2ptr(kernel, addr + get_ldr_lit_off(ldr));
+            if(!ldr_addr)
+            {
+                return false;
+            }
+            state->x[ldr->Rt] = *(kptr_t*)ldr_addr;
+            state->valid |= 1 << ldr->Rt;
+            state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
         }
         else if(is_bl(ptr))
         {
@@ -950,7 +963,7 @@ do \
         }
         if(!meta->parentP)
         {
-            ERR("Failed to find parent of %s", meta->name);
+            ERR("Failed to find parent of %s (m: " ADDR ", p: " ADDR ")", meta->name, meta->addr, meta->parent);
             return -1;
         }
     }

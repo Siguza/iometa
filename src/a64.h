@@ -35,6 +35,15 @@ typedef struct
              op1    : 1;
 } ldr_imm_uoff_t;
 
+typedef struct
+{
+    uint32_t Rt     : 5,
+             imm    : 19,
+             op2    : 6,
+             sf     : 1,
+             op1    : 1;
+} ldr_lit_t;
+
 /*typedef struct
 {
     uint32_t Rt     : 5,
@@ -164,6 +173,16 @@ static inline bool is_ldr_imm_uoff(ldr_imm_uoff_t *ldr)
 static inline uint32_t get_ldr_imm_uoff(ldr_imm_uoff_t *ldr)
 {
     return ldr->imm << (2 + ldr->sf);
+}
+
+static inline bool is_ldr_lit(ldr_lit_t *ldr)
+{
+    return ldr->op1 == 0 && ldr->op2 == 0x18;
+}
+
+static inline int64_t get_ldr_lit_off(ldr_lit_t *ldr)
+{
+    return (((int64_t)ldr->imm) << (64 - 19)) >> (64 - 21);
 }
 
 /*static inline bool is_str_reg(str_reg_t *str)
