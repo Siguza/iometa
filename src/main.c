@@ -40,7 +40,7 @@ How this works:
 #include <stdint.h>             // uintptr_t
 #include <stdio.h>              // fprintf, stderr
 #include <stdlib.h>             // malloc, realloc, qsort, exit
-#include <string.h>             // strerror, strcmp, strstr
+#include <string.h>             // strerror, strcmp, strstr, memmem
 #include <sys/mman.h>           // mmap
 #include <sys/stat.h>           // fstat
 #include <mach/machine.h>       // CPU_TYPE_ARM64
@@ -57,37 +57,93 @@ extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, C
 
 static bool debug = false;
 
-#define LOG(str, args...) do { fprintf(stderr, str "\n", ##args); } while(0)
-#define DBG(str, args...) do { if(debug) LOG("\x1b[1;95m[DBG] " str "\x1b[0m", ##args); } while(0)
-#define WRN(str, args...) LOG("\x1b[1;93m[WRN] " str "\x1b[0m", ##args)
-#define ERR(str, args...) LOG("\x1b[1;91m[ERR] " str "\x1b[0m", ##args)
+#define LOG(str, args...)   do { fprintf(stderr, str "\n", ##args); } while(0)
+#define DBG(str, args...)   do { if(debug) LOG("\x1b[1;95m[DBG] " str "\x1b[0m", ##args); } while(0)
+#define WRN(str, args...)   LOG("\x1b[1;93m[WRN] " str "\x1b[0m", ##args)
+#define ERR(str, args...)   LOG("\x1b[1;91m[ERR] " str "\x1b[0m", ##args)
 #define ERRNO(str, args...) ERR(str ": %s", ##args, strerror(errno))
 
 #define STRINGIFX(x) #x
 #define STRINGIFY(x) STRINGIFX(x)
 
 #define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
+#define KUNTAG(x) (kptr_t)(((int64_t)(x) << 13) >> 13)
 
-#define ADDR "0x%016llx"
-#define MACH_MAGIC MH_MAGIC_64
-#define MACH_SEGMENT LC_SEGMENT_64
-typedef struct fat_header fat_hdr_t;
-typedef struct fat_arch fat_arch_t;
-typedef struct mach_header_64 mach_hdr_t;
-typedef struct load_command mach_lc_t;
-typedef struct segment_command_64 mach_seg_t;
-typedef struct symtab_command mach_stab_t;
-typedef struct dysymtab_command mach_dstab_t;
-typedef struct nlist_64 mach_nlist_t;
-typedef struct relocation_info mach_reloc_t;
-typedef uint64_t kptr_t;
+#define ADDR                        "0x%016llx"
+#define MACH_MAGIC                  MH_MAGIC_64
+#define MACH_SEGMENT                LC_SEGMENT_64
+typedef struct fat_header           fat_hdr_t;
+typedef struct fat_arch             fat_arch_t;
+typedef struct mach_header_64       mach_hdr_t;
+typedef struct load_command         mach_lc_t;
+typedef struct segment_command_64   mach_seg_t;
+typedef struct section_64           mach_sec_t;
+typedef struct symtab_command       mach_stab_t;
+typedef struct dysymtab_command     mach_dstab_t;
+typedef struct nlist_64             mach_nlist_t;
+typedef struct relocation_info      mach_reloc_t;
+typedef uint64_t                    kptr_t;
 
-#define FOREACH_CMD(hdr, cmd) \
+#define FOREACH_CMD(_hdr, _cmd) \
 for( \
-    mach_lc_t *cmd = (mach_lc_t*)(hdr + 1), *end = (mach_lc_t*)((uintptr_t)cmd + hdr->sizeofcmds - sizeof(mach_lc_t)); \
-    cmd <= end; \
-    cmd = (mach_lc_t*)((uintptr_t)cmd + cmd->cmdsize) \
+    mach_lc_t *_cmd = (mach_lc_t*)(_hdr + 1), *_end = (mach_lc_t*)((uintptr_t)_cmd + _hdr->sizeofcmds - sizeof(mach_lc_t)); \
+    _cmd <= _end; \
+    _cmd = (mach_lc_t*)((uintptr_t)_cmd + _cmd->cmdsize) \
 )
+
+#define STEP_MEM(_type, _mem, _addr, _size, _min) \
+for(_type *_mem = (_type*)(_addr), *_end = (_type*)((uintptr_t)(_mem) + (_size)) - (_min); _mem <= _end; ++_mem)
+
+#define ARRDECL(type, name, sz) \
+struct \
+{ \
+    size_t size; \
+    size_t idx; \
+    type *val; \
+} name; \
+ARRINIT(name, sz);
+
+#define ARRINIT(name, sz) \
+do \
+{ \
+    (name).size = (sz); \
+    (name).idx = 0; \
+    (name).val = malloc((name).size * sizeof(*(name).val)); \
+    if(!(name).val) \
+    { \
+        ERRNO("malloc"); \
+        exit(-1); \
+    } \
+} while(0)
+
+#define ARREXPAND(name) \
+do \
+{ \
+    if((name).size <= (name).idx) \
+    { \
+        (name).size *= 2; \
+        (name).val = realloc((name).val, (name).size * sizeof(*(name).val)); \
+        if(!(name).val) \
+        { \
+            ERRNO("realloc(0x%lx)", (name).size); \
+            exit(-1); \
+        } \
+    } \
+} while(0)
+
+#define ARRNEXT(name, ptr) \
+do \
+{ \
+    ARREXPAND((name)); \
+    (ptr) = &(name).val[(name).idx++]; \
+} while(0)
+
+#define ARRPUSH(name, obj) \
+do \
+{ \
+    ARREXPAND((name)); \
+    (name).val[(name).idx++] = (obj); \
+} while(0)
 
 #define KMOD_MAX_NAME 64
 #pragma pack(4)
@@ -174,6 +230,7 @@ static kptr_t off2addr(void *kernel, size_t off)
 
 static void* addr2ptr(void *kernel, kptr_t addr)
 {
+    addr = KUNTAG(addr);
     FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
@@ -186,6 +243,30 @@ static void* addr2ptr(void *kernel, kptr_t addr)
         }
     }
     return NULL;
+}
+
+static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str)
+{
+    struct
+    {
+        size_t size;
+        size_t idx;
+        kptr_t *val;
+    } *arr = arg;
+    size_t len = strlen(str) + 1;
+    for(size_t off = 0; off < kernelsize; )
+    {
+        const char *ptr = memmem((void*)((uintptr_t)kernel + off), kernelsize - off, str, len);
+        if(!ptr)
+        {
+            break;
+        }
+        size_t diff = (uintptr_t)ptr - (uintptr_t)kernel;
+        kptr_t ref = off2addr(kernel, diff);
+        DBG("strref(%s): " ADDR, str, ref);
+        ARRPUSH(*arr, ref);
+        off = diff + len;
+    }
 }
 
 static bool is_linear_inst(void *ptr)
@@ -296,6 +377,7 @@ static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32
         else if(is_bl(ptr))
         {
             state->valid &= ~0x3FFFF;
+            // TODO: x30?
         }
         else if(is_mov(ptr))
         {
@@ -681,58 +763,8 @@ int main(int argc, const char **argv)
         return -1;
     }
 
-#define ARRINIT(type, name, sz) \
-struct \
-{ \
-    size_t size; \
-    size_t idx; \
-    type *val; \
-} name = \
-{ \
-    .size = (sz), \
-    .idx = 0, \
-}; \
-do \
-{ \
-    name.val = malloc(name.size * sizeof(*name.val)); \
-    if(!name.val) \
-    { \
-        ERRNO("malloc"); \
-        return -1; \
-    } \
-} while(0)
-
-#define ARREXPAND(name) \
-do \
-{ \
-    if((name).size <= (name).idx) \
-    { \
-        (name).size *= 2; \
-        (name).val = realloc((name).val, (name).size * sizeof(*(name).val)); \
-        if(!(name).val) \
-        { \
-            ERRNO("realloc(0x%lx)", (name).size); \
-            return -1; \
-        } \
-    } \
-} while(0)
-
-#define ARRNEXT(name, ptr) \
-do \
-{ \
-    ARREXPAND((name)); \
-    (ptr) = &(name).val[(name).idx++]; \
-} while(0)
-
-#define ARRPUSH(name, obj) \
-do \
-{ \
-    ARREXPAND((name)); \
-    (name).val[(name).idx++] = (obj); \
-} while(0)
-
-    ARRINIT(kptr_t, aliases, 0x100);
-    ARRINIT(kptr_t, refs, 0x100);
+    ARRDECL(kptr_t, aliases, 0x100);
+    ARRDECL(kptr_t, refs, 0x100);
 
     kptr_t OSMetaClassConstructor = 0,
            OSMetaClassVtab = 0,
@@ -792,17 +824,170 @@ do \
     }
     if(OSMetaClassConstructor == 0)
     {
-        ERR("Failed to find OSMetaClass::OSMetaClass.");
-        return -1;
-    }
+        if(hdr->filetype == MH_KEXT_BUNDLE)
+        {
+            ERR("Failed to find OSMetaClass::OSMetaClass.");
+            return -1;
+        }
+        DBG("Failed to find OSMetaClass::OSMetaClass symbol, falling back to binary matching.");
 
+#define NSTRREF 3
+        const char *strs[NSTRREF] = { "IORegistryEntry", "IOService", "IOUserClient" };
+        struct
+        {
+            size_t size;
+            size_t idx;
+            kptr_t *val;
+        } strrefs[NSTRREF];
+        for(size_t i = 0; i < NSTRREF; ++i)
+        {
+            ARRINIT(strrefs[i], 4);
+            find_str(kernel, kernelsize, &strrefs[i], strs[i]);
+            if(strrefs[i].idx == 0)
+            {
+                ERR("Failed to find string: %s", strs[i]);
+                return -1;
+            }
+        }
+        struct
+        {
+            size_t size;
+            size_t idx;
+            kptr_t *val;
+        } constrCand[2];
+        ARRINIT(constrCand[0], 4);
+        ARRINIT(constrCand[1], 4);
+        size_t constrIdx = 0;
+#define constrCandPrev (constrCand[(constrIdx - 1) % 2])
+#define constrCandCurr (constrCand[constrIdx % 2])
+        for(size_t j = 0; j < NSTRREF; ++j)
+        {
+            ++constrIdx;
+            constrCandCurr.idx = 0;
+            STEP_MEM(uint32_t, mem, kernel, kernelsize, 2)
+            {
+                adr_t     *adr = (adr_t*    )(mem + 0);
+                add_imm_t *add = (add_imm_t*)(mem + 1);
+                if
+                (
+                    (is_adr(adr)  && is_nop(mem + 1) && adr->Rd == 1) ||
+                    (is_adrp(adr) && is_add_imm(add) && adr->Rd == 1 && add->Rd == 1 && add->Rn == 1)
+                )
+                {
+                    kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
+                           ref    = refloc;
+                    if(is_adrp(adr))
+                    {
+                        ref &= ~0xfff;
+                        ref += get_add_sub_imm(add);
+                    }
+                    ref += get_adr_off(adr);
+                    for(size_t i = 0; i < strrefs[j].idx; ++i)
+                    {
+                        if(ref == strrefs[j].val[i])
+                        {
+                            DBG("Found ref to \"%s\" at " ADDR, strs[j], refloc);
+                            goto look_for_bl;
+                        }
+                    }
+                    continue;
+                    look_for_bl:;
+                    STEP_MEM(uint32_t, m, mem + 2, kernelsize - ((uintptr_t)(mem + 2) - (uintptr_t)kernel), 1)
+                    {
+                        kptr_t bladdr = off2addr(kernel, (uintptr_t)m - (uintptr_t)kernel),
+                               blref  = bladdr;
+                        bl_t *bl = (bl_t*)m;
+                        if(is_bl(bl))
+                        {
+                            a64_state_t state;
+                            if(!a64_emulate(kernel, &state, mem, m))
+                            {
+                                // a64_emulate should've printed error already
+                                goto skip;
+                            }
+                            if(!(state.valid & (1 << 1)) || !(state.wide & (1 << 1)) || state.x[1] != ref)
+                            {
+                                DBG("Value of x1 changed, skipping...");
+                                goto skip;
+                            }
+                            blref += get_bl_off(bl);
+                            DBG("Considering constructor " ADDR, blref);
+                            size_t idx = -1;
+                            for(size_t i = 0; i < constrCandCurr.idx; ++i)
+                            {
+                                if(constrCandCurr.val[i] == blref)
+                                {
+                                    idx = i;
+                                    break;
+                                }
+                            }
+                            // If we have this already, just skip
+                            if(idx == -1)
+                            {
+                                // first iteration: collect
+                                // subsequent iterations: eliminate
+                                if(j != 0)
+                                {
+                                    idx = -1;
+                                    for(size_t i = 0; i < constrCandPrev.idx; ++i)
+                                    {
+                                        if(constrCandPrev.val[i] == blref)
+                                        {
+                                            idx = i;
+                                            break;
+                                        }
+                                    }
+                                    if(idx == -1)
+                                    {
+                                        DBG("Candidate " ADDR " not in prev list.", bladdr);
+                                        goto skip;
+                                    }
+                                }
+                                ARRPUSH(constrCandCurr, blref);
+                            }
+                            goto skip;
+                        }
+                        else if(!is_linear_inst(m))
+                        {
+                            WRN("Unexpected instruction at " ADDR, bladdr);
+                            goto skip;
+                        }
+                    }
+                    ERR("Reached end of kernel without finding bl from " ADDR, refloc);
+                    return -1;
+                }
+                skip:;
+            }
+        }
+        if(constrCandCurr.idx == 0)
+        {
+            ERR("Failed to find OSMetaClass::OSMetaClass.");
+            return -1;
+        }
+        else if(constrCandCurr.idx > 1)
+        {
+            ERR("Found more than one possible OSMetaClass::OSMetaClass.");
+            return -1;
+        }
+        OSMetaClassConstructor = constrCandCurr.val[0];
+        DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
+        free(constrCand[0].val);
+        free(constrCand[1].val);
+        for(size_t i = 0; i < NSTRREF; ++i)
+        {
+            free(strrefs[i].val);
+        }
+#undef constrCandPrev
+#undef constrCandCurr
+#undef NSTRREF
+    }
     ARRPUSH(aliases, OSMetaClassConstructor);
 
     if(hdr->filetype != MH_KEXT_BUNDLE)
     {
         for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
         {
-            if(*mem == OSMetaClassConstructor)
+            if(KUNTAG(*mem) == OSMetaClassConstructor)
             {
                 kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                 DBG("ref: " ADDR, ref);
@@ -815,7 +1000,7 @@ do \
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                for(uint32_t *mem = (uint32_t*)((uintptr_t)kernel + seg->fileoff), *end = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize - 3 * sizeof(uint32_t)); mem <= end; ++mem)
+                STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                 {
                     adr_t *adrp = (adr_t*)mem;
                     ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
@@ -845,14 +1030,14 @@ do \
         }
     }
 
-    ARRINIT(metaclass_t, metas, 0x1000);
+    ARRDECL(metaclass_t, metas, 0x1000);
 
     FOREACH_CMD(hdr, cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
         {
             mach_seg_t *seg = (mach_seg_t*)cmd;
-            for(uint32_t *mem = (uint32_t*)((uintptr_t)kernel + seg->fileoff), *end = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize - sizeof(uint32_t)); mem <= end; ++mem)
+            STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
             {
                 bl_t *bl = (bl_t*)mem;
                 if(is_bl(bl))
@@ -1021,7 +1206,7 @@ do \
         }
         for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
         {
-            if(ovtab[i] == OSObjectGetMetaClass)
+            if(KUNTAG(ovtab[i]) == OSObjectGetMetaClass)
             {
                 VtabGetMetaClassOff = i;
                 DBG("VtabGetMetaClassOff: 0x%lx", VtabGetMetaClassOff);
@@ -1045,13 +1230,13 @@ do \
             }
         }
 
-        ARRINIT(kptr_t, candidates, 0x100);
+        ARRDECL(kptr_t, candidates, 0x100);
         FOREACH_CMD(hdr, cmd)
         {
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                for(uint32_t *mem = (uint32_t*)((uintptr_t)kernel + seg->fileoff), *end = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize - 3 * sizeof(uint32_t)); mem <= end; ++mem)
+                STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                 {
                     adr_t *adr = (adr_t*)mem;
                     add_imm_t *add = (add_imm_t*)(mem + 1);
@@ -1090,9 +1275,9 @@ do \
                                 {
                                     DBG("Got func " ADDR " referencing MetaClass %s", func, meta->name);
                                     candidates.idx = 0;
-                                    for(kptr_t *mem2 = (kptr_t*)kernel + VtabGetMetaClassOff + 2, *end2 = (kptr_t*)((uintptr_t)kernel + kernelsize); mem2 < end2; ++mem2)
+                                    STEP_MEM(kptr_t, mem2, (kptr_t*)kernel + VtabGetMetaClassOff + 2, kernelsize - (VtabGetMetaClassOff + 2) * sizeof(kptr_t), 1)
                                     {
-                                        if(*mem2 == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
+                                        if(KUNTAG(*mem2) == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
                                         {
                                             kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassOff) - (uintptr_t)kernel);
                                             if(meta->vtab == 0)
@@ -1116,7 +1301,7 @@ do \
                                     {
                                         kptr_t cnd = 0;
                                         size_t numcnd = 0;
-                                        for(uint32_t *mem2 = (uint32_t*)kernel, *end2 = (uint32_t*)((uintptr_t)kernel + kernelsize - 5 * sizeof(uint32_t)); mem2 <= end2; ++mem2)
+                                        STEP_MEM(uint32_t, mem2, kernel, kernelsize, 5)
                                         {
                                             adr_t *adrp = (adr_t*)mem2;
                                             add_imm_t *add1 = (add_imm_t*)(mem2 + 1);
@@ -1224,7 +1409,7 @@ do \
                     }
                 }
             }
-            ARRINIT(vtab_entry_t, fncache, 0x200);
+            ARRDECL(vtab_entry_t, fncache, 0x200);
             for(size_t i = 0; i < metas.idx; ++i)
             {
                 again:;
@@ -1294,14 +1479,14 @@ do \
                     (is_in_reloc = (KOFF(mvtab[idx]) >= reloc_min && KOFF(mvtab[idx]) < reloc_max && relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)] != NULL)) || mvtab[idx] != 0;
                     ++idx)
                 {
-                    if(!is_in_reloc && (!pvtab || mvtab[idx] != pvtab[idx]))
+                    if(!is_in_reloc && (!pvtab || KUNTAG(mvtab[idx]) != KUNTAG(pvtab[idx])))
                     {
                         if(pvtab && pvtab[idx] == 0)
                         {
                             // Signal that we've reached end of the parent vtable
                             pvtab = NULL;
                         }
-                        kptr_t func = mvtab[idx];
+                        kptr_t func = KUNTAG(mvtab[idx]);
                         vtab_entry_t *entry = NULL;
                         // stab, symtab and strtab are guaranteed to be non-NULL here or we would've exited long ago
                         char *cxx_sym = NULL;
@@ -1385,7 +1570,7 @@ do \
                         }
                         if(!entry && pvtab)
                         {
-                            kptr_t pfunc = pvtab[idx];
+                            kptr_t pfunc = KUNTAG(pvtab[idx]);
                             for(size_t n = 0; n < fncache.idx; ++n)
                             {
                                 if(fncache.val[n].addr == pfunc)
@@ -1448,7 +1633,7 @@ do \
                         ovrd->next = NULL;
                         ovrd->name.class = entry->name.class;
                         ovrd->name.method = entry->name.method;
-                        ovrd->old = pvtab ? pvtab[idx] : 0;
+                        ovrd->old = pvtab ? KUNTAG(pvtab[idx]) : 0;
                         ovrd->new = entry->addr;
                         ovrd->idx = idx;
                         *(meta->overrides.nextP) = ovrd;
@@ -1524,103 +1709,111 @@ do \
                     {
                         continue;
                     }
-                    const char *xml = (const char*)((uintptr_t)kernel + seg->fileoff);
-                    CFStringRef err = NULL;
-                    CFTypeRef plist = IOCFUnserialize(xml, NULL, 0, &err);
-                    if(!plist)
+                    mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+                    for(size_t h = 0; h < seg->nsects; ++h)
                     {
-                        ERR("IOCFUnserialize: %s", CFStringGetCStringPtr(err, kCFStringEncodingUTF8));
-                        return -1;
-                    }
-                    CFArrayRef arr = CFDictionaryGetValue(plist, CFSTR("_PrelinkInfoDictionary"));
-                    CFIndex arrlen = CFArrayGetCount(arr);
-                    if(filt_bundle && !bundleList)
-                    {
-                        bundleList = malloc((arrlen + 1) * sizeof(*bundleList));
-                        if(!bundleList)
+                        if(strcmp("__info", secs[h].sectname) == 0)
                         {
-                            ERRNO("malloc(bundleList)");
-                            return -1;
-                        }
-                    }
-                    for(size_t i = 0; i < arrlen; ++i)
-                    {
-                        CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
-                        if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
-                        {
-                            WRN("Array entry %lu is not a dict.", i);
-                            continue;
-                        }
-                        CFStringRef cfstr = CFDictionaryGetValue(dict, CFSTR("CFBundleIdentifier"));
-                        if(!cfstr || CFGetTypeID(cfstr) != CFStringGetTypeID())
-                        {
-                            WRN("CFBundleIdentifier missing or wrong type at entry %lu.", i);
-                            if(debug)
+                            const char *xml = (const char*)((uintptr_t)kernel + secs[h].offset);
+                            CFStringRef err = NULL;
+                            CFTypeRef plist = IOCFUnserialize(xml, NULL, 0, &err);
+                            if(!plist)
                             {
-                                CFShow(dict);
+                                ERR("IOCFUnserialize: %s", CFStringGetCStringPtr(err, kCFStringEncodingUTF8));
+                                return -1;
                             }
-                            continue;
-                        }
-                        const char *str = CFStringGetCStringPtr(cfstr, kCFStringEncodingUTF8);
-                        if(!str)
-                        {
-                            WRN("Failed to get CFString contents at entry %lu.", i);
-                            if(debug)
+                            CFArrayRef arr = CFDictionaryGetValue(plist, CFSTR("_PrelinkInfoDictionary"));
+                            CFIndex arrlen = CFArrayGetCount(arr);
+                            if(filt_bundle && !bundleList)
                             {
-                                CFShow(cfstr);
-                            }
-                            continue;
-                        }
-                        if(bundleList)
-                        {
-                            bundleList[bundleIdx++] = str;
-                        }
-                        CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
-                        if(!cfnum)
-                        {
-                            DBG("Kext %s has no PrelinkExecutableLoadAddr, skipping...", str);
-                            continue;
-                        }
-                        if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
-                        {
-                            WRN("PrelinkExecutableLoadAddr missing or wrong type for kext %s", str);
-                            if(debug)
-                            {
-                                CFShow(cfnum);
-                            }
-                            continue;
-                        }
-                        kptr_t addr = 0;
-                        if(!CFNumberGetValue(cfnum, kCFNumberLongLongType, &addr))
-                        {
-                            WRN("Failed to get CFNumber contents for kext %s", str);
-                            continue;
-                        }
-                        DBG("Kext %s at " ADDR, str, addr);
-                        mach_hdr_t *hdr2 = addr2ptr(kernel, addr);
-                        if(!hdr2)
-                        {
-                            WRN("Failed to translate kext header address " ADDR, addr);
-                            continue;
-                        }
-                        FOREACH_CMD(hdr2, cmd2)
-                        {
-                            if(cmd2->cmd == MACH_SEGMENT)
-                            {
-                                mach_seg_t *seg2 = (mach_seg_t*)cmd2;
-                                if(strcmp("__DATA", seg2->segname) == 0)
+                                bundleList = malloc((arrlen + 1) * sizeof(*bundleList));
+                                if(!bundleList)
                                 {
-                                    DBG("%s __DATA at " ADDR, str, seg2->vmaddr);
-                                    for(size_t j = 0; j < metas.idx; ++j)
+                                    ERRNO("malloc(bundleList)");
+                                    return -1;
+                                }
+                            }
+                            for(size_t i = 0; i < arrlen; ++i)
+                            {
+                                CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
+                                if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
+                                {
+                                    WRN("Array entry %lu is not a dict.", i);
+                                    continue;
+                                }
+                                CFStringRef cfstr = CFDictionaryGetValue(dict, CFSTR("CFBundleIdentifier"));
+                                if(!cfstr || CFGetTypeID(cfstr) != CFStringGetTypeID())
+                                {
+                                    WRN("CFBundleIdentifier missing or wrong type at entry %lu.", i);
+                                    if(debug)
                                     {
-                                        metaclass_t *meta = &metas.val[j];
-                                        if(meta->addr >= seg2->vmaddr && meta->addr < seg2->vmaddr + seg2->vmsize)
+                                        CFShow(dict);
+                                    }
+                                    continue;
+                                }
+                                const char *str = CFStringGetCStringPtr(cfstr, kCFStringEncodingUTF8);
+                                if(!str)
+                                {
+                                    WRN("Failed to get CFString contents at entry %lu.", i);
+                                    if(debug)
+                                    {
+                                        CFShow(cfstr);
+                                    }
+                                    continue;
+                                }
+                                if(bundleList)
+                                {
+                                    bundleList[bundleIdx++] = str;
+                                }
+                                CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
+                                if(!cfnum)
+                                {
+                                    DBG("Kext %s has no PrelinkExecutableLoadAddr, skipping...", str);
+                                    continue;
+                                }
+                                if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
+                                {
+                                    WRN("PrelinkExecutableLoadAddr missing or wrong type for kext %s", str);
+                                    if(debug)
+                                    {
+                                        CFShow(cfnum);
+                                    }
+                                    continue;
+                                }
+                                kptr_t addr = 0;
+                                if(!CFNumberGetValue(cfnum, kCFNumberLongLongType, &addr))
+                                {
+                                    WRN("Failed to get CFNumber contents for kext %s", str);
+                                    continue;
+                                }
+                                DBG("Kext %s at " ADDR, str, addr);
+                                mach_hdr_t *hdr2 = addr2ptr(kernel, addr);
+                                if(!hdr2)
+                                {
+                                    WRN("Failed to translate kext header address " ADDR, addr);
+                                    continue;
+                                }
+                                FOREACH_CMD(hdr2, cmd2)
+                                {
+                                    if(cmd2->cmd == MACH_SEGMENT)
+                                    {
+                                        mach_seg_t *seg2 = (mach_seg_t*)cmd2;
+                                        if(strcmp("__DATA", seg2->segname) == 0)
                                         {
-                                            meta->bundle = str;
+                                            DBG("%s __DATA at " ADDR, str, seg2->vmaddr);
+                                            for(size_t j = 0; j < metas.idx; ++j)
+                                            {
+                                                metaclass_t *meta = &metas.val[j];
+                                                if(meta->addr >= seg2->vmaddr && meta->addr < seg2->vmaddr + seg2->vmsize)
+                                                {
+                                                    meta->bundle = str;
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
+                            break;
                         }
                     }
                 }
