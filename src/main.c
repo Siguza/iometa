@@ -30,8 +30,11 @@ How this works:
 7.  To all of those locations we search a hardcoded pointer in the kernel.
     If we find one in an array of pointers preceded by two NULL pointers, we accept this as class vtable.
 8.  If we want bundle names, we first get the kernel's __PRELINK_INFO segment and feed it to IOCFUnserialize (CoreFoundation can't handle it).
-9.  For all entries with a _PrelinkExecutableLoadAddr, we parse the kext header and check for each metaclass
+    For all entries with a _PrelinkExecutableLoadAddr, we parse the kext header and check for each metaclass
     whether its address is inside the kext's __DATA segment. If so, we set the bundle name that we can get from CFBundleIdentifier.
+9.  In the case of 1469 kernels, _PrelinkExecutableLoadAddr no longer exists as kexts seems to have been compiled directly into the kernel.
+    We do however get __PRELINK_INFO.__kmod_info __PRELINK_INFO.__kmod_start in their place, giving us names & mach headers. Pretty much
+    everything has been removed, but the leftover __TEXT_EXEC entry is just enough to match against OSMetaClass constructor callsites.
 10. Finally we do some filtering and sorting, and print our findings.
 #endif
 
@@ -55,6 +58,8 @@ extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, C
 
 #include "a64.h"
 #include "cxx.h"
+
+static bool debug = false;
 
 #define LOG(str, args...)   do { fprintf(stderr, str "\n", ##args); } while(0)
 #define DBG(str, args...)   do { if(debug) LOG("\x1b[1;95m[DBG] " str "\x1b[0m", ##args); } while(0)
@@ -198,6 +203,7 @@ typedef struct metaclass
     kptr_t addr;
     kptr_t parent;
     kptr_t vtab;
+    kptr_t callsite;
     struct metaclass *parentP;
     const char *name;
     const char *bundle;
@@ -226,11 +232,7 @@ typedef union
     };
 } pacptr_t;
 
-static bool debug = false;
-static bool x1469 = false;
-static kptr_t kbase = 0;
-
-static kptr_t kuntag(kptr_t ptr, uint16_t *pac)
+static kptr_t kuntag(kptr_t kbase, bool x1469, kptr_t ptr, uint16_t *pac)
 {
     pacptr_t pp;
     pp.ptr = ptr;
@@ -333,14 +335,17 @@ typedef struct
 
 // Best-effort emulation: halt on unknown instructions, keep track of which registers
 // hold known values and only operate on those. Ignore non-static memory.
-static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32_t *to)
+static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32_t *to, bool init)
 {
-    for(size_t i = 0; i < 32; ++i)
+    if(init)
     {
-        state->x[i] = 0;
+        for(size_t i = 0; i < 32; ++i)
+        {
+            state->x[i] = 0;
+        }
+        state->valid = 0;
+        state->wide = 0;
     }
-    state->valid = 0;
-    state->wide = 0;
     for(; from < to; ++from)
     {
         void *ptr = from;
@@ -538,7 +543,7 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
     {
         for(vtab_override_t *ovr = meta->overrides.head; ovr != NULL; ovr = ovr->next)
         {
-            printf("    %#6lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s\n", ovr->idx * sizeof(kptr_t), ovr->new, ovr->old, ovr->pac, ovr->name.class, ovr->name.method);
+            printf("    %#6lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s\n", ovr->idx * sizeof(kptr_t), ovr->new, ovr->old, ovr->pac, ovr->name.class, ovr->name.method); // TODO: %#6lx will break if we ever show index 0
         }
     }
 }
@@ -804,7 +809,10 @@ int main(int argc, const char **argv)
     kptr_t OSMetaClassConstructor = 0,
            OSMetaClassVtab = 0,
            OSObjectVtab = 0,
-           OSObjectGetMetaClass = 0;
+           OSObjectGetMetaClass = 0,
+           kbase = 0,
+           initcode = 0;
+    bool x1469 = false;
     mach_stab_t *stab = NULL;
     mach_nlist_t *symtab = NULL;
     char *strtab = NULL;
@@ -824,6 +832,7 @@ int main(int argc, const char **argv)
                 {
                     if(strcmp("initcode", secs[i].sectname) == 0)
                     {
+                        initcode = secs[i].addr;
                         x1469 = true;
                         break;
                     }
@@ -876,7 +885,7 @@ int main(int argc, const char **argv)
             }
         }
     }
-    if(OSMetaClassConstructor == 0)
+    if(!OSMetaClassConstructor)
     {
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
@@ -925,7 +934,7 @@ int main(int argc, const char **argv)
                 if
                 (
                     (is_adr(adr)  && is_nop(mem + 1) && adr->Rd == 1) ||
-                    (is_adrp(adr) && is_add_imm(add) && adr->Rd == 1 && add->Rd == 1 && add->Rn == 1)
+                    (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 1)
                 )
                 {
                     kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
@@ -954,7 +963,7 @@ int main(int argc, const char **argv)
                         if(is_bl(bl))
                         {
                             a64_state_t state;
-                            if(!a64_emulate(kernel, &state, mem, m))
+                            if(!a64_emulate(kernel, &state, mem, m, true))
                             {
                                 // a64_emulate should've printed error already
                                 goto skip;
@@ -1041,7 +1050,7 @@ int main(int argc, const char **argv)
     {
         for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
         {
-            if(kuntag(*mem, NULL) == OSMetaClassConstructor)
+            if(kuntag(kbase, x1469, *mem, NULL) == OSMetaClassConstructor)
             {
                 kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                 DBG("ref: " ADDR, ref);
@@ -1125,7 +1134,7 @@ int main(int argc, const char **argv)
                                 --fnstart;
                             }
                             a64_state_t state;
-                            if(a64_emulate(kernel, &state, fnstart, mem))
+                            if(a64_emulate(kernel, &state, fnstart, mem, true))
                             {
                                 if((state.valid & 0x1) != 0x1)
                                 {
@@ -1159,6 +1168,7 @@ int main(int argc, const char **argv)
                                 meta->addr = state.x[0];
                                 meta->parent = state.x[2];
                                 meta->vtab = 0;
+                                meta->callsite = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                                 meta->parentP = NULL;
                                 meta->name = addr2ptr(kernel, state.x[1]);
                                 meta->bundle = NULL;
@@ -1170,7 +1180,7 @@ int main(int argc, const char **argv)
                                 meta->reserved = 0;
                                 if(!meta->name)
                                 {
-                                    DBG("meta->name: " ADDR " (untagged: " ADDR ")", state.x[1], kuntag(state.x[1], NULL));
+                                    DBG("meta->name: " ADDR " (untagged: " ADDR ")", state.x[1], kuntag(kbase, x1469, state.x[1], NULL));
                                     ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
                                     return -1;
                                 }
@@ -1210,6 +1220,22 @@ int main(int argc, const char **argv)
 
     if(opt_vtab || opt_overrides || opt_ofilt)
     {
+        metaclass_t *metaclassHandle = NULL;
+        kptr_t OSMetaClassMetaClass = 0;
+        for(size_t i = 0; i < metas.idx; ++i)
+        {
+            if(strcmp(metas.val[i].name, "OSMetaClass") == 0)
+            {
+                if(OSMetaClassVtab)
+                {
+                    metas.val[i].vtab = OSMetaClassVtab;
+                }
+                OSMetaClassMetaClass = metas.val[i].addr;
+                metaclassHandle = &metas.val[i];
+                break;
+            }
+        }
+
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
             for(size_t i = 0; i < stab->nsyms; ++i)
@@ -1220,7 +1246,7 @@ int main(int argc, const char **argv)
                 }
                 char *s = &strtab[symtab[i].n_un.n_strx];
                 size_t slen = strlen(s);
-                if(slen >= 21 && strncmp(s, "__ZNK", 5) == 0 && strcmp(s + slen - 16, "12getMetaClassEv") == 0)
+                if(slen >= 21 && strncmp(s, "__ZNK", 5) == 0 && strcmp(s + slen - 16, "12getMetaClassEv") == 0) // TODO: kinda ugly
                 {
                     for(size_t j = 0; j < stab->nsyms; ++j)
                     {
@@ -1242,6 +1268,117 @@ int main(int argc, const char **argv)
             }
             after:;
         }
+        else
+        {
+            if((metaclassHandle && !metaclassHandle->vtab) || !OSObjectVtab)
+            {
+                DBG("Missing OSMetaClass vtab, falling back to binary matching.");
+
+                FOREACH_CMD(hdr, cmd)
+                {
+                    if(cmd->cmd == MACH_SEGMENT)
+                    {
+                        mach_seg_t *seg = (mach_seg_t*)cmd;
+                        if(seg->vmaddr <= OSMetaClassConstructor && seg->vmaddr + seg->vmsize > OSMetaClassConstructor)
+                        {
+                            kptr_t inset = (OSMetaClassConstructor - seg->vmaddr);
+                            uint32_t *start = kernel + seg->fileoff + inset;
+                            STEP_MEM(uint32_t, mem, (uintptr_t)start, seg->filesize - inset, 1)
+                            {
+                                str_uoff_t *str = (str_uoff_t*)mem;
+                                if(is_str_uoff(str) && get_str_uoff(str) == 0)
+                                {
+                                    a64_state_t state;
+                                    for(size_t i = 0; i < 32; ++i)
+                                    {
+                                        state.x[i] = 0;
+                                    }
+                                    state.valid = 1;
+                                    state.wide = 1;
+                                    if(a64_emulate(kernel, &state, start, mem, false))
+                                    {
+                                        if(!(state.valid & (1 << str->Rn)) || !(state.wide & (1 << str->Rn)) || !(state.valid & (1 << str->Rt)) || !(state.wide & (1 << str->Rt)))
+                                        {
+                                            DBG("Bad valid/wide flags (%x/%x)", state.valid, state.wide);
+                                        }
+                                        else
+                                        {
+                                            OSMetaClassVtab = state.x[str->Rt];
+                                            DBG("OSMetaClassVtab " ADDR, OSMetaClassVtab);
+                                            if(metaclassHandle && !metaclassHandle->vtab)
+                                            {
+                                                metaclassHandle->vtab = OSMetaClassVtab;
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                                if(!is_linear_inst(mem))
+                                {
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            if(!OSObjectVtab && !OSObjectGetMetaClass && OSMetaClassMetaClass) // Must happen together
+            {
+                DBG("Missing OSObject vtab and OSObject::getMetaClass, falling back to binary matching.");
+
+                // vtab
+                OSObjectVtab = OSMetaClassVtab;
+
+                // getMetaClass
+                STEP_MEM(uint32_t, mem, kernel, kernelsize, 3)
+                {
+                    adr_t     *adr = (adr_t*    )(mem + 0);
+                    add_imm_t *add = (add_imm_t*)(mem + 1);
+                    ret_t     *ret = (ret_t*    )(mem + 2);
+                    if
+                    (
+                        is_ret(ret) &&
+                        (
+                            (is_adr(adr) && is_nop(mem + 1) && adr->Rd == 0) ||
+                            (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 0)
+                        )
+                    )
+                    {
+                        kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
+                               ref    = refloc;
+                        if(is_adrp(adr))
+                        {
+                            ref &= ~0xfff;
+                            ref += get_add_sub_imm(add);
+                        }
+                        ref += get_adr_off(adr);
+                        if(ref == OSMetaClassMetaClass)
+                        {
+                            if(OSObjectGetMetaClass == -1)
+                            {
+                                ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, refloc);
+                            }
+                            else if(OSObjectGetMetaClass != 0)
+                            {
+                                ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, OSObjectGetMetaClass);
+                                ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, refloc);
+                                OSObjectGetMetaClass = -1;
+                            }
+                            else
+                            {
+                                DBG("OSMetaClass::getMetaClass: " ADDR, refloc);
+                                OSObjectGetMetaClass = refloc;
+                            }
+                        }
+                    }
+                }
+                if(OSObjectGetMetaClass == -1)
+                {
+                    OSObjectGetMetaClass = 0;
+                }
+            }
+        }
         size_t VtabGetMetaClassOff = 0;
         if(!OSObjectVtab)
         {
@@ -1261,7 +1398,7 @@ int main(int argc, const char **argv)
         }
         for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
         {
-            if(kuntag(ovtab[i], NULL) == OSObjectGetMetaClass)
+            if(kuntag(kbase, x1469, ovtab[i], NULL) == OSObjectGetMetaClass)
             {
                 VtabGetMetaClassOff = i;
                 DBG("VtabGetMetaClassOff: 0x%lx", VtabGetMetaClassOff);
@@ -1272,17 +1409,6 @@ int main(int argc, const char **argv)
         {
             ERR("Failed to find OSObjectGetMetaClass in OSObjectVtab.");
             return -1;
-        }
-
-        kptr_t OSMetaClassMetaClass = 0;
-        for(size_t i = 0; i < metas.idx; ++i)
-        {
-            if(strcmp(metas.val[i].name, "OSMetaClass") == 0)
-            {
-                metas.val[i].vtab = OSMetaClassVtab;
-                OSMetaClassMetaClass = metas.val[i].addr;
-                break;
-            }
         }
 
         ARRDECL(kptr_t, candidates, 0x100);
@@ -1332,7 +1458,7 @@ int main(int argc, const char **argv)
                                     candidates.idx = 0;
                                     STEP_MEM(kptr_t, mem2, (kptr_t*)kernel + VtabGetMetaClassOff + 2, kernelsize - (VtabGetMetaClassOff + 2) * sizeof(kptr_t), 1)
                                     {
-                                        if(kuntag(*mem2, NULL) == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
+                                        if(kuntag(kbase, x1469, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
                                         {
                                             kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassOff) - (uintptr_t)kernel);
                                             if(meta->vtab == 0)
@@ -1367,10 +1493,10 @@ int main(int argc, const char **argv)
                                             ret_t *ret2 = (ret_t*)(mem2 + 5);
                                             if
                                             (
-                                                is_adrp(adrp) && is_add_imm(add1) && is_add_imm(add2) && is_str_uoff(str) &&
+                                                is_adrp(adrp) && is_add_imm(add1) && is_add_imm(add2) && is_str_uoff(str) && // TODO: adr + nop + add ?
                                                 (is_ret(ret1) || (*ldp == 0xa8c17bfd /* ldp x29, x30, [sp], 0x10 */ && is_ret(ret2))) &&
                                                 adrp->Rd == add1->Rn && add1->Rd == add2->Rn && add2->Rd == str->Rt &&
-                                                get_add_sub_imm(add2) == 2 * sizeof(kptr_t)
+                                                get_str_uoff(str) == 0 && get_add_sub_imm(add2) == 2 * sizeof(kptr_t)
                                             )
                                             {
                                                 kptr_t refloc = off2addr(kernel, (uintptr_t)adrp - (uintptr_t)kernel);
@@ -1534,7 +1660,7 @@ int main(int argc, const char **argv)
                     (is_in_reloc = (KOFF(mvtab[idx]) >= reloc_min && KOFF(mvtab[idx]) < reloc_max && relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)] != NULL)) || mvtab[idx] != 0;
                     ++idx)
                 {
-                    if(!is_in_reloc && (!pvtab || kuntag(mvtab[idx], NULL) != kuntag(pvtab[idx], NULL)))
+                    if(!is_in_reloc && (!pvtab || kuntag(kbase, x1469, mvtab[idx], NULL) != kuntag(kbase, x1469, pvtab[idx], NULL)))
                     {
                         if(pvtab && pvtab[idx] == 0)
                         {
@@ -1542,7 +1668,7 @@ int main(int argc, const char **argv)
                             pvtab = NULL;
                         }
                         uint16_t pac;
-                        kptr_t func = kuntag(mvtab[idx], &pac);
+                        kptr_t func = kuntag(kbase, x1469, mvtab[idx], &pac);
                         vtab_entry_t *entry = NULL;
                         // stab, symtab and strtab are guaranteed to be non-NULL here or we would've exited long ago
                         char *cxx_sym = NULL;
@@ -1627,7 +1753,7 @@ int main(int argc, const char **argv)
                         }
                         if(!entry && pvtab)
                         {
-                            kptr_t pfunc = kuntag(pvtab[idx], NULL);
+                            kptr_t pfunc = kuntag(kbase, x1469, pvtab[idx], NULL);
                             for(size_t n = 0; n < fncache.idx; ++n)
                             {
                                 if(fncache.val[n].addr == pfunc)
@@ -1692,7 +1818,7 @@ int main(int argc, const char **argv)
                         ovrd->next = NULL;
                         ovrd->name.class = entry->name.class;
                         ovrd->name.method = entry->name.method;
-                        ovrd->old = pvtab ? kuntag(pvtab[idx], NULL) : 0;
+                        ovrd->old = pvtab ? kuntag(kbase, x1469, pvtab[idx], NULL) : 0;
                         ovrd->new = entry->addr;
                         ovrd->idx = idx;
                         ovrd->pac = entry->pac;
@@ -1720,6 +1846,9 @@ int main(int argc, const char **argv)
 
     if(opt_bundle || opt_bfilt)
     {
+        bool haveBundles = false;
+        const char **bundleList = NULL;
+        size_t bundleIdx = 0;
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
             kmod_info_t *kmod = NULL;
@@ -1744,136 +1873,276 @@ int main(int argc, const char **argv)
             }
             __kernel__ = kmod->name;
         }
-
-        const char **bundleList = NULL;
-        size_t bundleIdx = 0;
-        FOREACH_CMD(hdr, cmd)
+        else
         {
-            if(cmd->cmd == MACH_SEGMENT)
+            DBG("Looking for kmod info...");
+            mach_sec_t *kmod_info  = NULL,
+                       *kmod_start = NULL;
+            FOREACH_CMD(hdr, cmd)
             {
-                mach_seg_t *seg = (mach_seg_t*)cmd;
-                if(strcmp("__DATA", seg->segname) == 0)
+                if(cmd->cmd == MACH_SEGMENT)
                 {
-                    for(size_t i = 0; i < metas.idx; ++i)
+                    mach_seg_t *seg = (mach_seg_t*)cmd;
+                    if(strcmp("__PRELINK_INFO", seg->segname) == 0)
                     {
-                        metaclass_t *meta = &metas.val[i];
-                        if(meta->addr >= seg->vmaddr && meta->addr < seg->vmaddr + seg->vmsize)
+                        if(seg->filesize > 0)
                         {
-                            meta->bundle = __kernel__;
+                            mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+                            for(size_t h = 0; h < seg->nsects; ++h)
+                            {
+                                if(strcmp("__kmod_info", secs[h].sectname) == 0)
+                                {
+                                    kmod_info = &secs[h];
+                                }
+                                else if(strcmp("__kmod_start", secs[h].sectname) == 0)
+                                {
+                                    kmod_start = &secs[h];
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            DBG("kmod_info:  %s", kmod_info  ? "yes" : "no");
+            DBG("kmod_start: %s", kmod_start ? "yes" : "no");
+            if(kmod_info && kmod_start)
+            {
+                if(kmod_info->size % sizeof(kptr_t) != 0 || kmod_start->size % sizeof(kptr_t) != 0)
+                {
+                    ERR("One of kmod_{info|start} has bad size.");
+                    return -1;
+                }
+                size_t kmod_num = kmod_info->size / sizeof(kptr_t);
+                kptr_t *info_ptr  = (kptr_t*)((uintptr_t)kernel + kmod_info->offset),
+                       *start_ptr = (kptr_t*)((uintptr_t)kernel + kmod_start->offset);
+                if(kmod_info->size != kmod_start->size)
+                {
+                    if(kmod_start->size == kmod_info->size + sizeof(kptr_t))
+                    {
+                        mach_hdr_t *exhdr = addr2ptr(kernel, kuntag(kbase, x1469, start_ptr[kmod_num], NULL));
+                        if(exhdr && exhdr->ncmds == 2)
+                        {
+                            mach_seg_t *exseg = (mach_seg_t*)(exhdr + 1);
+                            mach_sec_t *exsec = (mach_sec_t*)(exseg + 1);
+                            struct uuid_command *exuuid = (struct uuid_command*)((uintptr_t)exseg + exseg->cmdsize);
+                            if
+                            (
+                                exseg->cmd == MACH_SEGMENT && exuuid->cmd == LC_UUID &&
+                                strcmp("__TEXT_EXEC", exseg->segname) == 0 && exseg->nsects == 1 && strcmp("__text", exsec->sectname) == 0 && kuntag(kbase, x1469, exsec->addr, NULL) == initcode &&
+                                exuuid->uuid[0x0] == 0 && exuuid->uuid[0x1] == 0 && exuuid->uuid[0x2] == 0 && exuuid->uuid[0x3] == 0 &&
+                                exuuid->uuid[0x4] == 0 && exuuid->uuid[0x5] == 0 && exuuid->uuid[0x6] == 0 && exuuid->uuid[0x7] == 0 &&
+                                exuuid->uuid[0x8] == 0 && exuuid->uuid[0x9] == 0 && exuuid->uuid[0xa] == 0 && exuuid->uuid[0xb] == 0 &&
+                                exuuid->uuid[0xc] == 0 && exuuid->uuid[0xd] == 0 && exuuid->uuid[0xe] == 0 && exuuid->uuid[0xf] == 0
+                            )
+                            {
+                                DBG("Found kmod_start for initcode, ignoring...");
+                                goto false_alarm;
+                            }
+                        }
+                    }
+                    ERR("Size mismatch on kmod_{info|start}.");
+                    return -1;
+
+                    false_alarm:;
+                }
+                if(filt_bundle && !bundleList)
+                {
+                    bundleList = malloc((kmod_num + 1) * sizeof(*bundleList));
+                    if(!bundleList)
+                    {
+                        ERRNO("malloc(bundleList)");
+                        return -1;
+                    }
+                }
+                for(size_t i = 0; i < kmod_num; ++i)
+                {
+                    kptr_t iaddr = kuntag(kbase, x1469, info_ptr[i],  NULL);
+                    kptr_t haddr = kuntag(kbase, x1469, start_ptr[i], NULL);
+                    kmod_info_t *kmod = addr2ptr(kernel, iaddr);
+                    mach_hdr_t  *khdr = addr2ptr(kernel, haddr);
+                    if(!kmod)
+                    {
+                        WRN("Failed to translate kext kmod address " ADDR, iaddr);
+                        continue;
+                    }
+                    DBG("Kext %s at " ADDR, kmod->name, haddr);
+                    if(bundleList)
+                    {
+                        bundleList[bundleIdx++] = kmod->name;
+                    }
+                    if(!khdr)
+                    {
+                        WRN("Failed to translate kext header address " ADDR, haddr);
+                        continue;
+                    }
+                    FOREACH_CMD(khdr, kcmd)
+                    {
+                        if(kcmd->cmd == MACH_SEGMENT)
+                        {
+                            mach_seg_t *kseg = (mach_seg_t*)kcmd;
+                            if(strcmp("__TEXT_EXEC", kseg->segname) == 0)
+                            {
+                                kptr_t vmaddr = kuntag(kbase, x1469, kseg->vmaddr, NULL);
+                                DBG("%s __TEXT_EXEC at " ADDR, kmod->name, vmaddr);
+                                for(size_t j = 0; j < metas.idx; ++j)
+                                {
+                                    metaclass_t *meta = &metas.val[j];
+                                    if(meta->callsite >= vmaddr && meta->callsite < vmaddr + kseg->vmsize)
+                                    {
+                                        meta->bundle = kmod->name;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-                else if(strcmp("__PRELINK_INFO", seg->segname) == 0)
+                for(size_t i = 0; i < metas.idx; ++i) // Kinda lousy, but what better way is there
                 {
-                    if(seg->filesize == 0)
+                    metaclass_t *meta = &metas.val[i];
+                    if(!meta->bundle)
                     {
-                        continue;
+                        meta->bundle = __kernel__;
                     }
-                    mach_sec_t *secs = (mach_sec_t*)(seg + 1);
-                    for(size_t h = 0; h < seg->nsects; ++h)
+                }
+                haveBundles = true;
+            }
+            else if(kmod_info || kmod_start)
+            {
+                ERR("Have one of kmod_{info|start}, but not the other.");
+                return -1;
+            }
+        }
+        if(!haveBundles)
+        {
+            FOREACH_CMD(hdr, cmd)
+            {
+                if(cmd->cmd == MACH_SEGMENT)
+                {
+                    mach_seg_t *seg = (mach_seg_t*)cmd;
+                    if(strcmp("__DATA", seg->segname) == 0)
                     {
-                        if(strcmp("__info", secs[h].sectname) == 0)
+                        for(size_t i = 0; i < metas.idx; ++i)
                         {
-                            const char *xml = (const char*)((uintptr_t)kernel + secs[h].offset);
-                            CFStringRef err = NULL;
-                            CFTypeRef plist = IOCFUnserialize(xml, NULL, 0, &err);
-                            if(!plist)
+                            metaclass_t *meta = &metas.val[i];
+                            if(meta->addr >= seg->vmaddr && meta->addr < seg->vmaddr + seg->vmsize)
                             {
-                                ERR("IOCFUnserialize: %s", CFStringGetCStringPtr(err, kCFStringEncodingUTF8));
-                                return -1;
+                                meta->bundle = __kernel__;
                             }
-                            CFArrayRef arr = CFDictionaryGetValue(plist, CFSTR("_PrelinkInfoDictionary"));
-                            CFIndex arrlen = CFArrayGetCount(arr);
-                            if(filt_bundle && !bundleList)
+                        }
+                    }
+                    else if(strcmp("__PRELINK_INFO", seg->segname) == 0)
+                    {
+                        if(seg->filesize == 0)
+                        {
+                            continue;
+                        }
+                        mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+                        for(size_t h = 0; h < seg->nsects; ++h)
+                        {
+                            if(strcmp("__info", secs[h].sectname) == 0)
                             {
-                                bundleList = malloc((arrlen + 1) * sizeof(*bundleList));
-                                if(!bundleList)
+                                const char *xml = (const char*)((uintptr_t)kernel + secs[h].offset);
+                                CFStringRef err = NULL;
+                                CFTypeRef plist = IOCFUnserialize(xml, NULL, 0, &err);
+                                if(!plist)
                                 {
-                                    ERRNO("malloc(bundleList)");
+                                    ERR("IOCFUnserialize: %s", CFStringGetCStringPtr(err, kCFStringEncodingUTF8));
                                     return -1;
                                 }
-                            }
-                            for(size_t i = 0; i < arrlen; ++i)
-                            {
-                                CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
-                                if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
+                                CFArrayRef arr = CFDictionaryGetValue(plist, CFSTR("_PrelinkInfoDictionary"));
+                                CFIndex arrlen = CFArrayGetCount(arr);
+                                if(filt_bundle && !bundleList)
                                 {
-                                    WRN("Array entry %lu is not a dict.", i);
-                                    continue;
-                                }
-                                CFStringRef cfstr = CFDictionaryGetValue(dict, CFSTR("CFBundleIdentifier"));
-                                if(!cfstr || CFGetTypeID(cfstr) != CFStringGetTypeID())
-                                {
-                                    WRN("CFBundleIdentifier missing or wrong type at entry %lu.", i);
-                                    if(debug)
+                                    bundleList = malloc((arrlen + 1) * sizeof(*bundleList));
+                                    if(!bundleList)
                                     {
-                                        CFShow(dict);
+                                        ERRNO("malloc(bundleList)");
+                                        return -1;
                                     }
-                                    continue;
                                 }
-                                const char *str = CFStringGetCStringPtr(cfstr, kCFStringEncodingUTF8);
-                                if(!str)
+                                for(size_t i = 0; i < arrlen; ++i)
                                 {
-                                    WRN("Failed to get CFString contents at entry %lu.", i);
-                                    if(debug)
+                                    CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
+                                    if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
                                     {
-                                        CFShow(cfstr);
+                                        WRN("Array entry %lu is not a dict.", i);
+                                        continue;
                                     }
-                                    continue;
-                                }
-                                if(bundleList)
-                                {
-                                    bundleList[bundleIdx++] = str;
-                                }
-                                CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
-                                if(!cfnum)
-                                {
-                                    DBG("Kext %s has no PrelinkExecutableLoadAddr, skipping...", str);
-                                    continue;
-                                }
-                                if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
-                                {
-                                    WRN("PrelinkExecutableLoadAddr missing or wrong type for kext %s", str);
-                                    if(debug)
+                                    CFStringRef cfstr = CFDictionaryGetValue(dict, CFSTR("CFBundleIdentifier"));
+                                    if(!cfstr || CFGetTypeID(cfstr) != CFStringGetTypeID())
                                     {
-                                        CFShow(cfnum);
-                                    }
-                                    continue;
-                                }
-                                kptr_t addr = 0;
-                                if(!CFNumberGetValue(cfnum, kCFNumberLongLongType, &addr))
-                                {
-                                    WRN("Failed to get CFNumber contents for kext %s", str);
-                                    continue;
-                                }
-                                DBG("Kext %s at " ADDR, str, addr);
-                                mach_hdr_t *hdr2 = addr2ptr(kernel, addr);
-                                if(!hdr2)
-                                {
-                                    WRN("Failed to translate kext header address " ADDR, addr);
-                                    continue;
-                                }
-                                FOREACH_CMD(hdr2, cmd2)
-                                {
-                                    if(cmd2->cmd == MACH_SEGMENT)
-                                    {
-                                        mach_seg_t *seg2 = (mach_seg_t*)cmd2;
-                                        if(strcmp("__DATA", seg2->segname) == 0)
+                                        WRN("CFBundleIdentifier missing or wrong type at entry %lu.", i);
+                                        if(debug)
                                         {
-                                            DBG("%s __DATA at " ADDR, str, seg2->vmaddr);
-                                            for(size_t j = 0; j < metas.idx; ++j)
+                                            CFShow(dict);
+                                        }
+                                        continue;
+                                    }
+                                    const char *str = CFStringGetCStringPtr(cfstr, kCFStringEncodingUTF8);
+                                    if(!str)
+                                    {
+                                        WRN("Failed to get CFString contents at entry %lu.", i);
+                                        if(debug)
+                                        {
+                                            CFShow(cfstr);
+                                        }
+                                        continue;
+                                    }
+                                    if(bundleList)
+                                    {
+                                        bundleList[bundleIdx++] = str;
+                                    }
+                                    CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
+                                    if(!cfnum)
+                                    {
+                                        DBG("Kext %s has no PrelinkExecutableLoadAddr, skipping...", str);
+                                        continue;
+                                    }
+                                    if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
+                                    {
+                                        WRN("PrelinkExecutableLoadAddr missing or wrong type for kext %s", str);
+                                        if(debug)
+                                        {
+                                            CFShow(cfnum);
+                                        }
+                                        continue;
+                                    }
+                                    kptr_t addr = 0;
+                                    if(!CFNumberGetValue(cfnum, kCFNumberLongLongType, &addr))
+                                    {
+                                        WRN("Failed to get CFNumber contents for kext %s", str);
+                                        continue;
+                                    }
+                                    DBG("Kext %s at " ADDR, str, addr);
+                                    mach_hdr_t *hdr2 = addr2ptr(kernel, addr);
+                                    if(!hdr2)
+                                    {
+                                        WRN("Failed to translate kext header address " ADDR, addr);
+                                        continue;
+                                    }
+                                    FOREACH_CMD(hdr2, cmd2)
+                                    {
+                                        if(cmd2->cmd == MACH_SEGMENT)
+                                        {
+                                            mach_seg_t *seg2 = (mach_seg_t*)cmd2;
+                                            if(strcmp("__DATA", seg2->segname) == 0)
                                             {
-                                                metaclass_t *meta = &metas.val[j];
-                                                if(meta->addr >= seg2->vmaddr && meta->addr < seg2->vmaddr + seg2->vmsize)
+                                                DBG("%s __DATA at " ADDR, str, seg2->vmaddr);
+                                                for(size_t j = 0; j < metas.idx; ++j)
                                                 {
-                                                    meta->bundle = str;
+                                                    metaclass_t *meta = &metas.val[j];
+                                                    if(meta->addr >= seg2->vmaddr && meta->addr < seg2->vmaddr + seg2->vmsize)
+                                                    {
+                                                        meta->bundle = str;
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+                                break;
                             }
-                            break;
                         }
                     }
                 }
@@ -1884,7 +2153,7 @@ int main(int argc, const char **argv)
             if(!bundleList)
             {
                 // NULL return value by malloc would've been caught earlier
-                ERR("Failed to find __PRELINK_INFO segment.");
+                ERR("Failed to find kext info.");
                 return -1;
             }
             bundleList[bundleIdx++] = __kernel__;

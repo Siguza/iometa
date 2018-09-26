@@ -195,6 +195,11 @@ static inline bool is_str_uoff(str_uoff_t *str)
     return str->op1 == 1 && str->op2 == 0xe4;
 }
 
+static inline uint32_t get_str_uoff(str_uoff_t *str)
+{
+    return str->imm << (2 + str->sf);
+}
+
 static inline bool is_stp_pre(stp_t *stp)
 {
     return stp->op == 0xa6;
