@@ -1,8 +1,9 @@
 #if 0
 How this works:
 
-1.  First we get the OSMetaClass constructor from the kernel symbol table.
-2.  Then we get all locations where that is hardcoded as a pointer, dubbed "refs".
+1.  First we find the OSMetaClass constructor, by finding the only function that
+    is called with each "IORegistryEntry", "IOService" and "IOUserClient" in x1.
+2.  Then we get all locations where that is hardcoded as a pointer (usually for imports), dubbed "refs".
 3.  For all refs, we then get all locations where that pointer is loaded and jumped to, in the form:
 
     adrp xN, ...
@@ -55,8 +56,6 @@ extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, C
 #include "a64.h"
 #include "cxx.h"
 
-static bool debug = false;
-
 #define LOG(str, args...)   do { fprintf(stderr, str "\n", ##args); } while(0)
 #define DBG(str, args...)   do { if(debug) LOG("\x1b[1;95m[DBG] " str "\x1b[0m", ##args); } while(0)
 #define WRN(str, args...)   LOG("\x1b[1;93m[WRN] " str "\x1b[0m", ##args)
@@ -67,7 +66,6 @@ static bool debug = false;
 #define STRINGIFY(x) STRINGIFX(x)
 
 #define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
-#define KUNTAG(x) (kptr_t)(((int64_t)(x) << 13) >> 13)
 
 #define ADDR                        "0x%016llx"
 #define MACH_MAGIC                  MH_MAGIC_64
@@ -180,8 +178,9 @@ typedef struct
 {
     kptr_t addr;
     vtab_entry_name_t name;
-    uint32_t structor : 1,
-             reserved : 31;
+    uint16_t pac;
+    uint16_t structor : 1,
+             reserved : 15;
 } vtab_entry_t;
 
 typedef struct vtab_override
@@ -191,6 +190,7 @@ typedef struct vtab_override
     kptr_t old;
     kptr_t new;
     uint32_t idx;
+    uint16_t pac;
 } vtab_override_t;
 
 typedef struct metaclass
@@ -211,6 +211,42 @@ typedef struct metaclass
              reserved       : 30;
 } metaclass_t;
 
+typedef union
+{
+    kptr_t ptr;
+    struct {
+        int64_t lo : 48,
+                hi : 16;
+    };
+    struct {
+        kptr_t off : 32,
+               pac : 16,
+               nxt : 15,
+               one :  1;
+    };
+} pacptr_t;
+
+static bool debug = false;
+static bool x1469 = false;
+static kptr_t kbase = 0;
+
+static kptr_t kuntag(kptr_t ptr, uint16_t *pac)
+{
+    pacptr_t pp;
+    pp.ptr = ptr;
+    if(x1469)
+    {
+        if(pp.one)
+        {
+            if(pac) *pac = pp.pac;
+            return kbase + pp.off;
+        }
+        pp.ptr = (kptr_t)pp.lo;
+    }
+    if(pac) *pac = 0;
+    return pp.ptr;
+}
+
 static kptr_t off2addr(void *kernel, size_t off)
 {
     FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
@@ -230,7 +266,6 @@ static kptr_t off2addr(void *kernel, size_t off)
 
 static void* addr2ptr(void *kernel, kptr_t addr)
 {
-    addr = KUNTAG(addr);
     FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
@@ -503,7 +538,7 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
     {
         for(vtab_override_t *ovr = meta->overrides.head; ovr != NULL; ovr = ovr->next)
         {
-            printf("    %3u func=" ADDR " overrides=" ADDR " %s::%s\n", ovr->idx, ovr->new, ovr->old, ovr->name.class, ovr->name.method);
+            printf("    %#6lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s\n", ovr->idx * sizeof(kptr_t), ovr->new, ovr->old, ovr->pac, ovr->name.class, ovr->name.method);
         }
     }
 }
@@ -775,7 +810,27 @@ int main(int argc, const char **argv)
     char *strtab = NULL;
     FOREACH_CMD(hdr, cmd)
     {
-        if(cmd->cmd == LC_SYMTAB)
+        if(cmd->cmd == MACH_SEGMENT)
+        {
+            mach_seg_t *seg = (mach_seg_t*)cmd;
+            if(seg->fileoff == 0 && seg->filesize > 0)
+            {
+                kbase = seg->vmaddr;
+            }
+            if(strcmp("__TEXT_EXEC", seg->segname) == 0)
+            {
+                mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+                for(size_t i = 0; i < seg->nsects; ++i)
+                {
+                    if(strcmp("initcode", secs[i].sectname) == 0)
+                    {
+                        x1469 = true;
+                        break;
+                    }
+                }
+            }
+        }
+        else if(cmd->cmd == LC_SYMTAB)
         {
             stab = (mach_stab_t*)cmd;
             symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
@@ -819,7 +874,6 @@ int main(int argc, const char **argv)
                     }
                 }
             }
-            break;
         }
     }
     if(OSMetaClassConstructor == 0)
@@ -987,7 +1041,7 @@ int main(int argc, const char **argv)
     {
         for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
         {
-            if(KUNTAG(*mem) == OSMetaClassConstructor)
+            if(kuntag(*mem, NULL) == OSMetaClassConstructor)
             {
                 kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                 DBG("ref: " ADDR, ref);
@@ -1116,6 +1170,7 @@ int main(int argc, const char **argv)
                                 meta->reserved = 0;
                                 if(!meta->name)
                                 {
+                                    DBG("meta->name: " ADDR " (untagged: " ADDR ")", state.x[1], kuntag(state.x[1], NULL));
                                     ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
                                     return -1;
                                 }
@@ -1206,7 +1261,7 @@ int main(int argc, const char **argv)
         }
         for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
         {
-            if(KUNTAG(ovtab[i]) == OSObjectGetMetaClass)
+            if(kuntag(ovtab[i], NULL) == OSObjectGetMetaClass)
             {
                 VtabGetMetaClassOff = i;
                 DBG("VtabGetMetaClassOff: 0x%lx", VtabGetMetaClassOff);
@@ -1277,7 +1332,7 @@ int main(int argc, const char **argv)
                                     candidates.idx = 0;
                                     STEP_MEM(kptr_t, mem2, (kptr_t*)kernel + VtabGetMetaClassOff + 2, kernelsize - (VtabGetMetaClassOff + 2) * sizeof(kptr_t), 1)
                                     {
-                                        if(KUNTAG(*mem2) == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
+                                        if(kuntag(*mem2, NULL) == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
                                         {
                                             kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassOff) - (uintptr_t)kernel);
                                             if(meta->vtab == 0)
@@ -1479,14 +1534,15 @@ int main(int argc, const char **argv)
                     (is_in_reloc = (KOFF(mvtab[idx]) >= reloc_min && KOFF(mvtab[idx]) < reloc_max && relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)] != NULL)) || mvtab[idx] != 0;
                     ++idx)
                 {
-                    if(!is_in_reloc && (!pvtab || KUNTAG(mvtab[idx]) != KUNTAG(pvtab[idx])))
+                    if(!is_in_reloc && (!pvtab || kuntag(mvtab[idx], NULL) != kuntag(pvtab[idx], NULL)))
                     {
                         if(pvtab && pvtab[idx] == 0)
                         {
                             // Signal that we've reached end of the parent vtable
                             pvtab = NULL;
                         }
-                        kptr_t func = KUNTAG(mvtab[idx]);
+                        uint16_t pac;
+                        kptr_t func = kuntag(mvtab[idx], &pac);
                         vtab_entry_t *entry = NULL;
                         // stab, symtab and strtab are guaranteed to be non-NULL here or we would've exited long ago
                         char *cxx_sym = NULL;
@@ -1560,6 +1616,7 @@ int main(int argc, const char **argv)
                                     entry->addr = func;
                                     entry->name.class = cls;
                                     entry->name.method = method;
+                                    entry->pac = pac;
                                     entry->structor = !!structor;
                                 }
                             }
@@ -1570,7 +1627,7 @@ int main(int argc, const char **argv)
                         }
                         if(!entry && pvtab)
                         {
-                            kptr_t pfunc = KUNTAG(pvtab[idx]);
+                            kptr_t pfunc = kuntag(pvtab[idx], NULL);
                             for(size_t n = 0; n < fncache.idx; ++n)
                             {
                                 if(fncache.val[n].addr == pfunc)
@@ -1604,6 +1661,7 @@ int main(int argc, const char **argv)
                                     entry->addr = func;
                                     entry->name.class = meta->name;
                                     entry->name.method = method;
+                                    entry->pac = pac;
                                     entry->structor = fncache.val[n].structor;
                                     break;
                                 }
@@ -1622,6 +1680,7 @@ int main(int argc, const char **argv)
                             entry->addr = func;
                             entry->name.class = meta->name;
                             entry->name.method = method;
+                            entry->pac = pac;
                             entry->structor = 0;
                         }
                         vtab_override_t *ovrd = malloc(sizeof(vtab_override_t));
@@ -1633,9 +1692,10 @@ int main(int argc, const char **argv)
                         ovrd->next = NULL;
                         ovrd->name.class = entry->name.class;
                         ovrd->name.method = entry->name.method;
-                        ovrd->old = pvtab ? KUNTAG(pvtab[idx]) : 0;
+                        ovrd->old = pvtab ? kuntag(pvtab[idx], NULL) : 0;
                         ovrd->new = entry->addr;
                         ovrd->idx = idx;
+                        ovrd->pac = entry->pac;
                         *(meta->overrides.nextP) = ovrd;
                         meta->overrides.nextP = &ovrd->next;
                     }
