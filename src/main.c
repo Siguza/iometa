@@ -60,11 +60,18 @@ extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, C
 #include "cxx.h"
 
 static bool debug = false;
+static const char *colorGray   = "\x1b[90m",
+                  *colorRed    = "\x1b[1;91m",
+                  *colorYellow = "\x1b[1;93m",
+                  *colorBlue   = "\x1b[1;94m",
+                  *colorPink   = "\x1b[1;95m",
+                  *colorCyan   = "\x1b[1;96m",
+                  *colorReset  = "\x1b[0m";
 
 #define LOG(str, args...)   do { fprintf(stderr, str "\n", ##args); } while(0)
-#define DBG(str, args...)   do { if(debug) LOG("\x1b[1;95m[DBG] " str "\x1b[0m", ##args); } while(0)
-#define WRN(str, args...)   LOG("\x1b[1;93m[WRN] " str "\x1b[0m", ##args)
-#define ERR(str, args...)   LOG("\x1b[1;91m[ERR] " str "\x1b[0m", ##args)
+#define DBG(str, args...)   do { if(debug) LOG("%s[DBG] " str "%s", colorPink, ##args, colorReset); } while(0)
+#define WRN(str, args...)   LOG("%s[WRN] " str "%s", colorYellow, ##args, colorReset)
+#define ERR(str, args...)   LOG("%s[ERR] " str "%s", colorRed, ##args, colorReset)
 #define ERRNO(str, args...) ERR(str ": %s", ##args, strerror(errno))
 
 #define STRINGIFX(x) #x
@@ -184,8 +191,9 @@ typedef struct
     kptr_t addr;
     vtab_entry_name_t name;
     uint16_t pac;
-    uint16_t structor : 1,
-             reserved : 15;
+    uint16_t structor      :  1,
+             authoritative :  1,
+             reserved      : 13;
 } vtab_entry_t;
 
 typedef struct vtab_override
@@ -480,7 +488,7 @@ static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32
     return true;
 }
 
-int compare_names(const void *a, const void *b)
+static int compare_names(const void *a, const void *b)
 {
     const metaclass_t *x = *(const metaclass_t**)a,
                       *y = *(const metaclass_t**)b;
@@ -496,7 +504,7 @@ int compare_names(const void *a, const void *b)
     return r;
 }
 
-int compare_bundles(const void *a, const void *b)
+static int compare_bundles(const void *a, const void *b)
 {
     const metaclass_t *x = *(const metaclass_t**)a,
                       *y = *(const metaclass_t**)b;
@@ -512,13 +520,13 @@ int compare_bundles(const void *a, const void *b)
     return r != 0 ? r : compare_names(a, b);
 }
 
-static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bool opt_size, bool opt_vtab, bool opt_overrides)
+static void printMetaClass(metaclass_t *meta, int namelen, bool opt_bundle, bool opt_meta, bool opt_size, bool opt_vtab, bool opt_overrides, bool opt_inherit)
 {
     if(opt_vtab)
     {
         if(meta->vtab == -1)
         {
-            printf("vtab=?????????????????? ");
+            printf("%svtab=??????????????????%s ", colorRed, colorReset);
         }
         else
         {
@@ -533,17 +541,36 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
     {
         printf("meta=" ADDR " parent=" ADDR " ", meta->addr, meta->parent);
     }
-    printf("%s", meta->name);
+    printf("%s%-*s%s", colorCyan, namelen, meta->name, colorReset);
     if(opt_bundle)
     {
-        printf(" (%s)", meta->bundle ? meta->bundle : "???");
+        if(meta->bundle)
+        {
+            printf(" (%s%s%s)", colorBlue, meta->bundle, colorReset);
+        }
+        else
+        {
+            printf(" (%s???%s)", colorRed, colorReset);
+        }
     }
     printf("\n");
     if(opt_overrides)
     {
         for(vtab_override_t *ovr = meta->overrides.head; ovr != NULL; ovr = ovr->next)
         {
-            printf("    %#6lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s\n", ovr->idx * sizeof(kptr_t), ovr->new, ovr->old, ovr->pac, ovr->name.class, ovr->name.method); // TODO: %#6lx will break if we ever show index 0
+            const char *color = "";
+            if(ovr->new == ovr->old)
+            {
+                if(!opt_inherit)
+                {
+                    continue;
+                }
+                color = colorGray;
+            }
+            size_t hex = ovr->idx * sizeof(kptr_t);
+            int hexlen = 5;
+            for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
+            printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ovr->new, ovr->old, ovr->pac, ovr->name.class, ovr->name.method, colorReset); // TODO: %#6lx will break if we ever show index 0
         }
     }
 }
@@ -551,23 +578,30 @@ static void printMetaClass(metaclass_t *meta, bool opt_bundle, bool opt_meta, bo
 static void print_help(const char *self)
 {
     fprintf(stderr, "Usage:\n"
-                    "    %s [-abBCdeGmoOpsSv] [ClassName] [OverrideName] [BundleName] kernel\n"
+                    "    %s [-aAbBCdeGinmoOpsSv] [ClassName] [OverrideName] [BundleName] kernel\n"
                     "\n"
-                    "Options:\n"
+                    "Print options:\n"
                     "    -a  Synonym for -bmsv\n"
+                    "    -A  Synonym for -bimosv\n"
                     "    -b  Print bundle identifier\n"
-                    "    -B  Filter by bundle identifier\n"
-                    "    -C  Filter by class name\n"
-                    "    -d  Debug output\n"
-                    "    -e  Filter extending ClassName (implies -C)\n"
-                    "    -G  Sort (group) by bundle identifier\n"
+                    "    -i  Print inherited virtual methods (implies -o)\n"
                     "    -m  Print MetaClass addresses\n"
                     "    -o  Print overridden/new virtual methods\n"
+                    "    -s  Print object sizes\n"
+                    "    -v  Print object vtabs\n"
+                    "\n"
+                    "Filter options:\n"
+                    "    -B  Filter by bundle identifier\n"
+                    "    -C  Filter by class name\n"
+                    "    -e  Filter extending ClassName (implies -C)\n"
                     "    -O  Filter by name of overridden method\n"
                     "    -p  Filter parents of ClassName (implies -C)\n"
-                    "    -s  Print object sizes\n"
+                    "\n"
+                    "Other options:\n"
+                    "    -d  Debug output\n"
+                    "    -G  Sort (group) by bundle identifier\n"
+                    "    -n  Disable color output\n"
                     "    -S  Sort by class name\n"
-                    "    -v  Print object vtabs\n"
                     , self);
 }
 
@@ -579,6 +613,7 @@ int main(int argc, const char **argv)
          opt_bsort     = false,
          opt_csort     = false,
          opt_extend    = false,
+         opt_inherit   = false,
          opt_meta      = false,
          opt_overrides = false,
          opt_ofilt     = false,
@@ -613,6 +648,16 @@ int main(int argc, const char **argv)
                     opt_vtab   = true;
                     break;
                 }
+                case 'A':
+                {
+                    opt_bundle    = true;
+                    opt_inherit   = true;
+                    opt_meta      = true;
+                    opt_overrides = true;
+                    opt_size      = true;
+                    opt_vtab      = true;
+                    break;
+                }
                 case 'b':
                 {
                     opt_bundle = true;
@@ -639,9 +684,26 @@ int main(int argc, const char **argv)
                     opt_bsort = true;
                     break;
                 }
+                case 'i':
+                {
+                    opt_inherit   = true;
+                    opt_overrides = true;
+                    break;
+                }
                 case 'm':
                 {
                     opt_meta = true;
+                    break;
+                }
+                case 'n':
+                {
+                    colorGray   = "";
+                    colorRed    = "";
+                    colorYellow = "";
+                    colorBlue   = "";
+                    colorPink   = "";
+                    colorCyan   = "";
+                    colorReset  = "";
                     break;
                 }
                 case 'o':
@@ -1656,11 +1718,13 @@ int main(int argc, const char **argv)
                 }
 #define KOFF(x) ((uintptr_t)&(x) - (uintptr_t)kernel)
                 bool is_in_reloc = false;
-                for(size_t idx = 1; // Skip delete function or smth
+                for(size_t idx = 0;
                     (is_in_reloc = (KOFF(mvtab[idx]) >= reloc_min && KOFF(mvtab[idx]) < reloc_max && relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)] != NULL)) || mvtab[idx] != 0;
                     ++idx)
                 {
+#if 0
                     if(!is_in_reloc && (!pvtab || kuntag(kbase, x1469, mvtab[idx], NULL) != kuntag(kbase, x1469, pvtab[idx], NULL)))
+#endif
                     {
                         if(pvtab && pvtab[idx] == 0)
                         {
@@ -1672,13 +1736,11 @@ int main(int argc, const char **argv)
                         vtab_entry_t *entry = NULL;
                         // stab, symtab and strtab are guaranteed to be non-NULL here or we would've exited long ago
                         char *cxx_sym = NULL;
-#if 0
                         if(is_in_reloc)
                         {
                             cxx_sym = relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)];
                         }
                         else
-#endif
                         {
                             for(size_t n = 0; n < stab->nsyms; ++n)
                             {
@@ -1696,7 +1758,7 @@ int main(int argc, const char **argv)
                         if(cxx_sym)
                         {
                             DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
-                            if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0)
+                            if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0) // XXX: 1469
                             {
                                 func = 0;
                             }
@@ -1707,43 +1769,24 @@ int main(int argc, const char **argv)
                                 bool structor = false;
                                 if(!cxx_demangle(cxx_sym, &class, &method, &structor))
                                 {
-#if 0
                                     if(is_in_reloc)
                                     {
                                         WRN("Failed to demangle symbol: %s (from reloc)", cxx_sym);
                                     }
                                     else
-#endif
                                     {
                                         WRN("Failed to demangle symbol: %s (from symtab, addr " ADDR ")", cxx_sym, func);
                                     }
                                 }
                                 else
                                 {
-                                    const char *cls = NULL;
-#if 0
-                                    if(is_in_reloc)
-                                    {
-                                        free(class);
-                                        cls = meta->name;
-                                    }
-                                    else
-#endif
-                                    {
-#if 0
-                                        if(strcmp(class, meta->name) != 0 && (strcmp(class, "OSMetaClassBase")) != 0)
-                                        {
-                                            WRN("Symbol name doesn't match class name in %s: %s::%s vs %s", cxx_sym, class, method, meta->name);
-                                        }
-#endif
-                                        cls = class;
-                                    }
                                     ARRNEXT(fncache, entry);
                                     entry->addr = func;
-                                    entry->name.class = cls;
+                                    entry->name.class = class;
                                     entry->name.method = method;
                                     entry->pac = pac;
                                     entry->structor = !!structor;
+                                    entry->authoritative = 1;
                                 }
                             }
                         }
@@ -1758,37 +1801,41 @@ int main(int argc, const char **argv)
                             {
                                 if(fncache.val[n].addr == pfunc)
                                 {
-                                    const char *method = fncache.val[n].name.method;
-                                    if(fncache.val[n].structor)
+                                    if(fncache.val[n].authoritative)
                                     {
-                                        const char *class = fncache.val[n].name.class;
-                                        bool dest = method[0] == '~';
-                                        if(dest)
+                                        const char *method = fncache.val[n].name.method;
+                                        if(fncache.val[n].structor)
                                         {
-                                            ++method;
+                                            const char *class = fncache.val[n].name.class;
+                                            bool dest = method[0] == '~';
+                                            if(dest)
+                                            {
+                                                ++method;
+                                            }
+                                            size_t clslen = strlen(class);
+                                            if(strncmp(method, class, clslen) != 0)
+                                            {
+                                                WRN("Bad %sstructor: %s::%s", dest ? "de" : "con", class, method);
+                                                continue;
+                                            }
+                                            method += clslen;
+                                            char *m = NULL;
+                                            asprintf(&m, "%s%s%s", dest ? "~" : "", meta->name, method);
+                                            if(!m)
+                                            {
+                                                ERRNO("asprintf(structor)");
+                                                return -1;
+                                            }
+                                            method = m;
                                         }
-                                        size_t clslen = strlen(class);
-                                        if(strncmp(method, class, clslen) != 0)
-                                        {
-                                            WRN("Bad %sstructor: %s::%s", dest ? "de" : "con", class, method);
-                                            continue;
-                                        }
-                                        method += clslen;
-                                        char *m = NULL;
-                                        asprintf(&m, "%s%s%s", dest ? "~" : "", meta->name, method);
-                                        if(!m)
-                                        {
-                                            ERRNO("asprintf(structor)");
-                                            return -1;
-                                        }
-                                        method = m;
+                                        ARRNEXT(fncache, entry);
+                                        entry->addr = func;
+                                        entry->name.class = meta->name;
+                                        entry->name.method = method;
+                                        entry->pac = pac;
+                                        entry->structor = fncache.val[n].structor;
+                                        entry->authoritative = fncache.val[n].authoritative;
                                     }
-                                    ARRNEXT(fncache, entry);
-                                    entry->addr = func;
-                                    entry->name.class = meta->name;
-                                    entry->name.method = method;
-                                    entry->pac = pac;
-                                    entry->structor = fncache.val[n].structor;
                                     break;
                                 }
                             }
@@ -1808,6 +1855,7 @@ int main(int argc, const char **argv)
                             entry->name.method = method;
                             entry->pac = pac;
                             entry->structor = 0;
+                            entry->authoritative = 0;
                         }
                         vtab_override_t *ovrd = malloc(sizeof(vtab_override_t));
                         if(!ovrd)
@@ -2245,7 +2293,7 @@ int main(int argc, const char **argv)
     }
     if(target && !(opt_parent || opt_extend))
     {
-        printMetaClass(target, opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides);
+        printMetaClass(target, 0, opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides, opt_inherit);
     }
     else
     {
@@ -2320,9 +2368,21 @@ int main(int argc, const char **argv)
         {
             qsort(list, lsize, sizeof(*list), opt_bsort ? &compare_bundles : &compare_names);
         }
+        size_t namelen = 0;
+        if(opt_bundle && !opt_overrides) // Spaced out looks weird
+        {
+            for(size_t i = 0; i < lsize; ++i)
+            {
+                size_t nl = strlen(list[i]->name);
+                if(nl > namelen)
+                {
+                    namelen = nl;
+                }
+            }
+        }
         for(size_t i = 0; i < lsize; ++i)
         {
-            printMetaClass(list[i], opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides);
+            printMetaClass(list[i], (int)namelen, opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides, opt_inherit);
         }
     }
 
