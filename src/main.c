@@ -240,6 +240,24 @@ typedef union
     };
 } pacptr_t;
 
+typedef struct
+{
+    uint32_t bundle    :  1,
+             bfilt     :  1,
+             cfilt     :  1,
+             bsort     :  1,
+             csort     :  1,
+             extend    :  1,
+             inherit   :  1,
+             meta      :  1,
+             overrides :  1,
+             ofilt     :  1,
+             parent    :  1,
+             size      :  1,
+             vtab      :  1,
+             _reserved : 19;
+} opt_t;
+
 static kptr_t kuntag(kptr_t kbase, bool x1469, kptr_t ptr, uint16_t *pac)
 {
     pacptr_t pp;
@@ -330,7 +348,10 @@ static bool is_linear_inst(void *ptr)
            is_orr(ptr) ||
            is_str_uoff(ptr) ||
            is_stp_uoff(ptr) ||
-           //is_stp_fp_uoff(ptr) ||
+           //is_stp_fp_uoff(ptr) ||||
+           is_pac(ptr) ||
+           is_pacsys(ptr) ||
+           is_pacga(ptr) ||
            is_nop(ptr);
 }
 
@@ -358,7 +379,7 @@ static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32
     {
         void *ptr = from;
         kptr_t addr = off2addr(kernel, (uintptr_t)from - (uintptr_t)kernel);
-        if(is_nop(ptr) || is_str_uoff(ptr) || is_stp_uoff(ptr) /*|| is_stp_fp_uoff(ptr)*/)
+        if(is_nop(ptr) || is_str_uoff(ptr) || is_stp_uoff(ptr) /*|| is_stp_fp_uoff(ptr)*/ || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr))
         {
             // Ignore/no change
         }
@@ -520,9 +541,9 @@ static int compare_bundles(const void *a, const void *b)
     return r != 0 ? r : compare_names(a, b);
 }
 
-static void printMetaClass(metaclass_t *meta, int namelen, bool opt_bundle, bool opt_meta, bool opt_size, bool opt_vtab, bool opt_overrides, bool opt_inherit)
+static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
 {
-    if(opt_vtab)
+    if(opt.vtab)
     {
         if(meta->vtab == -1)
         {
@@ -533,16 +554,16 @@ static void printMetaClass(metaclass_t *meta, int namelen, bool opt_bundle, bool
             printf("vtab=" ADDR " ", meta->vtab);
         }
     }
-    if(opt_size)
+    if(opt.size)
     {
         printf("size=0x%08x ", meta->objsize);
     }
-    if(opt_meta)
+    if(opt.meta)
     {
         printf("meta=" ADDR " parent=" ADDR " ", meta->addr, meta->parent);
     }
     printf("%s%-*s%s", colorCyan, namelen, meta->name, colorReset);
-    if(opt_bundle)
+    if(opt.bundle)
     {
         if(meta->bundle)
         {
@@ -554,14 +575,14 @@ static void printMetaClass(metaclass_t *meta, int namelen, bool opt_bundle, bool
         }
     }
     printf("\n");
-    if(opt_overrides)
+    if(opt.overrides)
     {
         for(vtab_override_t *ovr = meta->overrides.head; ovr != NULL; ovr = ovr->next)
         {
             const char *color = "";
             if(ovr->new == ovr->old)
             {
-                if(!opt_inherit)
+                if(!opt.inherit)
                 {
                     continue;
                 }
@@ -570,7 +591,7 @@ static void printMetaClass(metaclass_t *meta, int namelen, bool opt_bundle, bool
             size_t hex = ovr->idx * sizeof(kptr_t);
             int hexlen = 5;
             for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
-            printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ovr->new, ovr->old, ovr->pac, ovr->name.class, ovr->name.method, colorReset); // TODO: %#6lx will break if we ever show index 0
+            printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ovr->new, ovr->old, ovr->pac, ovr->name.class, ovr->name.method, colorReset);
         }
     }
 }
@@ -579,6 +600,12 @@ static void print_help(const char *self)
 {
     fprintf(stderr, "Usage:\n"
                     "    %s [-aAbBCdeGinmoOpsSv] [ClassName] [OverrideName] [BundleName] kernel\n"
+                    "\n"
+                    "Description:\n"
+                    "    Extract and print C++ class information from an arm64 iOS kernel.\n"
+                    "    Flags (those with the -) may be given in any order, the other arguments\n"
+                    "    must be given in the order shown above. Class and bundle name filters\n"
+                    "    need not be the full names, substrings will match too.\n"
                     "\n"
                     "Print options:\n"
                     "    -a  Synonym for -bmsv\n"
@@ -591,7 +618,7 @@ static void print_help(const char *self)
                     "    -v  Print object vtabs\n"
                     "\n"
                     "Filter options:\n"
-                    "    -B  Filter by bundle identifier\n"
+                    "    -B  Filter by bundle identifier (kext)\n"
                     "    -C  Filter by class name\n"
                     "    -e  Filter extending ClassName (implies -C)\n"
                     "    -O  Filter by name of overridden method\n"
@@ -607,19 +634,23 @@ static void print_help(const char *self)
 
 int main(int argc, const char **argv)
 {
-    bool opt_bundle    = false,
-         opt_bfilt     = false,
-         opt_cfilt     = false,
-         opt_bsort     = false,
-         opt_csort     = false,
-         opt_extend    = false,
-         opt_inherit   = false,
-         opt_meta      = false,
-         opt_overrides = false,
-         opt_ofilt     = false,
-         opt_parent    = false,
-         opt_size      = false,
-         opt_vtab      = false;
+    opt_t opt =
+    {
+        .bundle    = 0,
+        .bfilt     = 0,
+        .cfilt     = 0,
+        .bsort     = 0,
+        .csort     = 0,
+        .extend    = 0,
+        .inherit   = 0,
+        .meta      = 0,
+        .overrides = 0,
+        .ofilt     = 0,
+        .parent    = 0,
+        .size      = 0,
+        .vtab      = 0,
+        ._reserved = 0,
+    };
     const char *filt_class    = NULL,
                *filt_bundle   = NULL,
                *filt_override = NULL;
@@ -642,57 +673,57 @@ int main(int argc, const char **argv)
                 }
                 case 'a':
                 {
-                    opt_bundle = true;
-                    opt_meta   = true;
-                    opt_size   = true;
-                    opt_vtab   = true;
+                    opt.bundle = 1;
+                    opt.meta   = 1;
+                    opt.size   = 1;
+                    opt.vtab   = 1;
                     break;
                 }
                 case 'A':
                 {
-                    opt_bundle    = true;
-                    opt_inherit   = true;
-                    opt_meta      = true;
-                    opt_overrides = true;
-                    opt_size      = true;
-                    opt_vtab      = true;
+                    opt.bundle    = 1;
+                    opt.inherit   = 1;
+                    opt.meta      = 1;
+                    opt.overrides = 1;
+                    opt.size      = 1;
+                    opt.vtab      = 1;
                     break;
                 }
                 case 'b':
                 {
-                    opt_bundle = true;
+                    opt.bundle = 1;
                     break;
                 }
                 case 'B':
                 {
-                    opt_bfilt = true;
+                    opt.bfilt = 1;
                     break;
                 }
                 case 'C':
                 {
-                    opt_cfilt = true;
+                    opt.cfilt = 1;
                     break;
                 }
                 case 'e':
                 {
-                    opt_extend = true;
-                    opt_cfilt  = true;
+                    opt.extend = 1;
+                    opt.cfilt  = 1;
                     break;
                 }
                 case 'G':
                 {
-                    opt_bsort = true;
+                    opt.bsort = 1;
                     break;
                 }
                 case 'i':
                 {
-                    opt_inherit   = true;
-                    opt_overrides = true;
+                    opt.inherit   = 1;
+                    opt.overrides = 1;
                     break;
                 }
                 case 'm':
                 {
-                    opt_meta = true;
+                    opt.meta = 1;
                     break;
                 }
                 case 'n':
@@ -708,33 +739,33 @@ int main(int argc, const char **argv)
                 }
                 case 'o':
                 {
-                    opt_overrides = true;
+                    opt.overrides = 1;
                     break;
                 }
                 case 'O':
                 {
-                    opt_ofilt = true;
+                    opt.ofilt = 1;
                     break;
                 }
                 case 'p':
                 {
-                    opt_parent = true;
-                    opt_cfilt  = true;
+                    opt.parent = 1;
+                    opt.cfilt  = 1;
                     break;
                 }
                 case 's':
                 {
-                    opt_size = true;
+                    opt.size = 1;
                     break;
                 }
                 case 'S':
                 {
-                    opt_csort = true;
+                    opt.csort = 1;
                     break;
                 }
                 case 'v':
                 {
-                    opt_vtab = true;
+                    opt.vtab = 1;
                     break;
                 }
                 default:
@@ -748,7 +779,7 @@ int main(int argc, const char **argv)
         }
     }
 
-    int wantargs = 1 + (opt_bfilt ? 1 : 0) + (opt_cfilt ? 1 : 0) + (opt_ofilt ? 1 : 0);
+    int wantargs = 1 + (opt.bfilt ? 1 : 0) + (opt.cfilt ? 1 : 0) + (opt.ofilt ? 1 : 0);
     if(argc - aoff != wantargs)
     {
         if(argc > 1)
@@ -772,27 +803,27 @@ int main(int argc, const char **argv)
         return -1;
     }
 
-    if(opt_extend && opt_parent)
+    if(opt.extend && opt.parent)
     {
         ERR("Only one of -e and -p may be given.");
         return -1;
     }
 
-    if(opt_bsort && opt_csort)
+    if(opt.bsort && opt.csort)
     {
         ERR("Only one of -G and -S may be given.");
         return -1;
     }
 
-    if(opt_cfilt)
+    if(opt.cfilt)
     {
         filt_class = argv[aoff++];
     }
-    if(opt_bfilt)
+    if(opt.bfilt)
     {
         filt_bundle = argv[aoff++];
     }
-    if(opt_ofilt)
+    if(opt.ofilt)
     {
         filt_override = argv[aoff++];
     }
@@ -1280,7 +1311,7 @@ int main(int argc, const char **argv)
         }
     }
 
-    if(opt_vtab || opt_overrides || opt_ofilt)
+    if(opt.vtab || opt.overrides || opt.ofilt)
     {
         metaclass_t *metaclassHandle = NULL;
         kptr_t OSMetaClassMetaClass = 0;
@@ -1377,6 +1408,7 @@ int main(int argc, const char **argv)
                                 }
                                 if(!is_linear_inst(mem))
                                 {
+                                    DBG("Bailing out due to non-linear instr at " ADDR, OSMetaClassConstructor + ((uintptr_t)mem - (uintptr_t)start));
                                     break;
                                 }
                             }
@@ -1603,7 +1635,7 @@ int main(int argc, const char **argv)
             }
         }
 
-        if(opt_overrides || opt_ofilt)
+        if(opt.overrides || opt.ofilt)
         {
             char **relocs = NULL;
             size_t reloc_min = ~0, reloc_max = 0;
@@ -1892,7 +1924,7 @@ int main(int argc, const char **argv)
     const char *filter = NULL;
     const char *__kernel__ = "__kernel__"; // Single ref for pointer comparisons
 
-    if(opt_bundle || opt_bfilt)
+    if(opt.bundle || opt.bfilt)
     {
         bool haveBundles = false;
         const char **bundleList = NULL;
@@ -2291,9 +2323,9 @@ int main(int argc, const char **argv)
             }
         }
     }
-    if(target && !(opt_parent || opt_extend))
+    if(target && !(opt.parent || opt.extend))
     {
-        printMetaClass(target, 0, opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides, opt_inherit);
+        printMetaClass(target, 0, opt);
     }
     else
     {
@@ -2304,7 +2336,7 @@ int main(int argc, const char **argv)
             return -1;
         }
         size_t lsize = 0;
-        if(opt_parent)
+        if(opt.parent)
         {
             for(metaclass_t *meta = target; meta; )
             {
@@ -2312,7 +2344,7 @@ int main(int argc, const char **argv)
                 meta = meta->parentP;
             }
         }
-        else if(opt_extend)
+        else if(opt.extend)
         {
             list[0] = target;
             lsize = 1;
@@ -2364,12 +2396,12 @@ int main(int argc, const char **argv)
             }
             lsize = nsize;
         }
-        if(opt_bsort || opt_csort)
+        if(opt.bsort || opt.csort)
         {
-            qsort(list, lsize, sizeof(*list), opt_bsort ? &compare_bundles : &compare_names);
+            qsort(list, lsize, sizeof(*list), opt.bsort ? &compare_bundles : &compare_names);
         }
         size_t namelen = 0;
-        if(opt_bundle && !opt_overrides) // Spaced out looks weird
+        if(opt.bundle && !opt.overrides) // Spaced out looks weird
         {
             for(size_t i = 0; i < lsize; ++i)
             {
@@ -2382,7 +2414,7 @@ int main(int argc, const char **argv)
         }
         for(size_t i = 0; i < lsize; ++i)
         {
-            printMetaClass(list[i], (int)namelen, opt_bundle, opt_meta, opt_size, opt_vtab, opt_overrides, opt_inherit);
+            printMetaClass(list[i], (int)namelen, opt);
         }
     }
 

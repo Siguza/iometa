@@ -130,6 +130,36 @@ typedef struct
              sf     : 1;
 } orr_t;
 
+typedef struct
+{
+    uint32_t Rd     : 5,
+             Rn     : 5,
+             key    : 1,
+             data   : 1,
+             op2    : 1,
+             Z      : 1,
+             op1    : 18;
+} pac_t;
+
+typedef struct
+{
+    uint32_t op3    : 5,
+             x      : 1,
+             key    : 1,
+             op2    : 2,
+             C      : 1,
+             op1    : 22;
+} pacsys_t;
+
+typedef struct
+{
+    uint32_t Rd     : 5,
+             Rn     : 5,
+             op2    : 6,
+             Rm     : 5,
+             op1    : 11;
+} pacga_t;
+
 typedef uint32_t nop_t;
 typedef uint32_t ret_t;
 #pragma pack()
@@ -265,6 +295,21 @@ static inline int64_t get_movn_imm(movn_t *movn)
     return ~get_movzk_imm(movn);
 }
 
+static inline bool is_pac(pac_t *pac)
+{
+    return pac->op1 == 0x36b04 && pac->op2 == 0;
+}
+
+static inline bool is_pacsys(pacsys_t *pacsys)
+{
+    return pacsys->op1 == 0x3540c8 && pacsys->op2 == 0x2 && pacsys->op3 == 0x1f && (pacsys->x == 0 || pacsys->C == 1);
+}
+
+static inline bool is_pacga(pacga_t *pacga)
+{
+    return pacga->op1 == 0x4d6 && pacga->op2 == 0xc;
+}
+
 static inline bool is_nop(nop_t *nop)
 {
     return *nop == 0xd503201f;
@@ -272,7 +317,10 @@ static inline bool is_nop(nop_t *nop)
 
 static inline bool is_ret(ret_t *ret)
 {
-    return *ret == 0xd65f03c0;
+    ret_t r = *ret;
+    return r == 0xd65f03c0 || // ret
+           r == 0xd65f0bff || // retaa
+           r == 0xd65f0fff;   // retab
 }
 
 static inline bool is_orr(orr_t *orr)
