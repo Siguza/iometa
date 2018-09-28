@@ -1020,99 +1020,110 @@ int main(int argc, const char **argv)
         {
             ++constrIdx;
             constrCandCurr.idx = 0;
-            STEP_MEM(uint32_t, mem, kernel, kernelsize, 2)
+            FOREACH_CMD(hdr, cmd)
             {
-                adr_t     *adr = (adr_t*    )(mem + 0);
-                add_imm_t *add = (add_imm_t*)(mem + 1);
-                if
-                (
-                    (is_adr(adr)  && is_nop(mem + 1) && adr->Rd == 1) ||
-                    (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 1)
-                )
+                if(cmd->cmd == MACH_SEGMENT)
                 {
-                    kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
-                           ref    = refloc;
-                    if(is_adrp(adr))
+                    mach_seg_t *seg = (mach_seg_t*)cmd;
+                    if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
                     {
-                        ref &= ~0xfff;
-                        ref += get_add_sub_imm(add);
-                    }
-                    ref += get_adr_off(adr);
-                    for(size_t i = 0; i < strrefs[j].idx; ++i)
-                    {
-                        if(ref == strrefs[j].val[i])
+                        uintptr_t start = (uintptr_t)kernel + seg->fileoff;
+                        STEP_MEM(uint32_t, mem, start, seg->filesize, 2)
                         {
-                            DBG("Found ref to \"%s\" at " ADDR, strs[j], refloc);
-                            goto look_for_bl;
-                        }
-                    }
-                    continue;
-                    look_for_bl:;
-                    STEP_MEM(uint32_t, m, mem + 2, kernelsize - ((uintptr_t)(mem + 2) - (uintptr_t)kernel), 1)
-                    {
-                        kptr_t bladdr = off2addr(kernel, (uintptr_t)m - (uintptr_t)kernel),
-                               blref  = bladdr;
-                        bl_t *bl = (bl_t*)m;
-                        if(is_bl(bl))
-                        {
-                            a64_state_t state;
-                            if(!a64_emulate(kernel, &state, mem, m, true))
+                            adr_t     *adr = (adr_t*    )(mem + 0);
+                            add_imm_t *add = (add_imm_t*)(mem + 1);
+                            if
+                            (
+                                (is_adr(adr)  && is_nop(mem + 1) && adr->Rd == 1) ||
+                                (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 1)
+                            )
                             {
-                                // a64_emulate should've printed error already
-                                goto skip;
-                            }
-                            if(!(state.valid & (1 << 1)) || !(state.wide & (1 << 1)) || state.x[1] != ref)
-                            {
-                                DBG("Value of x1 changed, skipping...");
-                                goto skip;
-                            }
-                            blref += get_bl_off(bl);
-                            DBG("Considering constructor " ADDR, blref);
-                            size_t idx = -1;
-                            for(size_t i = 0; i < constrCandCurr.idx; ++i)
-                            {
-                                if(constrCandCurr.val[i] == blref)
+                                kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
+                                       ref    = refloc;
+                                if(is_adrp(adr))
                                 {
-                                    idx = i;
-                                    break;
+                                    ref &= ~0xfff;
+                                    ref += get_add_sub_imm(add);
                                 }
-                            }
-                            // If we have this already, just skip
-                            if(idx == -1)
-                            {
-                                // first iteration: collect
-                                // subsequent iterations: eliminate
-                                if(j != 0)
+                                ref += get_adr_off(adr);
+                                for(size_t i = 0; i < strrefs[j].idx; ++i)
                                 {
-                                    idx = -1;
-                                    for(size_t i = 0; i < constrCandPrev.idx; ++i)
+                                    if(ref == strrefs[j].val[i])
                                     {
-                                        if(constrCandPrev.val[i] == blref)
-                                        {
-                                            idx = i;
-                                            break;
-                                        }
+                                        DBG("Found ref to \"%s\" at " ADDR, strs[j], refloc);
+                                        goto look_for_bl;
                                     }
-                                    if(idx == -1)
+                                }
+                                continue;
+                                look_for_bl:;
+                                STEP_MEM(uint32_t, m, mem + 2, seg->filesize - ((uintptr_t)(mem + 2) - start), 1)
+                                {
+                                    kptr_t bladdr = off2addr(kernel, (uintptr_t)m - (uintptr_t)kernel),
+                                           blref  = bladdr;
+                                    bl_t *bl = (bl_t*)m;
+                                    if(is_bl(bl))
                                     {
-                                        DBG("Candidate " ADDR " not in prev list.", bladdr);
+                                        a64_state_t state;
+                                        if(!a64_emulate(kernel, &state, mem, m, true))
+                                        {
+                                            // a64_emulate should've printed error already
+                                            goto skip;
+                                        }
+                                        if(!(state.valid & (1 << 1)) || !(state.wide & (1 << 1)) || state.x[1] != ref)
+                                        {
+                                            DBG("Value of x1 changed, skipping...");
+                                            goto skip;
+                                        }
+                                        blref += get_bl_off(bl);
+                                        DBG("Considering constructor " ADDR, blref);
+                                        size_t idx = -1;
+                                        for(size_t i = 0; i < constrCandCurr.idx; ++i)
+                                        {
+                                            if(constrCandCurr.val[i] == blref)
+                                            {
+                                                idx = i;
+                                                break;
+                                            }
+                                        }
+                                        // If we have this already, just skip
+                                        if(idx == -1)
+                                        {
+                                            // first iteration: collect
+                                            // subsequent iterations: eliminate
+                                            if(j != 0)
+                                            {
+                                                idx = -1;
+                                                for(size_t i = 0; i < constrCandPrev.idx; ++i)
+                                                {
+                                                    if(constrCandPrev.val[i] == blref)
+                                                    {
+                                                        idx = i;
+                                                        break;
+                                                    }
+                                                }
+                                                if(idx == -1)
+                                                {
+                                                    DBG("Candidate " ADDR " not in prev list.", bladdr);
+                                                    goto skip;
+                                                }
+                                            }
+                                            ARRPUSH(constrCandCurr, blref);
+                                        }
+                                        goto skip;
+                                    }
+                                    else if(!is_linear_inst(m))
+                                    {
+                                        WRN("Unexpected instruction at " ADDR, bladdr);
                                         goto skip;
                                     }
                                 }
-                                ARRPUSH(constrCandCurr, blref);
+                                ERR("Reached end of kernel without finding bl from " ADDR, refloc);
+                                return -1;
                             }
-                            goto skip;
-                        }
-                        else if(!is_linear_inst(m))
-                        {
-                            WRN("Unexpected instruction at " ADDR, bladdr);
-                            goto skip;
+                            skip:;
                         }
                     }
-                    ERR("Reached end of kernel without finding bl from " ADDR, refloc);
-                    return -1;
                 }
-                skip:;
             }
         }
         if(constrCandCurr.idx == 0)
@@ -1150,34 +1161,36 @@ int main(int argc, const char **argv)
                 ARRPUSH(refs, ref);
             }
         }
-
         FOREACH_CMD(hdr, cmd)
         {
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
+                if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
                 {
-                    adr_t *adrp = (adr_t*)mem;
-                    ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
-                    br_t *br = (br_t*)(mem + 2);
-                    if
-                    (
-                        is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
-                        adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
-                    )
+                    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                     {
-                        kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
-                        kptr_t addr = alias & ~0xfff;
-                        addr += get_adr_off(adrp);
-                        addr += get_ldr_imm_uoff(ldr);
-                        for(size_t i = 0; i < refs.idx; ++i)
+                        adr_t *adrp = (adr_t*)mem;
+                        ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
+                        br_t *br = (br_t*)(mem + 2);
+                        if
+                        (
+                            is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
+                            adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
+                        )
                         {
-                            if(addr == refs.val[i])
+                            kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
+                            kptr_t addr = alias & ~0xfff;
+                            addr += get_adr_off(adrp);
+                            addr += get_ldr_imm_uoff(ldr);
+                            for(size_t i = 0; i < refs.idx; ++i)
                             {
-                                DBG("alias: " ADDR, alias);
-                                ARRPUSH(aliases, alias);
-                                break;
+                                if(addr == refs.val[i])
+                                {
+                                    DBG("alias: " ADDR, alias);
+                                    ARRPUSH(aliases, alias);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1193,93 +1206,96 @@ int main(int argc, const char **argv)
         if(cmd->cmd == MACH_SEGMENT)
         {
             mach_seg_t *seg = (mach_seg_t*)cmd;
-            STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
+            if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
             {
-                bl_t *bl = (bl_t*)mem;
-                if(is_bl(bl))
+                STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
                 {
-                    kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
-                    kptr_t bltarg = bladdr + get_bl_off(bl);
-                    for(size_t i = 0; i < aliases.idx; ++i)
+                    bl_t *bl = (bl_t*)mem;
+                    if(is_bl(bl))
                     {
-                        if(bltarg == aliases.val[i])
+                        kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
+                        kptr_t bltarg = bladdr + get_bl_off(bl);
+                        for(size_t i = 0; i < aliases.idx; ++i)
                         {
-                            uint32_t *fnstart = mem - 1;
-                            bool unknown = false;
-                            while(1)
+                            if(bltarg == aliases.val[i])
                             {
-                                if(fnstart < (uint32_t*)((uintptr_t)kernel + seg->fileoff))
+                                uint32_t *fnstart = mem - 1;
+                                bool unknown = false;
+                                while(1)
                                 {
-                                    WRN("Hit start of segment at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), bladdr);
-                                    goto next;
+                                    if(fnstart < (uint32_t*)((uintptr_t)kernel + seg->fileoff))
+                                    {
+                                        WRN("Hit start of segment at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), bladdr);
+                                        goto next;
+                                    }
+                                    stp_t *stp = (stp_t*)fnstart;
+                                    if((is_stp_pre(stp) || is_stp_uoff(stp)) && stp->Rt == 29 && stp->Rt2 == 30)
+                                    {
+                                        break;
+                                    }
+                                    if(!is_linear_inst(fnstart))
+                                    {
+                                        unknown = true;
+                                        ++fnstart;
+                                        break;
+                                    }
+                                    --fnstart;
                                 }
-                                stp_t *stp = (stp_t*)fnstart;
-                                if((is_stp_pre(stp) || is_stp_uoff(stp)) && stp->Rt == 29 && stp->Rt2 == 30)
+                                a64_state_t state;
+                                if(a64_emulate(kernel, &state, fnstart, mem, true))
                                 {
-                                    break;
+                                    if((state.valid & 0x1) != 0x1)
+                                    {
+                                        if(unknown)
+                                        {
+                                            WRN("Hit unknown instruction at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)(fnstart - 1) - ((uintptr_t)kernel + seg->fileoff)), bladdr);
+                                        }
+                                        else
+                                        {
+                                            DBG("Skipping constructor call without x0 at " ADDR, bladdr);
+                                        }
+                                        goto next;
+                                    }
+                                    if((state.valid & 0xe) != 0xe)
+                                    {
+                                        if(unknown)
+                                        {
+                                            WRN("Hit unknown instruction at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)(fnstart - 1) - ((uintptr_t)kernel + seg->fileoff)), bladdr);
+                                        }
+                                        WRN("Skipping constructor call without x1-x3 (%x) at " ADDR, state.valid, bladdr);
+                                        goto next;
+                                    }
+                                    if((state.wide & 0xf) != 0x7)
+                                    {
+                                        WRN("Skipping constructor call with unexpected registers width (%x) at " ADDR, state.wide, bladdr);
+                                        goto next;
+                                    }
+                                    DBG("Processing constructor call at " ADDR, bladdr);
+                                    metaclass_t *meta;
+                                    ARRNEXT(metas, meta);
+                                    meta->addr = state.x[0];
+                                    meta->parent = state.x[2];
+                                    meta->vtab = 0;
+                                    meta->callsite = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
+                                    meta->parentP = NULL;
+                                    meta->name = addr2ptr(kernel, state.x[1]);
+                                    meta->bundle = NULL;
+                                    meta->overrides.head = NULL;
+                                    meta->overrides.nextP = &meta->overrides.head;
+                                    meta->objsize = state.x[3];
+                                    meta->overrides_done = 0;
+                                    meta->overrides_err = 0;
+                                    meta->reserved = 0;
+                                    if(!meta->name)
+                                    {
+                                        DBG("meta->name: " ADDR " (untagged: " ADDR ")", state.x[1], kuntag(kbase, x1469, state.x[1], NULL));
+                                        ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
+                                        return -1;
+                                    }
                                 }
-                                if(!is_linear_inst(fnstart))
-                                {
-                                    unknown = true;
-                                    ++fnstart;
-                                    break;
-                                }
-                                --fnstart;
+                                next:;
+                                break;
                             }
-                            a64_state_t state;
-                            if(a64_emulate(kernel, &state, fnstart, mem, true))
-                            {
-                                if((state.valid & 0x1) != 0x1)
-                                {
-                                    if(unknown)
-                                    {
-                                        WRN("Hit unknown instruction at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)(fnstart - 1) - ((uintptr_t)kernel + seg->fileoff)), bladdr);
-                                    }
-                                    else
-                                    {
-                                        DBG("Skipping constructor call without x0 at " ADDR, bladdr);
-                                    }
-                                    goto next;
-                                }
-                                if((state.valid & 0xe) != 0xe)
-                                {
-                                    if(unknown)
-                                    {
-                                        WRN("Hit unknown instruction at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)(fnstart - 1) - ((uintptr_t)kernel + seg->fileoff)), bladdr);
-                                    }
-                                    WRN("Skipping constructor call without x1-x3 (%x) at " ADDR, state.valid, bladdr);
-                                    goto next;
-                                }
-                                if((state.wide & 0xf) != 0x7)
-                                {
-                                    WRN("Skipping constructor call with unexpected registers width (%x) at " ADDR, state.wide, bladdr);
-                                    goto next;
-                                }
-                                DBG("Processing constructor call at " ADDR, bladdr);
-                                metaclass_t *meta;
-                                ARRNEXT(metas, meta);
-                                meta->addr = state.x[0];
-                                meta->parent = state.x[2];
-                                meta->vtab = 0;
-                                meta->callsite = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
-                                meta->parentP = NULL;
-                                meta->name = addr2ptr(kernel, state.x[1]);
-                                meta->bundle = NULL;
-                                meta->overrides.head = NULL;
-                                meta->overrides.nextP = &meta->overrides.head;
-                                meta->objsize = state.x[3];
-                                meta->overrides_done = 0;
-                                meta->overrides_err = 0;
-                                meta->reserved = 0;
-                                if(!meta->name)
-                                {
-                                    DBG("meta->name: " ADDR " (untagged: " ADDR ")", state.x[1], kuntag(kbase, x1469, state.x[1], NULL));
-                                    ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
-                                    return -1;
-                                }
-                            }
-                            next:;
-                            break;
                         }
                     }
                 }
@@ -1425,44 +1441,54 @@ int main(int argc, const char **argv)
                 OSObjectVtab = OSMetaClassVtab;
 
                 // getMetaClass
-                STEP_MEM(uint32_t, mem, kernel, kernelsize, 3)
+                FOREACH_CMD(hdr, cmd)
                 {
-                    adr_t     *adr = (adr_t*    )(mem + 0);
-                    add_imm_t *add = (add_imm_t*)(mem + 1);
-                    ret_t     *ret = (ret_t*    )(mem + 2);
-                    if
-                    (
-                        is_ret(ret) &&
-                        (
-                            (is_adr(adr) && is_nop(mem + 1) && adr->Rd == 0) ||
-                            (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 0)
-                        )
-                    )
+                    if(cmd->cmd == MACH_SEGMENT)
                     {
-                        kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
-                               ref    = refloc;
-                        if(is_adrp(adr))
+                        mach_seg_t *seg = (mach_seg_t*)cmd;
+                        if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
                         {
-                            ref &= ~0xfff;
-                            ref += get_add_sub_imm(add);
-                        }
-                        ref += get_adr_off(adr);
-                        if(ref == OSMetaClassMetaClass)
-                        {
-                            if(OSObjectGetMetaClass == -1)
+                            STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                             {
-                                ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, refloc);
-                            }
-                            else if(OSObjectGetMetaClass != 0)
-                            {
-                                ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, OSObjectGetMetaClass);
-                                ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, refloc);
-                                OSObjectGetMetaClass = -1;
-                            }
-                            else
-                            {
-                                DBG("OSMetaClass::getMetaClass: " ADDR, refloc);
-                                OSObjectGetMetaClass = refloc;
+                                adr_t     *adr = (adr_t*    )(mem + 0);
+                                add_imm_t *add = (add_imm_t*)(mem + 1);
+                                ret_t     *ret = (ret_t*    )(mem + 2);
+                                if
+                                (
+                                    is_ret(ret) &&
+                                    (
+                                        (is_adr(adr) && is_nop(mem + 1) && adr->Rd == 0) ||
+                                        (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 0)
+                                    )
+                                )
+                                {
+                                    kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
+                                           ref    = refloc;
+                                    if(is_adrp(adr))
+                                    {
+                                        ref &= ~0xfff;
+                                        ref += get_add_sub_imm(add);
+                                    }
+                                    ref += get_adr_off(adr);
+                                    if(ref == OSMetaClassMetaClass)
+                                    {
+                                        if(OSObjectGetMetaClass == -1)
+                                        {
+                                            ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, refloc);
+                                        }
+                                        else if(OSObjectGetMetaClass != 0)
+                                        {
+                                            ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, OSObjectGetMetaClass);
+                                            ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, refloc);
+                                            OSObjectGetMetaClass = -1;
+                                        }
+                                        else
+                                        {
+                                            DBG("OSMetaClass::getMetaClass: " ADDR, refloc);
+                                            OSObjectGetMetaClass = refloc;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1511,113 +1537,140 @@ int main(int argc, const char **argv)
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
+                if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
                 {
-                    adr_t *adr = (adr_t*)mem;
-                    add_imm_t *add = (add_imm_t*)(mem + 1);
-                    nop_t *nop = (nop_t*)(mem + 1);
-                    ret_t *ret1 = (ret_t*)(mem + 1);
-                    ret_t *ret2 = (ret_t*)(mem + 2);
-                    bool iz_adrp = is_adrp(adr),
-                         iz_add  = is_add_imm(add);
-                    if
-                    (
-                        (iz_adrp && iz_add && is_ret(ret2) && adr->Rd == add->Rn && add->Rd == 0) ||
-                        (is_adr(adr) && (is_ret(ret1) || (is_nop(nop) && is_ret(ret2))) && adr->Rd == 0)
-                    )
+                    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                     {
-                        kptr_t func = seg->vmaddr + ((uintptr_t)adr - ((uintptr_t)kernel + seg->fileoff)),
-                               addr = func;
-                        if(iz_adrp)
+                        adr_t *adr = (adr_t*)mem;
+                        add_imm_t *add = (add_imm_t*)(mem + 1);
+                        nop_t *nop = (nop_t*)(mem + 1);
+                        ret_t *ret1 = (ret_t*)(mem + 1);
+                        ret_t *ret2 = (ret_t*)(mem + 2);
+                        bool iz_adrp = is_adrp(adr),
+                             iz_add  = is_add_imm(add);
+                        if
+                        (
+                            (iz_adrp && iz_add && is_ret(ret2) && adr->Rd == add->Rn && add->Rd == 0) ||
+                            (is_adr(adr) && (is_ret(ret1) || (is_nop(nop) && is_ret(ret2))) && adr->Rd == 0)
+                        )
                         {
-                            addr &= ~0xfff;
-                        }
-                        if(iz_add)
-                        {
-                            addr += get_adr_off(adr);
-                            addr += get_add_sub_imm(add);
-                        }
-                        else
-                        {
-                            addr += get_adr_off(adr);
-                        }
-                        if(addr != OSMetaClassMetaClass)
-                        {
-                            for(size_t i = 0; i < metas.idx; ++i)
+                            kptr_t func = seg->vmaddr + ((uintptr_t)adr - ((uintptr_t)kernel + seg->fileoff)),
+                                   addr = func;
+                            if(iz_adrp)
                             {
-                                metaclass_t *meta = &metas.val[i];
-                                if(meta->addr == addr)
+                                addr &= ~0xfff;
+                            }
+                            if(iz_add)
+                            {
+                                addr += get_adr_off(adr);
+                                addr += get_add_sub_imm(add);
+                            }
+                            else
+                            {
+                                addr += get_adr_off(adr);
+                            }
+                            if(addr != OSMetaClassMetaClass)
+                            {
+                                for(size_t i = 0; i < metas.idx; ++i)
                                 {
-                                    DBG("Got func " ADDR " referencing MetaClass %s", func, meta->name);
-                                    candidates.idx = 0;
-                                    STEP_MEM(kptr_t, mem2, (kptr_t*)kernel + VtabGetMetaClassOff + 2, kernelsize - (VtabGetMetaClassOff + 2) * sizeof(kptr_t), 1)
+                                    metaclass_t *meta = &metas.val[i];
+                                    if(meta->addr == addr)
                                     {
-                                        if(kuntag(kbase, x1469, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
+                                        DBG("Got func " ADDR " referencing MetaClass %s", func, meta->name);
+                                        candidates.idx = 0;
+                                        FOREACH_CMD(hdr, cmd2)
                                         {
-                                            kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassOff) - (uintptr_t)kernel);
-                                            if(meta->vtab == 0)
+                                            if(cmd2->cmd == MACH_SEGMENT)
                                             {
-                                                meta->vtab = ref;
-                                            }
-                                            else
-                                            {
-                                                if(meta->vtab != -1)
+                                                mach_seg_t *seg2 = (mach_seg_t*)cmd2;
+                                                if
+                                                (
+                                                    seg2->filesize > (VtabGetMetaClassOff + 2) * sizeof(kptr_t) &&
+                                                    (strcmp("__DATA", seg2->segname) == 0 || strcmp("__DATA_CONST", seg2->segname) == 0 || strcmp("__PRELINK_DATA", seg2->segname) == 0 || strcmp("__PLK_DATA_CONST", seg2->segname) == 0)
+                                                )
                                                 {
-                                                    DBG("More than one vtab for %s: " ADDR, meta->name, meta->vtab);
-                                                    ARRPUSH(candidates, meta->vtab);
-                                                    meta->vtab = -1;
-                                                }
-                                                DBG("More than one vtab for %s: " ADDR, meta->name, ref);
-                                                ARRPUSH(candidates, ref);
-                                            }
-                                        }
-                                    }
-                                    if(candidates.idx > 0)
-                                    {
-                                        kptr_t cnd = 0;
-                                        size_t numcnd = 0;
-                                        STEP_MEM(uint32_t, mem2, kernel, kernelsize, 5)
-                                        {
-                                            adr_t *adrp = (adr_t*)mem2;
-                                            add_imm_t *add1 = (add_imm_t*)(mem2 + 1);
-                                            add_imm_t *add2 = (add_imm_t*)(mem2 + 2);
-                                            str_uoff_t *str = (str_uoff_t*)(mem2 + 3);
-                                            uint32_t *ldp = mem2 + 4;
-                                            ret_t *ret1 = (ret_t*)(mem2 + 4);
-                                            ret_t *ret2 = (ret_t*)(mem2 + 5);
-                                            if
-                                            (
-                                                is_adrp(adrp) && is_add_imm(add1) && is_add_imm(add2) && is_str_uoff(str) && // TODO: adr + nop + add ?
-                                                (is_ret(ret1) || (*ldp == 0xa8c17bfd /* ldp x29, x30, [sp], 0x10 */ && is_ret(ret2))) &&
-                                                adrp->Rd == add1->Rn && add1->Rd == add2->Rn && add2->Rd == str->Rt &&
-                                                get_str_uoff(str) == 0 && get_add_sub_imm(add2) == 2 * sizeof(kptr_t)
-                                            )
-                                            {
-                                                kptr_t refloc = off2addr(kernel, (uintptr_t)adrp - (uintptr_t)kernel);
-                                                kptr_t ref = refloc & ~0xfff;
-                                                ref += get_adr_off(adrp);
-                                                ref += get_add_sub_imm(add1) + get_add_sub_imm(add2);
-                                                for(size_t j = 0; j < candidates.idx; ++j)
-                                                {
-                                                    if(candidates.val[j] == ref)
+                                                    STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassOff + 2, seg2->filesize - (VtabGetMetaClassOff + 2) * sizeof(kptr_t), 1)
                                                     {
-                                                        DBG("Location referencing vtab candidate " ADDR ": " ADDR, ref, refloc);
-                                                        if(cnd != ref) // One vtab may be referenced multiple times
+                                                        if(kuntag(kbase, x1469, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
                                                         {
-                                                            ++numcnd;
+                                                            kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassOff) - (uintptr_t)kernel);
+                                                            if(meta->vtab == 0)
+                                                            {
+                                                                meta->vtab = ref;
+                                                            }
+                                                            else
+                                                            {
+                                                                if(meta->vtab != -1)
+                                                                {
+                                                                    DBG("More than one vtab for %s: " ADDR, meta->name, meta->vtab);
+                                                                    ARRPUSH(candidates, meta->vtab);
+                                                                    meta->vtab = -1;
+                                                                }
+                                                                DBG("More than one vtab for %s: " ADDR, meta->name, ref);
+                                                                ARRPUSH(candidates, ref);
+                                                            }
                                                         }
-                                                        cnd = ref;
-                                                        break;
                                                     }
                                                 }
                                             }
                                         }
-                                        if(numcnd == 1)
+                                        if(candidates.idx > 0)
                                         {
-                                            meta->vtab = cnd;
+                                            kptr_t cnd = 0;
+                                            size_t numcnd = 0;
+                                            FOREACH_CMD(hdr, cmd2)
+                                            {
+                                                if(cmd2->cmd == MACH_SEGMENT)
+                                                {
+                                                    mach_seg_t *seg2 = (mach_seg_t*)cmd2;
+                                                    if(seg2->filesize > 0 && (seg2->initprot & VM_PROT_EXECUTE))
+                                                    {
+                                                        STEP_MEM(uint32_t, mem2, (uintptr_t)kernel + seg2->fileoff, seg2->filesize, 5)
+                                                        {
+                                                            adr_t *adrp = (adr_t*)mem2;
+                                                            add_imm_t *add1 = (add_imm_t*)(mem2 + 1);
+                                                            add_imm_t *add2 = (add_imm_t*)(mem2 + 2);
+                                                            str_uoff_t *str = (str_uoff_t*)(mem2 + 3);
+                                                            uint32_t *ldp = mem2 + 4;
+                                                            ret_t *ret1 = (ret_t*)(mem2 + 4);
+                                                            ret_t *ret2 = (ret_t*)(mem2 + 5);
+                                                            if
+                                                            (
+                                                                is_adrp(adrp) && is_add_imm(add1) && is_add_imm(add2) && is_str_uoff(str) && // TODO: adr + nop + add ?
+                                                                (is_ret(ret1) || (*ldp == 0xa8c17bfd /* ldp x29, x30, [sp], 0x10 */ && is_ret(ret2))) &&
+                                                                adrp->Rd == add1->Rn && add1->Rd == add2->Rn && add2->Rd == str->Rt &&
+                                                                get_str_uoff(str) == 0 && get_add_sub_imm(add2) == 2 * sizeof(kptr_t)
+                                                            )
+                                                            {
+                                                                kptr_t refloc = off2addr(kernel, (uintptr_t)adrp - (uintptr_t)kernel);
+                                                                kptr_t ref = refloc & ~0xfff;
+                                                                ref += get_adr_off(adrp);
+                                                                ref += get_add_sub_imm(add1) + get_add_sub_imm(add2);
+                                                                for(size_t j = 0; j < candidates.idx; ++j)
+                                                                {
+                                                                    if(candidates.val[j] == ref)
+                                                                    {
+                                                                        DBG("Location referencing vtab candidate " ADDR ": " ADDR, ref, refloc);
+                                                                        if(cnd != ref) // One vtab may be referenced multiple times
+                                                                        {
+                                                                            ++numcnd;
+                                                                        }
+                                                                        cnd = ref;
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if(numcnd == 1)
+                                            {
+                                                meta->vtab = cnd;
+                                            }
                                         }
+                                        break;
                                     }
-                                    break;
                                 }
                             }
                         }
