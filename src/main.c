@@ -1,3 +1,13 @@
+/* Copyright (c) 2018 Siguza
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * This Source Code Form is "Incompatible With Secondary Licenses", as
+ * defined by the Mozilla Public License, v. 2.0.
+**/
+
 #if 0
 How this works:
 
@@ -229,13 +239,14 @@ typedef union
 {
     kptr_t ptr;
     struct {
-        int64_t lo : 48,
-                hi : 16;
+        int64_t lo : 51,
+                hi : 13;
     };
     struct {
         kptr_t off : 32,
                pac : 16,
-               nxt : 15,
+               flg :  3,
+               nxt : 12,
                one :  1;
     };
 } pacptr_t;
@@ -266,7 +277,7 @@ static kptr_t kuntag(kptr_t kbase, bool x1469, kptr_t ptr, uint16_t *pac)
     {
         if(pp.one)
         {
-            if(pac) *pac = pp.pac;
+            if(pac) *pac = pp.flg == 1 ? pp.pac : 0;
             return kbase + pp.off;
         }
         pp.ptr = (kptr_t)pp.lo;
@@ -539,6 +550,48 @@ static int compare_bundles(const void *a, const void *b)
         r = strcmp(x->bundle, y->bundle);
     }
     return r != 0 ? r : compare_names(a, b);
+}
+
+static int compare_sym_addrs(const void *a, const void *b)
+{
+    kptr_t adda = ((const sym_t*)a)->addr,
+           addb = ((const sym_t*)b)->addr;
+    if(adda == addb) return 0;
+    return adda < addb ? -1 : 1;
+}
+
+static int compare_sym_names(const void *a, const void *b)
+{
+    const sym_t *syma = a,
+                *symb = b;
+    return strcmp(syma->name, symb->name);
+}
+
+static int compare_sym_addr(const void *a, const void *b)
+{
+    kptr_t adda = *(const kptr_t*)a,
+           addb = ((const sym_t*)b)->addr;
+    if(adda == addb) return 0;
+    return adda < addb ? -1 : 1;
+}
+
+static int compare_sym_name(const void *a, const void *b)
+{
+    const char *name = a;
+    const sym_t *sym = b;
+    return strcmp(name, sym->name);
+}
+
+static const char* find_sym_by_addr(kptr_t addr, sym_t *asyms, size_t nsyms)
+{
+    sym_t *sym = bsearch(&addr, asyms, nsyms, sizeof(*asyms), &compare_sym_addr);
+    return sym ? sym->name : NULL;
+}
+
+static kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms)
+{
+    sym_t *sym = bsearch(name, bsyms, nsyms, sizeof(*bsyms), &compare_sym_name);
+    return sym ? sym->addr : 0;
 }
 
 static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
@@ -906,9 +959,11 @@ int main(int argc, const char **argv)
            kbase = 0,
            initcode = 0;
     bool x1469 = false;
-    mach_stab_t *stab = NULL;
     mach_nlist_t *symtab = NULL;
     char *strtab = NULL;
+    size_t nsyms = 0;
+    sym_t *asyms = NULL,
+          *bsyms = NULL;
     FOREACH_CMD(hdr, cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
@@ -934,7 +989,7 @@ int main(int argc, const char **argv)
         }
         else if(cmd->cmd == LC_SYMTAB)
         {
-            stab = (mach_stab_t*)cmd;
+            mach_stab_t *stab = (mach_stab_t*)cmd;
             symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
             strtab = (char*)((uintptr_t)kernel + stab->stroff);
             for(size_t i = 0; i < stab->nsyms; ++i)
@@ -943,37 +998,63 @@ int main(int argc, const char **argv)
                 {
                     continue;
                 }
-                char *s = &strtab[symtab[i].n_un.n_strx];
-                if(hdr->filetype == MH_KEXT_BUNDLE)
+                ++nsyms;
+            }
+            asyms = malloc(sizeof(*asyms) * nsyms);
+            if(asyms)
+            {
+                bsyms = malloc(sizeof(*bsyms) * nsyms);
+            }
+            if(!asyms || !bsyms)
+            {
+                ERRNO("malloc(syms)");
+                return -1;
+            }
+            size_t sidx = 0;
+            for(size_t i = 0; i < stab->nsyms; ++i)
+            {
+                if((symtab[i].n_type & N_TYPE) == N_UNDF)
                 {
-                    if(strcmp(s, "__ZN11OSMetaClassC2EPKcPKS_j.stub") == 0)
-                    {
-                        OSMetaClassConstructor = symtab[i].n_value;
-                        DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
-                    }
+                    continue;
                 }
-                else
+                bsyms[sidx].addr = symtab[i].n_value;
+                bsyms[sidx].name = &strtab[symtab[i].n_un.n_strx];
+                ++sidx;
+            }
+            memcpy(asyms, bsyms, nsyms);
+            qsort(asyms, nsyms, sizeof(*asyms), &compare_sym_addrs);
+            qsort(bsyms, nsyms, sizeof(*bsyms), &compare_sym_names);
+            if(hdr->filetype == MH_KEXT_BUNDLE)
+            {
+                OSMetaClassConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j.stub", bsyms, nsyms);
+                if(OSMetaClassConstructor)
                 {
-                    if(strcmp(s, "__ZN11OSMetaClassC2EPKcPKS_j") == 0)
-                    {
-                        OSMetaClassConstructor = symtab[i].n_value;
-                        DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
-                    }
-                    else if(strcmp(s, "__ZTV11OSMetaClass") == 0)
-                    {
-                        OSMetaClassVtab = symtab[i].n_value + 2 * sizeof(kptr_t);
-                        DBG("OSMetaClassVtab: " ADDR, OSMetaClassVtab);
-                    }
-                    else if(strcmp(s, "__ZTV8OSObject") == 0)
-                    {
-                        OSObjectVtab = symtab[i].n_value + 2 * sizeof(kptr_t);
-                        DBG("OSObjectVtab: " ADDR, OSObjectVtab);
-                    }
-                    else if(strcmp(s, "__ZNK8OSObject12getMetaClassEv") == 0)
-                    {
-                        OSObjectGetMetaClass = symtab[i].n_value;
-                        DBG("OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
-                    }
+                    DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
+                }
+            }
+            else
+            {
+                OSMetaClassConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j",   bsyms, nsyms);
+                OSMetaClassVtab        = find_sym_by_name("__ZTV11OSMetaClass",             bsyms, nsyms);
+                OSObjectVtab           = find_sym_by_name("__ZTV8OSObject",                 bsyms, nsyms);
+                OSObjectGetMetaClass   = find_sym_by_name("__ZNK8OSObject12getMetaClassEv", bsyms, nsyms);
+                if(OSMetaClassConstructor)
+                {
+                    DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
+                }
+                if(OSMetaClassVtab)
+                {
+                    OSMetaClassVtab += 2 * sizeof(kptr_t);
+                    DBG("OSMetaClassVtab: " ADDR, OSMetaClassVtab);
+                }
+                if(OSObjectVtab)
+                {
+                    OSObjectVtab += 2 * sizeof(kptr_t);
+                    DBG("OSObjectVtab: " ADDR, OSObjectVtab);
+                }
+                if(OSObjectGetMetaClass)
+                {
+                    DBG("OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
                 }
             }
         }
@@ -1347,32 +1428,28 @@ int main(int argc, const char **argv)
 
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
-            for(size_t i = 0; i < stab->nsyms; ++i)
+            for(size_t i = 0; i < nsyms; ++i)
             {
-                if((symtab[i].n_type & N_TYPE) == N_UNDF)
+                if(strncmp(bsyms[i].name, "__ZTV", 5) == 0)
                 {
-                    continue;
-                }
-                char *s = &strtab[symtab[i].n_un.n_strx];
-                size_t slen = strlen(s);
-                if(slen >= 21 && strncmp(s, "__ZNK", 5) == 0 && strcmp(s + slen - 16, "12getMetaClassEv") == 0) // TODO: kinda ugly
-                {
-                    for(size_t j = 0; j < stab->nsyms; ++j)
+                    char *str = NULL;
+                    asprintf(&str, "__ZNK%s12getMetaClassEv", bsyms[i].name + 5);
+                    if(!str)
                     {
-                        if((symtab[j].n_type & N_TYPE) == N_UNDF)
-                        {
-                            continue;
-                        }
-                        char *t = &strtab[symtab[j].n_un.n_strx];
-                        if(strncmp(t, "__ZTV", 5) == 0 && strncmp(t + 5, s + 5, slen - 21) == 0)
-                        {
-                            OSObjectVtab = symtab[j].n_value + 2 * sizeof(kptr_t);
-                            OSObjectGetMetaClass = symtab[i].n_value;
-                            DBG("%s: " ADDR, t, OSObjectVtab);
-                            DBG("%s: " ADDR, s, OSObjectGetMetaClass);
-                            goto after;
-                        }
+                        ERRNO("asprintf(ZNK)");
+                        return -1;
                     }
+                    kptr_t znk = find_sym_by_name(str, bsyms, nsyms);
+                    if(znk)
+                    {
+                        OSObjectVtab = bsyms[i].addr + 2 * sizeof(kptr_t);
+                        OSObjectGetMetaClass = znk;
+                        DBG("%s: " ADDR, bsyms[i].name, OSObjectVtab);
+                        DBG("%s: " ADDR, str, OSObjectGetMetaClass);
+                        free(str);
+                        goto after;
+                    }
+                    free(str);
                 }
             }
             after:;
@@ -1820,26 +1897,9 @@ int main(int argc, const char **argv)
                         kptr_t func = kuntag(kbase, x1469, mvtab[idx], &pac);
                         vtab_entry_t *entry = NULL;
                         // stab, symtab and strtab are guaranteed to be non-NULL here or we would've exited long ago
-                        char *cxx_sym = NULL;
-                        if(is_in_reloc)
-                        {
-                            cxx_sym = relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)];
-                        }
-                        else
-                        {
-                            for(size_t n = 0; n < stab->nsyms; ++n)
-                            {
-                                if((symtab[n].n_type & N_STAB) && !(symtab[n].n_type & N_EXT))
-                                {
-                                    continue;
-                                }
-                                if(symtab[n].n_value == func)
-                                {
-                                    cxx_sym = &strtab[symtab[n].n_un.n_strx];
-                                    break;
-                                }
-                            }
-                        }
+                        const char *cxx_sym = is_in_reloc
+                                            ? relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)]
+                                            : find_sym_by_addr(func, asyms, nsyms);
                         if(cxx_sym)
                         {
                             DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
@@ -1985,19 +2045,11 @@ int main(int argc, const char **argv)
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
             kmod_info_t *kmod = NULL;
-            for(size_t i = 0; i < stab->nsyms; ++i)
+            kptr_t kmod_addr = find_sym_by_name("_kmod_info", bsyms, nsyms);
+            if(kmod_addr)
             {
-                if((symtab[i].n_type & N_TYPE) == N_UNDF)
-                {
-                    continue;
-                }
-                char *s = &strtab[symtab[i].n_un.n_strx];
-                if(strcmp(s, "_kmod_info") == 0)
-                {
-                    DBG("kmod: " ADDR, symtab[i].n_value);
-                    kmod = addr2ptr(kernel, symtab[i].n_value);
-                    break;
-                }
+                DBG("kmod: " ADDR, kmod_addr);
+                kmod = addr2ptr(kernel, kmod_addr);
             }
             if(!kmod)
             {

@@ -8,7 +8,7 @@ Supports sorting and filtering by kext and/or parents/children of classes.
 Should be simple enough:
 
     make
-    
+
 Links against CoreFoundation and IOKit though, so probably only works on Darwin platforms.
 
 ### Usage
@@ -17,4 +17,4 @@ Run with no arguments for help.
 
 ### License
 
-[MIT](https://github.com/Siguza/iometa/blob/master/LICENSE).
+[MPL2](https://github.com/Siguza/iometa/blob/master/LICENSE) with Exhibit B.
