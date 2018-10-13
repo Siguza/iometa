@@ -71,6 +71,17 @@ typedef struct
 {
     uint32_t Rt     : 5,
              Rn     : 5,
+             op3    : 2,
+             imm    : 9,
+             op2    : 9,
+             sf     : 1,
+             op1    : 1;
+} str_imm_t;
+
+typedef struct
+{
+    uint32_t Rt     : 5,
+             Rn     : 5,
              imm    : 12,
              op2    : 8,
              sf     : 1,
@@ -229,6 +240,21 @@ static inline int64_t get_ldr_lit_off(ldr_lit_t *ldr)
 {
     return str->op1 == 1 && str->op2 == 0x1c1 && str->op3 == 2;
 }*/
+
+static inline bool is_str_pre(str_imm_t *str)
+{
+    return str->op1 == 1 && str->op2 == 0x1c0 && str->op3 == 0x3;
+}
+
+static inline bool is_str_post(str_imm_t *str)
+{
+    return str->op1 == 1 && str->op2 == 0x1c0 && str->op3 == 0x1;
+}
+
+static inline int64_t get_str_imm(str_imm_t *str)
+{
+    return ((int64_t)str->imm << (64 - 9)) >> (64 - 9 - (2 + str->sf));
+}
 
 static inline bool is_str_uoff(str_uoff_t *str)
 {

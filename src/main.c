@@ -633,7 +633,11 @@ static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
         for(vtab_override_t *ovr = meta->overrides.head; ovr != NULL; ovr = ovr->next)
         {
             const char *color = "";
-            if(ovr->new == ovr->old)
+            if(ovr->new == -1)
+            {
+                color = colorRed;
+            }
+            else if(ovr->new == ovr->old)
             {
                 if(!opt.inherit)
                 {
@@ -1021,7 +1025,7 @@ int main(int argc, const char **argv)
                 bsyms[sidx].name = &strtab[symtab[i].n_un.n_strx];
                 ++sidx;
             }
-            memcpy(asyms, bsyms, nsyms);
+            memcpy(asyms, bsyms, nsyms * sizeof(*bsyms));
             qsort(asyms, nsyms, sizeof(*asyms), &compare_sym_addrs);
             qsort(bsyms, nsyms, sizeof(*bsyms), &compare_sym_names);
             if(hdr->filetype == MH_KEXT_BUNDLE)
@@ -1769,6 +1773,7 @@ int main(int argc, const char **argv)
         {
             char **relocs = NULL;
             size_t reloc_min = ~0, reloc_max = 0;
+            kptr_t pure_virtual = 0;
             if(hdr->filetype == MH_KEXT_BUNDLE)
             {
                 FOREACH_CMD(hdr, cmd)
@@ -1812,6 +1817,163 @@ int main(int argc, const char **argv)
                         }
                         break;
                     }
+                }
+            }
+            else
+            {
+                do
+                {
+                    pure_virtual = find_sym_by_name("___cxa_pure_virtual", bsyms, nsyms);
+                    if(pure_virtual)
+                    {
+                        break;
+                    }
+
+                    ARRDECL(kptr_t, strref, 4);
+                    find_str(kernel, kernelsize, &strref, "__cxa_pure_virtual");
+                    if(strref.idx == 0)
+                    {
+                        DBG("Failed to find string: __cxa_pure_virtual");
+                        break;
+                    }
+                    DBG("Found \"__cxa_pure_virtual\" %lu times", strref.idx);
+
+                    FOREACH_CMD(hdr, cmd)
+                    {
+                        if(cmd->cmd == MACH_SEGMENT)
+                        {
+                            mach_seg_t *seg = (mach_seg_t*)cmd;
+                            if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
+                            {
+                                uintptr_t start = (uintptr_t)kernel + seg->fileoff;
+                                STEP_MEM(uint32_t, mem, start, seg->filesize, 6)
+                                {
+                                    adr_t      *adr1 = (adr_t*     )(mem + 0);
+                                    add_imm_t  *add1 = (add_imm_t* )(mem + 1);
+                                    str_imm_t  *stri = (str_imm_t* )(mem + 2);
+                                    str_uoff_t *stru = (str_uoff_t*)(mem + 2);
+                                    adr_t      *adr2 = (adr_t*     )(mem + 3);
+                                    add_imm_t  *add2 = (add_imm_t* )(mem + 4);
+                                    bl_t       *bl   = (bl_t*      )(mem + 5);
+                                    if
+                                    (
+                                        is_bl(bl) &&
+                                        (
+                                            (is_adr(adr2)  && is_nop(mem + 4)  && adr2->Rd == 0) ||
+                                            (is_adrp(adr2) && is_add_imm(add2) && adr2->Rd == add2->Rn && add2->Rd == 0)
+                                        ) &&
+                                        (
+                                            (is_str_uoff(stru) && stru->Rn == 31 && get_str_uoff(stru) == 0) ||
+                                            (is_str_pre(stri)  && stri->Rn == 31)
+                                        ) &&
+                                        (
+                                            // stri and stru have Rt and Rn at same offsets
+                                            (is_adr(adr1)  && is_nop(mem + 1)  && adr1->Rd == stru->Rt) ||
+                                            (is_adrp(adr1) && is_add_imm(add1) && adr1->Rd == add1->Rn && add1->Rd == stru->Rt)
+                                        )
+                                    )
+                                    {
+                                        kptr_t refloc = off2addr(kernel, (uintptr_t)adr1 - (uintptr_t)kernel),
+                                               ref1   = refloc,
+                                               ref2   = refloc + 3 * sizeof(uint32_t);
+                                        if(is_adrp(adr1))
+                                        {
+                                            ref1 &= ~0xfff;
+                                            ref1 += get_add_sub_imm(add1);
+                                        }
+                                        ref1 += get_adr_off(adr1);
+                                        for(size_t i = 0; i < strref.idx; ++i)
+                                        {
+                                            if(ref1 == strref.val[i])
+                                            {
+                                                DBG("Found ref to \"__cxa_pure_virtual\" at " ADDR, refloc);
+                                                goto ref_matches;
+                                            }
+                                        }
+                                        continue;
+
+                                        ref_matches:;
+                                        if(is_adrp(adr2))
+                                        {
+                                            ref2 &= ~0xfff;
+                                            ref2 += get_add_sub_imm(add2);
+                                        }
+                                        ref2 += get_adr_off(adr2);
+                                        const char *x0 = addr2ptr(kernel, ref2);
+                                        if(strcmp(x0, "\"%s\"") != 0)
+                                        {
+                                            DBG("__cxa_pure_virtual: x0 != \"%%s\"");
+                                            continue;
+                                        }
+
+                                        uint32_t *loc = mem;
+                                        add_imm_t *add = (add_imm_t*)(loc - 1);
+                                        if(!(is_add_imm(add) && add->Rd == 29 && add->Rn == 31)) // ignore add amount
+                                        {
+                                            DBG("__cxa_pure_virtual: add x29, sp, ...");
+                                            continue;
+                                        }
+                                        loc--;
+                                        refloc -= sizeof(uint32_t);
+
+                                        stp_t *stp = (stp_t*)(loc - 1);
+                                        if(!((is_stp_uoff(stp) || is_stp_pre(stp)) && stp->Rt == 29 && stp->Rt2 == 30 && stp->Rn == 31))
+                                        {
+                                            DBG("__cxa_pure_virtual: stp x29, x30, [sp, ...]");
+                                            continue;
+                                        }
+                                        loc--;
+                                        refloc -= sizeof(uint32_t);
+
+                                        if(is_stp_uoff(stp))
+                                        {
+                                            sub_imm_t *sub = (sub_imm_t*)(loc - 1);
+                                            if(!(is_sub_imm(sub) && sub->Rd == 31 && sub->Rn == 31))
+                                            {
+                                                DBG("__cxa_pure_virtual: sub sp, sp, ...");
+                                                continue;
+                                            }
+                                            loc--;
+                                            refloc -= sizeof(uint32_t);
+                                        }
+                                        pacsys_t *pac = (pacsys_t*)(loc - 1);
+                                        if(is_pacsys(pac))
+                                        {
+                                            loc--;
+                                            refloc -= sizeof(uint32_t);
+                                        }
+                                        if(pure_virtual == -1)
+                                        {
+                                            DBG("__cxa_pure_virtual candidate: " ADDR, refloc);
+                                        }
+                                        else if(pure_virtual != 0)
+                                        {
+                                            DBG("__cxa_pure_virtual candidate: " ADDR, pure_virtual);
+                                            DBG("__cxa_pure_virtual candidate: " ADDR, refloc);
+                                            pure_virtual = -1;
+                                        }
+                                        else
+                                        {
+                                            pure_virtual = refloc;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } while(0);
+                if(pure_virtual == -1)
+                {
+                    WRN("Multiple __cxa_pure_virtual candidates!");
+                    pure_virtual = 0;
+                }
+                else if(pure_virtual)
+                {
+                    DBG("__cxa_pure_virtual: " ADDR, pure_virtual);
+                }
+                else
+                {
+                    WRN("Failed to find __cxa_pure_virtual");
                 }
             }
             ARRDECL(vtab_entry_t, fncache, 0x200);
@@ -1903,9 +2065,9 @@ int main(int argc, const char **argv)
                         if(cxx_sym)
                         {
                             DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
-                            if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0) // XXX: 1469
+                            if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0)
                             {
-                                func = 0;
+                                func = -1;
                             }
                             else
                             {
@@ -1937,7 +2099,14 @@ int main(int argc, const char **argv)
                         }
                         else
                         {
-                            DBG("Found no symbol for virtual function " ADDR, func);
+                            if(pure_virtual && func == pure_virtual)
+                            {
+                                func = -1;
+                            }
+                            else
+                            {
+                                DBG("Found no symbol for virtual function " ADDR, func);
+                            }
                         }
                         if(!entry && pvtab)
                         {
