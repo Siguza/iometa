@@ -190,31 +190,18 @@ typedef struct
     const char *name;
 } sym_t;
 
-typedef struct
+typedef struct vtab_entry
 {
+    struct vtab_entry *chain; // only used for back-propagating name
     const char *class;
     const char *method;
-} vtab_entry_name_t;
-
-typedef struct
-{
     kptr_t addr;
-    vtab_entry_name_t name;
     uint16_t pac;
     uint16_t structor      :  1,
              authoritative :  1,
-             reserved      : 13;
+             overrides     :  1,
+             reserved      : 12;
 } vtab_entry_t;
-
-typedef struct vtab_override
-{
-    struct vtab_override *next;
-    vtab_entry_name_t name;
-    kptr_t old;
-    kptr_t new;
-    uint32_t idx;
-    uint16_t pac;
-} vtab_override_t;
 
 typedef struct metaclass
 {
@@ -225,14 +212,12 @@ typedef struct metaclass
     struct metaclass *parentP;
     const char *name;
     const char *bundle;
-    struct {
-        vtab_override_t *head;
-        vtab_override_t **nextP;
-    } overrides;
+    vtab_entry_t *methods;
+    size_t nmethods;
     uint32_t objsize;
-    uint32_t overrides_done : 1,
-             overrides_err  : 1,
-             reserved       : 30;
+    uint32_t methods_done :  1,
+             methods_err  :  1,
+             reserved     : 30;
 } metaclass_t;
 
 typedef union
@@ -630,25 +615,20 @@ static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
     printf("\n");
     if(opt.overrides)
     {
-        for(vtab_override_t *ovr = meta->overrides.head; ovr != NULL; ovr = ovr->next)
+        metaclass_t *parent = meta->parentP;
+        for(size_t i = 0; i < meta->nmethods; ++i)
         {
-            const char *color = "";
-            if(ovr->new == -1)
+            vtab_entry_t *ent = &meta->methods[i];
+            if(!ent->overrides && !opt.inherit)
             {
-                color = colorRed;
+                continue;
             }
-            else if(ovr->new == ovr->old)
-            {
-                if(!opt.inherit)
-                {
-                    continue;
-                }
-                color = colorGray;
-            }
-            size_t hex = ovr->idx * sizeof(kptr_t);
+            const char *color = ent->addr == -1 ? colorRed : !ent->overrides ? colorGray : "";
+            vtab_entry_t *pent = (parent && i < parent->nmethods) ? &parent->methods[i] : NULL;
+            size_t hex = i * sizeof(kptr_t);
             int hexlen = 5;
             for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
-            printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ovr->new, ovr->old, ovr->pac, ovr->name.class, ovr->name.method, colorReset);
+            printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
         }
     }
 }
@@ -998,7 +978,7 @@ int main(int argc, const char **argv)
             strtab = (char*)((uintptr_t)kernel + stab->stroff);
             for(size_t i = 0; i < stab->nsyms; ++i)
             {
-                if((symtab[i].n_type & N_TYPE) == N_UNDF)
+                if((symtab[i].n_type & N_TYPE) == N_UNDF || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
                 {
                     continue;
                 }
@@ -1017,14 +997,16 @@ int main(int argc, const char **argv)
             size_t sidx = 0;
             for(size_t i = 0; i < stab->nsyms; ++i)
             {
-                if((symtab[i].n_type & N_TYPE) == N_UNDF)
+                if((symtab[i].n_type & N_TYPE) == N_UNDF || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
                 {
                     continue;
                 }
                 bsyms[sidx].addr = symtab[i].n_value;
                 bsyms[sidx].name = &strtab[symtab[i].n_un.n_strx];
+                DBG("Symbol: " ADDR " %s", bsyms[sidx].addr, bsyms[sidx].name);
                 ++sidx;
             }
+            DBG("Got %lu symbols", sidx);
             memcpy(asyms, bsyms, nsyms * sizeof(*bsyms));
             qsort(asyms, nsyms, sizeof(*asyms), &compare_sym_addrs);
             qsort(bsyms, nsyms, sizeof(*bsyms), &compare_sym_names);
@@ -1338,6 +1320,7 @@ int main(int argc, const char **argv)
                                         else
                                         {
                                             DBG("Skipping constructor call without x0 at " ADDR, bladdr);
+                                            // TODO: grab class name anyway?
                                         }
                                         goto next;
                                     }
@@ -1365,11 +1348,11 @@ int main(int argc, const char **argv)
                                     meta->parentP = NULL;
                                     meta->name = addr2ptr(kernel, state.x[1]);
                                     meta->bundle = NULL;
-                                    meta->overrides.head = NULL;
-                                    meta->overrides.nextP = &meta->overrides.head;
+                                    meta->methods = NULL;
+                                    meta->nmethods = 0;
                                     meta->objsize = state.x[3];
-                                    meta->overrides_done = 0;
-                                    meta->overrides_err = 0;
+                                    meta->methods_done = 0;
+                                    meta->methods_err = 0;
                                     meta->reserved = 0;
                                     if(!meta->name)
                                     {
@@ -1976,20 +1959,19 @@ int main(int argc, const char **argv)
                     WRN("Failed to find __cxa_pure_virtual");
                 }
             }
-            ARRDECL(vtab_entry_t, fncache, 0x200);
             for(size_t i = 0; i < metas.idx; ++i)
             {
                 again:;
                 bool do_again = false;
                 metaclass_t *meta = &metas.val[i],
                             *parent = meta->parentP;
-                if(meta->overrides_done || meta->overrides_err)
+                if(meta->methods_done || meta->methods_err)
                 {
                     goto done;
                 }
                 if(parent)
                 {
-                    while(!parent->overrides_err && !parent->overrides_done)
+                    while(!parent->methods_err && !parent->methods_done)
                     {
                         do_again = true;
                         meta = parent;
@@ -1999,10 +1981,10 @@ int main(int argc, const char **argv)
                             break;
                         }
                     }
-                    if(parent && parent->overrides_err)
+                    if(parent && parent->methods_err)
                     {
                         WRN("Skipping class %s because parent class was skipped.", meta->name);
-                        meta->overrides_err = 1;
+                        meta->methods_err = 1;
                         goto done;
                     }
                     while(parent && parent->vtab == 0) // Fall through on abstract classes
@@ -2012,13 +1994,13 @@ int main(int argc, const char **argv)
                 }
                 if(meta->vtab == 0)
                 {
-                    meta->overrides_done = 1;
+                    meta->methods_done = 1;
                     goto done;
                 }
                 if(meta->vtab == -1)
                 {
                     WRN("Skipping class %s because vtable is missing.", meta->name);
-                    meta->overrides_err = 1;
+                    meta->methods_err = 1;
                     goto done;
                 }
                 // Parent is guaranteed to either be NULL or have a valid vtab here
@@ -2026,176 +2008,200 @@ int main(int argc, const char **argv)
                 if(!mvtab)
                 {
                     WRN("%s vtab lies outside all segments.", meta->name);
-                    meta->overrides_err = 1;
+                    meta->methods_err = 1;
                     goto done;
                 }
-                kptr_t *pvtab = NULL;
-                if(parent)
-                {
-                    pvtab = addr2ptr(kernel, parent->vtab);
-                    if(!pvtab)
-                    {
-                        WRN("%s vtab lies outside all segments.", parent->name);
-                        meta->overrides_err = 1;
-                        goto done;
-                    }
-                }
 #define KOFF(x) ((uintptr_t)&(x) - (uintptr_t)kernel)
-                bool is_in_reloc = false;
-                for(size_t idx = 0;
-                    (is_in_reloc = (KOFF(mvtab[idx]) >= reloc_min && KOFF(mvtab[idx]) < reloc_max && relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)] != NULL)) || mvtab[idx] != 0;
-                    ++idx)
+                size_t nmeth = 0;
+                while
+                (
+                    (KOFF(mvtab[nmeth]) >= reloc_min && KOFF(mvtab[nmeth]) < reloc_max && relocs[(KOFF(mvtab[nmeth]) - reloc_min) / sizeof(kptr_t)] != NULL) ||
+                    (x1469 && nmeth > 0 ? ((pacptr_t*)mvtab)[nmeth - 1].nxt * sizeof(uint32_t) == sizeof(kptr_t) : mvtab[nmeth] != 0)
+                )
                 {
-#if 0
-                    if(!is_in_reloc && (!pvtab || kuntag(kbase, x1469, mvtab[idx], NULL) != kuntag(kbase, x1469, pvtab[idx], NULL)))
-#endif
+                    ++nmeth;
+                }
+                meta->methods = malloc(nmeth * sizeof(*meta->methods));
+                if(!meta->methods)
+                {
+                    ERRNO("malloc(methods)");
+                    return -1;
+                }
+                meta->nmethods = nmeth;
+                for(size_t idx = 0; idx < nmeth; ++idx)
+                {
+                    vtab_entry_t *ent   = &meta->methods[idx],
+                                 *pent  = (parent && idx < parent->nmethods) ? &parent->methods[idx] : NULL,
+                                 *chain = NULL;
+                    kptr_t func = 0;
+                    const char *cxx_sym = NULL,
+                               *class   = NULL,
+                               *method  = NULL;
+                    uint16_t pac;
+                    bool structor      = false,
+                         authoritative = false,
+                         overrides     = false;
+
+                    bool is_in_reloc = KOFF(mvtab[idx]) >= reloc_min && KOFF(mvtab[idx]) < reloc_max && relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)] != NULL;
+                    if(is_in_reloc)
                     {
-                        if(pvtab && pvtab[idx] == 0)
+                        cxx_sym = relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)];
+                    }
+                    else
+                    {
+                        func = kuntag(kbase, x1469, mvtab[idx], &pac);
+                        if(pent && pac != pent->pac) // TODO: reloc parent?
                         {
-                            // Signal that we've reached end of the parent vtable
-                            pvtab = NULL;
+                            WRN("PAC mismatch method 0x%lx: %s 0x%04hx vs 0x%04hx %s", idx * sizeof(kptr_t), meta->name, pac, pent->pac, parent->name);
                         }
-                        uint16_t pac;
-                        kptr_t func = kuntag(kbase, x1469, mvtab[idx], &pac);
-                        vtab_entry_t *entry = NULL;
-                        // stab, symtab and strtab are guaranteed to be non-NULL here or we would've exited long ago
-                        const char *cxx_sym = is_in_reloc
-                                            ? relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)]
-                                            : find_sym_by_addr(func, asyms, nsyms);
-                        if(cxx_sym)
+                        cxx_sym = find_sym_by_addr(func, asyms, nsyms);
+                        overrides = !pent || func != pent->addr;
+                    }
+                    if(cxx_sym)
+                    {
+                        DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
+                        if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0)
                         {
-                            DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
-                            if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0)
+                            func = -1;
+                        }
+                        else
+                        {
+                            if(!cxx_demangle(cxx_sym, &class, &method, &structor))
                             {
-                                func = -1;
-                            }
-                            else
-                            {
-                                char *class = NULL,
-                                     *method = NULL;
-                                bool structor = false;
-                                if(!cxx_demangle(cxx_sym, &class, &method, &structor))
+                                if(is_in_reloc)
                                 {
-                                    if(is_in_reloc)
-                                    {
-                                        WRN("Failed to demangle symbol: %s (from reloc)", cxx_sym);
-                                    }
-                                    else
-                                    {
-                                        WRN("Failed to demangle symbol: %s (from symtab, addr " ADDR ")", cxx_sym, func);
-                                    }
+                                    WRN("Failed to demangle symbol: %s (from reloc)", cxx_sym);
                                 }
                                 else
                                 {
-                                    ARRNEXT(fncache, entry);
-                                    entry->addr = func;
-                                    entry->name.class = class;
-                                    entry->name.method = method;
-                                    entry->pac = pac;
-                                    entry->structor = !!structor;
-                                    entry->authoritative = 1;
+                                    WRN("Failed to demangle symbol: %s (from symtab, addr " ADDR ")", cxx_sym, func);
                                 }
+                            }
+                            else
+                            {
+                                authoritative = true;
+                            }
+                        }
+                    }
+                    else if(pure_virtual && func == pure_virtual)
+                    {
+                        func = -1;
+                    }
+                    else
+                    {
+                        DBG("Found no symbol for virtual function " ADDR, func);
+                    }
+
+                    if(!method && pent)
+                    {
+                        method = pent->method;
+                        if(!pent->structor)
+                        {
+                            class = overrides ? meta->name : pent->class;
+                            authoritative = pent->authoritative;
+                            if(!authoritative)
+                            {
+                                chain = pent->chain;
+                                pent->chain = ent;
                             }
                         }
                         else
                         {
-                            if(pure_virtual && func == pure_virtual)
+                            const char *cls = pent->class,
+                                       *mth = method;
+                            bool dest = mth[0] == '~';
+                            if(dest)
                             {
-                                func = -1;
+                                ++mth;
+                            }
+                            size_t clslen = strlen(cls);
+                            if(strncmp(mth, cls, clslen) != 0)
+                            {
+                                WRN("Bad %sstructor: %s::%s", dest ? "de" : "con", cls, method);
+                                method = NULL;
                             }
                             else
                             {
-                                DBG("Found no symbol for virtual function " ADDR, func);
+                                mth += clslen;
+                                char *meth = NULL;
+                                asprintf(&meth, "%s%s%s", dest ? "~" : "", meta->name, mth);
+                                if(!meth)
+                                {
+                                    ERRNO("asprintf(structor)");
+                                    return -1;
+                                }
+                                method = meth;
+                                class = meta->name;
+                                structor = true;
+                                authoritative = false;
                             }
                         }
-                        if(!entry && pvtab)
+                    }
+                    // TODO: symbol map
+                    if(!method)
+                    {
+                        char *meth = NULL;
+                        asprintf(&meth, "fn_0x%lx()", idx * sizeof(kptr_t));
+                        if(!meth)
                         {
-                            kptr_t pfunc = kuntag(kbase, x1469, pvtab[idx], NULL);
-                            for(size_t n = 0; n < fncache.idx; ++n)
+                            ERRNO("asprintf(method)");
+                            return -1;
+                        }
+                        method = meth;
+                    }
+                    if(!class)
+                    {
+                        class = meta->name;
+                    }
+                    ent->chain = chain;
+                    ent->class = class;
+                    ent->method = method;
+                    ent->addr = func;
+                    ent->pac = pac;
+                    ent->structor = !!structor;
+                    ent->authoritative = !!authoritative;
+                    ent->overrides = !!overrides;
+                    ent->reserved = 0;
+
+                    if(authoritative && !structor && pent && !pent->authoritative)
+                    {
+                        metaclass_t *cls = meta;
+                        for(metaclass_t *c = cls->parentP; c && (idx < c->nmethods || !c->vtab); c = c->parentP)
+                        {
+                            if(c->vtab)
                             {
-                                if(fncache.val[n].addr == pfunc)
+                                cls = c;
+                            }
+                        }
+                        if(cls)
+                        {
+                            vtab_entry_t *start = &cls->methods[idx];
+                            if(start->authoritative)
+                            {
+                                WRN("Authoritativity mismatch: %s::%s says no, but %s::%s says yes?!", parent->name, pent->method, cls->name, start->method);
+                            }
+                            else
+                            {
+                                for(vtab_entry_t *next = start; next != NULL; )
                                 {
-                                    if(fncache.val[n].authoritative)
-                                    {
-                                        const char *method = fncache.val[n].name.method;
-                                        if(fncache.val[n].structor)
-                                        {
-                                            const char *class = fncache.val[n].name.class;
-                                            bool dest = method[0] == '~';
-                                            if(dest)
-                                            {
-                                                ++method;
-                                            }
-                                            size_t clslen = strlen(class);
-                                            if(strncmp(method, class, clslen) != 0)
-                                            {
-                                                WRN("Bad %sstructor: %s::%s", dest ? "de" : "con", class, method);
-                                                continue;
-                                            }
-                                            method += clslen;
-                                            char *m = NULL;
-                                            asprintf(&m, "%s%s%s", dest ? "~" : "", meta->name, method);
-                                            if(!m)
-                                            {
-                                                ERRNO("asprintf(structor)");
-                                                return -1;
-                                            }
-                                            method = m;
-                                        }
-                                        ARRNEXT(fncache, entry);
-                                        entry->addr = func;
-                                        entry->name.class = meta->name;
-                                        entry->name.method = method;
-                                        entry->pac = pac;
-                                        entry->structor = fncache.val[n].structor;
-                                        entry->authoritative = fncache.val[n].authoritative;
-                                    }
-                                    break;
+                                    next->method = method;
+                                    next->authoritative = true;
+                                    vtab_entry_t *tmp = next;
+                                    next = next->chain;
+                                    tmp->chain = NULL;
                                 }
                             }
                         }
-                        if(!entry)
-                        {
-                            char *method = NULL;
-                            asprintf(&method, "fn_0x%lx()", idx * sizeof(kptr_t));
-                            if(!method)
-                            {
-                                ERRNO("asprintf(method)");
-                                return -1;
-                            }
-                            ARRNEXT(fncache, entry);
-                            entry->addr = func;
-                            entry->name.class = meta->name;
-                            entry->name.method = method;
-                            entry->pac = pac;
-                            entry->structor = 0;
-                            entry->authoritative = 0;
-                        }
-                        vtab_override_t *ovrd = malloc(sizeof(vtab_override_t));
-                        if(!ovrd)
-                        {
-                            ERRNO("malloc(ovrd)");
-                            return -1;
-                        }
-                        ovrd->next = NULL;
-                        ovrd->name.class = entry->name.class;
-                        ovrd->name.method = entry->name.method;
-                        ovrd->old = pvtab ? kuntag(kbase, x1469, pvtab[idx], NULL) : 0;
-                        ovrd->new = entry->addr;
-                        ovrd->idx = idx;
-                        ovrd->pac = entry->pac;
-                        *(meta->overrides.nextP) = ovrd;
-                        meta->overrides.nextP = &ovrd->next;
                     }
                 }
-                meta->overrides_done = 1;
+#undef KOFF
+                meta->methods_done = 1;
                 done:;
                 if(do_again)
                 {
                     goto again;
                 }
             }
-            free(fncache.val);
             if(relocs)
             {
                 free(relocs);
@@ -2659,9 +2665,10 @@ int main(int argc, const char **argv)
             for(size_t i = 0; i < lsize; ++i)
             {
                 metaclass_t *m = list[i];
-                for(vtab_override_t *ovr = m->overrides.head; ovr != NULL; ovr = ovr->next)
+                for(size_t i = 0; i < m->nmethods; ++i)
                 {
-                    if(strncmp(ovr->name.method, filt_override, slen) == 0 && ovr->name.method[slen] == '(') // TODO: fix dirty hack
+                    vtab_entry_t *ent = &m->methods[i];
+                    if(ent->overrides && strncmp(ent->method, filt_override, slen) == 0 && ent->method[slen] == '(') // TODO: fix dirty hack
                     {
                         list[nsize++] = m;
                         break;

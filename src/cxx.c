@@ -32,7 +32,7 @@ static int demangle_num(const char **ptr)
     return ret;
 }
 
-bool cxx_demangle(const char *sym, char **classptr, char **methodptr, bool *structorptr)
+bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr, bool *structorptr)
 {
     if(strncmp(sym, "__ZN", 4) != 0)
     {
