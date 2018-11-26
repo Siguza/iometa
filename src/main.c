@@ -2583,10 +2583,6 @@ int main(int argc, const char **argv)
                     else
                     {
                         func = kuntag(kbase, x1469, mvtab[idx], &pac);
-                        if(pent && pac != pent->pac) // TODO: reloc parent?
-                        {
-                            WRN("PAC mismatch method 0x%lx: %s 0x%04hx vs 0x%04hx %s", idx * sizeof(kptr_t), meta->name, pac, pent->pac, parent->name);
-                        }
                         cxx_sym = find_sym_by_addr(func, asyms, nsyms);
                         overrides = !pent || func != pent->addr;
                     }
@@ -2623,6 +2619,13 @@ int main(int argc, const char **argv)
                     else
                     {
                         DBG("Found no symbol for virtual function " ADDR, func);
+                    }
+                    if(!is_in_reloc) // TODO: reloc parent?
+                    {
+                        if(pent && pac != pent->pac && func != -1 && pent->addr != -1) // ignore pure_virtual
+                        {
+                            WRN("PAC mismatch method 0x%lx: %s 0x%04hx vs 0x%04hx %s", idx * sizeof(kptr_t), meta->name, pac, pent->pac, parent->name);
+                        }
                     }
 
                     if(!method && pent)
