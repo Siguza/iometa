@@ -18,41 +18,77 @@
 #pragma pack(4)
 typedef struct
 {
-    uint32_t Rd     : 5,
+    uint32_t Rd     :  5,
              immhi  : 19,
-             op2    : 5,
-             immlo  : 2,
-             op1    : 1;
+             op2    :  5,
+             immlo  :  2,
+             op1    :  1;
 } adr_t;
 
 typedef struct
 {
-    uint32_t Rd     : 5,
-             Rn     : 5,
+    uint32_t Rd     :  5,
+             Rn     :  5,
              imm    : 12,
-             shift  : 2,
-             op     : 7,
-             sf     : 1;
+             shift  :  2,
+             op     :  7,
+             sf     :  1;
 } add_imm_t, sub_imm_t;
 
 typedef struct
 {
-    uint32_t Rt     : 5,
-             Rn     : 5,
+    uint32_t Rt     :  5,
+             Rn     :  5,
              imm    : 12,
-             op2    : 8,
-             sf     : 1,
-             op1    : 1;
+             op2    :  8,
+             sf     :  1,
+             op1    :  1;
 } ldr_imm_uoff_t;
 
 typedef struct
 {
-    uint32_t Rt     : 5,
+    uint32_t Rt     :  5,
              imm    : 19,
+             op2    :  6,
+             sf     :  1,
+             op1    :  1;
+} ldr_lit_t;
+
+typedef struct
+{
+    uint32_t Rt     : 5,
+             Rn     : 5,
+             Rt2    : 5,
+             imm    : 7,
+             op     : 9,
+             sf     : 1;
+} ldp_t, stp_t;
+
+typedef struct
+{
+    uint32_t Rt     : 5,
+             Rn     : 5,
+             Rt2    : 5,
+             op3    : 1,
+             Rs     : 5,
+             op2    : 9,
+             sf     : 1,
+             op1    : 1;
+} ldxr_t, stxr_t;
+
+typedef struct
+{
+    uint32_t Rt     : 5,
+             Rn     : 5,
+             op4    : 6,
+             Rs     : 5,
+             op3    : 1,
+             R      : 1,
+             A      : 1,
              op2    : 6,
              sf     : 1,
              op1    : 1;
-} ldr_lit_t;
+} ldadd_t;
 
 /*typedef struct
 {
@@ -80,23 +116,13 @@ typedef struct
 
 typedef struct
 {
-    uint32_t Rt     : 5,
-             Rn     : 5,
+    uint32_t Rt     :  5,
+             Rn     :  5,
              imm    : 12,
-             op2    : 8,
-             sf     : 1,
-             op1    : 1;
+             op2    :  8,
+             sf     :  1,
+             op1    :  1;
 } str_uoff_t;
-
-typedef struct
-{
-    uint32_t Rt     : 5,
-             Rn     : 5,
-             Rt2    : 5,
-             imm    : 7,
-             op     : 9,
-             sf     : 1;
-} stp_t;
 
 /*typedef struct
 {
@@ -110,34 +136,42 @@ typedef struct
 
 typedef struct
 {
-    uint32_t op2    : 5,
-             Rn     : 5,
+    uint32_t op2    :  5,
+             Rn     :  5,
              op1    : 22;
 } br_t;
 
 typedef struct
 {
     uint32_t imm    : 26,
-             op     : 5,
-             mode   : 1;
-} bl_t;
+             op     :  5,
+             mode   :  1;
+} bl_t, b_t;
 
 typedef struct
 {
-    uint32_t Rd     : 5,
+    uint32_t Rt     :  5,
+             imm    : 19,
+             op     :  7,
+             sf     :  1;
+} cbz_t;
+
+typedef struct
+{
+    uint32_t Rd     :  5,
              op2    : 11,
-             Rm     : 5,
+             Rm     :  5,
              op1    : 10,
-             sf     : 1;
+             sf     :  1;
 } mov_t;
 
 typedef struct
 {
-    uint32_t Rd     : 5,
+    uint32_t Rd     :  5,
              imm    : 16,
-             hw     : 2,
-             op     : 8,
-             sf     : 1;
+             hw     :  2,
+             op     :  8,
+             sf     :  1;
 } movz_t, movk_t, movn_t;
 
 typedef struct
@@ -153,31 +187,31 @@ typedef struct
 
 typedef struct
 {
-    uint32_t Rd     : 5,
-             Rn     : 5,
-             key    : 1,
-             data   : 1,
-             op2    : 1,
-             Z      : 1,
+    uint32_t Rd     :  5,
+             Rn     :  5,
+             key    :  1,
+             data   :  1,
+             op2    :  1,
+             Z      :  1,
              op1    : 18;
 } pac_t;
 
 typedef struct
 {
-    uint32_t op3    : 5,
-             x      : 1,
-             key    : 1,
-             op2    : 2,
-             C      : 1,
+    uint32_t op3    :  5,
+             x      :  1,
+             key    :  1,
+             op2    :  2,
+             C      :  1,
              op1    : 22;
 } pacsys_t;
 
 typedef struct
 {
-    uint32_t Rd     : 5,
-             Rn     : 5,
-             op2    : 6,
-             Rm     : 5,
+    uint32_t Rd     :  5,
+             Rn     :  5,
+             op2    :  6,
+             Rm     :  5,
              op1    : 11;
 } pacga_t;
 
@@ -236,6 +270,61 @@ static inline int64_t get_ldr_lit_off(ldr_lit_t *ldr)
     return (((int64_t)ldr->imm) << (64 - 19)) >> (64 - 21);
 }
 
+static inline bool is_ldxr(ldxr_t *ldxr)
+{
+    return ldxr->op1 == 1 && ldxr->op2 == 0x42 && ldxr->op3 == 0 && ldxr->Rs == 0x1f && ldxr->Rt2 == 0x1f;
+}
+
+static inline bool is_stxr(stxr_t *stxr)
+{
+    return stxr->op1 == 1 && stxr->op2 == 0x40 && stxr->op3 == 0 && stxr->Rt2 == 0x1f;
+}
+
+static inline bool is_ldadd(ldadd_t *ldadd)
+{
+    return ldadd->op4 == 0 && ldadd->op3 == 1 && ldadd->op2 == 0x38 && ldadd->op1 == 1;
+}
+
+static inline bool is_ldp_pre(ldp_t *ldp)
+{
+    return ldp->op == 0xa7;
+}
+
+static inline bool is_ldp_post(ldp_t *ldp)
+{
+    return ldp->op == 0xa3;
+}
+
+static inline bool is_ldp_uoff(ldp_t *ldp)
+{
+    return ldp->op == 0xa5;
+}
+
+static inline int64_t get_ldp_off(ldp_t *ldp)
+{
+    return ((int64_t)ldp->imm << (64 - 7)) >> (64 - 7 - (2 + ldp->sf));
+}
+
+static inline bool is_stp_pre(stp_t *stp)
+{
+    return stp->op == 0xa6;
+}
+
+static inline bool is_stp_post(stp_t *stp)
+{
+    return stp->op == 0xa2;
+}
+
+static inline bool is_stp_uoff(stp_t *stp)
+{
+    return stp->op == 0xa4;
+}
+
+static inline int64_t get_stp_off(stp_t *stp)
+{
+    return ((int64_t)stp->imm << (64 - 7)) >> (64 - 7 - (2 + stp->sf));
+}
+
 /*static inline bool is_str_reg(str_reg_t *str)
 {
     return str->op1 == 1 && str->op2 == 0x1c1 && str->op3 == 2;
@@ -266,21 +355,6 @@ static inline uint32_t get_str_uoff(str_uoff_t *str)
     return str->imm << (2 + str->sf);
 }
 
-static inline bool is_stp_pre(stp_t *stp)
-{
-    return stp->op == 0xa6;
-}
-
-static inline int64_t get_stp_pre_off(stp_t *stp)
-{
-    return ((int64_t)stp->imm << (64 - 7)) >> (64 - 7 - (2 + stp->sf));
-}
-
-static inline bool is_stp_uoff(stp_t *stp)
-{
-    return stp->op == 0xa4;
-}
-
 /*static inline bool is_stp_fp_uoff(stp_fp_t *stp)
 {
     return stp->op == 0xb4;
@@ -293,12 +367,32 @@ static inline bool is_br(br_t *br)
 
 static inline bool is_bl(bl_t *bl)
 {
-    return bl->op == 0x5;
+    return bl->op == 0x5 && bl->mode == 1;
+}
+
+static inline bool is_b(bl_t *b)
+{
+    return b->op == 0x5 && b->mode == 0;
 }
 
 static inline int64_t get_bl_off(bl_t *bl)
 {
     return (((int64_t)bl->imm) << (64 - 26)) >> (64 - 26 - 2);
+}
+
+static inline bool is_cbz(cbz_t *cbz)
+{
+    return cbz->op == 0x34;
+}
+
+static inline bool is_cbnz(cbz_t *cbz)
+{
+    return cbz->op == 0x35;
+}
+
+static inline int64_t get_cbz_off(cbz_t *cbz)
+{
+    return (((int64_t)cbz->imm) << (64 - 19)) >> (64 - 19 - 2);
 }
 
 static inline bool is_mov(mov_t *mov)
@@ -344,6 +438,16 @@ static inline bool is_pacsys(pacsys_t *pacsys)
 static inline bool is_pacga(pacga_t *pacga)
 {
     return pacga->op1 == 0x4d6 && pacga->op2 == 0xc;
+}
+
+static inline bool is_aut(pac_t *pac)
+{
+    return pac->op1 == 0x36B04 && pac->op2 == 1;
+}
+
+static inline bool is_autsys(pacsys_t *pacsys)
+{
+    return pacsys->op1 == 0x3540c8 && pacsys->op2 == 0x3 && pacsys->op3 == 0x1f && (pacsys->x == 0 || pacsys->C == 1);
 }
 
 static inline bool is_nop(nop_t *nop)

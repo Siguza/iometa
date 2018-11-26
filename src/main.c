@@ -55,6 +55,7 @@ How this works:
 #include <stdio.h>              // fprintf, stderr
 #include <stdlib.h>             // malloc, realloc, qsort, exit
 #include <string.h>             // strerror, strcmp, strstr, memmem
+#include <strings.h>            // bzero
 #include <sys/mman.h>           // mmap
 #include <sys/stat.h>           // fstat
 #include <mach/machine.h>       // CPU_TYPE_ARM64
@@ -208,6 +209,7 @@ typedef struct metaclass
     kptr_t addr;
     kptr_t parent;
     kptr_t vtab;
+    kptr_t metavtab;
     kptr_t callsite;
     struct metaclass *parentP;
     const char *name;
@@ -336,18 +338,30 @@ static bool is_linear_inst(void *ptr)
            is_sub_imm(ptr) ||
            is_ldr_imm_uoff(ptr) ||
            is_ldr_lit(ptr) ||
+           is_ldp_pre(ptr) ||
+           is_ldp_post(ptr) ||
+           is_ldp_uoff(ptr) ||
+           is_ldxr(ptr) ||
+           is_ldadd(ptr) ||
            is_bl(ptr) ||
            is_mov(ptr) ||
            is_movz(ptr) ||
            is_movk(ptr) ||
            is_movn(ptr) ||
            is_orr(ptr) ||
+           is_str_pre(ptr) ||
+           is_str_post(ptr) ||
            is_str_uoff(ptr) ||
+           is_stp_pre(ptr) ||
+           is_stp_post(ptr) ||
            is_stp_uoff(ptr) ||
-           //is_stp_fp_uoff(ptr) ||||
+           is_stxr(ptr) ||
+           //is_stp_fp_uoff(ptr) ||
            is_pac(ptr) ||
            is_pacsys(ptr) ||
            is_pacga(ptr) ||
+           is_aut(ptr) ||
+           is_autsys(ptr) ||
            is_nop(ptr);
 }
 
@@ -356,11 +370,20 @@ typedef struct
     kptr_t x[32];
     uint32_t valid;
     uint32_t wide;
+    uint32_t host;
 } a64_state_t;
 
+typedef enum
+{
+    kEmuErr,
+    kEmuEnd,
+    kEmuRet,
+} emu_ret_t;
+
 // Best-effort emulation: halt on unknown instructions, keep track of which registers
-// hold known values and only operate on those. Ignore non-static memory.
-static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32_t *to, bool init)
+// hold known values and only operate on those. Ignore non-static memory unless
+// it is specifically marked as "host memory".
+static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32_t *to, bool init, bool assume_x0)
 {
     if(init)
     {
@@ -370,29 +393,143 @@ static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32
         }
         state->valid = 0;
         state->wide = 0;
+        state->host = 0;
     }
-    for(; from < to; ++from)
+    for(; from != to; ++from)
     {
+    continue_skip_increment:;
         void *ptr = from;
         kptr_t addr = off2addr(kernel, (uintptr_t)from - (uintptr_t)kernel);
-        if(is_nop(ptr) || is_str_uoff(ptr) || is_stp_uoff(ptr) /*|| is_stp_fp_uoff(ptr)*/ || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr))
+        if(is_nop(ptr) /*|| is_stp_fp_uoff(ptr)*/ || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr))
         {
             // Ignore/no change
         }
-        else if(is_stp_pre(ptr))
+        else if(is_str_pre(ptr) || is_str_post(ptr))
         {
-            stp_t *stp = (stp_t*)ptr;
+            str_imm_t *str = ptr;
+            if(state->valid & (1 << str->Rn)) // Only if valid
+            {
+                kptr_t staddr = state->x[str->Rn] + get_str_imm(str);
+                if(is_str_pre(str))
+                {
+                    state->x[str->Rn] = staddr;
+                }
+                else if(is_str_post(str))
+                {
+                    kptr_t tmp = state->x[str->Rn];
+                    state->x[str->Rn] = staddr;
+                    staddr = tmp;
+                }
+                if(state->host & (1 << str->Rn))
+                {
+                    if(!(state->valid & (1 << str->Rt)))
+                    {
+                        WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                        return kEmuErr;
+                    }
+                    if(str->sf)
+                    {
+                        *(uint64_t*)staddr = state->x[str->Rt];
+                    }
+                    else
+                    {
+                        *(uint32_t*)staddr = (uint32_t)state->x[str->Rt];
+                    }
+                }
+            }
+        }
+        else if(is_str_uoff(ptr))
+        {
+            str_uoff_t *str = ptr;
+            if((state->valid & (1 << str->Rn)) && (state->host & (1 << str->Rn)))
+            {
+                if(!(state->valid & (1 << str->Rt)))
+                {
+                    WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                    return kEmuErr;
+                }
+                kptr_t staddr = state->x[str->Rn] + get_str_uoff(str);
+                if(str->sf)
+                {
+                    *(uint64_t*)staddr = state->x[str->Rt];
+                }
+                else
+                {
+                    *(uint32_t*)staddr = (uint32_t)state->x[str->Rt];
+                }
+            }
+        }
+        else if(is_stp_pre(ptr) || is_stp_post(ptr) || is_stp_uoff(ptr))
+        {
+            stp_t *stp = ptr;
             if(state->valid & (1 << stp->Rn)) // Only if valid
             {
-                state->x[stp->Rn] += get_stp_pre_off(stp);
+                kptr_t staddr = state->x[stp->Rn] + get_stp_off(stp);
+                if(is_stp_pre(stp))
+                {
+                    state->x[stp->Rn] = staddr;
+                }
+                else if(is_stp_post(stp))
+                {
+                    kptr_t tmp = state->x[stp->Rn];
+                    state->x[stp->Rn] = staddr;
+                    staddr = tmp;
+                }
+                if(state->host & (1 << stp->Rn))
+                {
+                    if(!(state->valid & (1 << stp->Rt)) || !(state->valid & (1 << stp->Rt2)))
+                    {
+                        WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                        return kEmuErr;
+                    }
+                    if(stp->sf)
+                    {
+                        uint64_t *p = (uint64_t*)staddr;
+                        p[0] = state->x[stp->Rt];
+                        p[1] = state->x[stp->Rt2];
+                    }
+                    else
+                    {
+                        uint32_t *p = (uint32_t*)staddr;
+                        p[0] = (uint32_t)state->x[stp->Rt];
+                        p[1] = (uint32_t)state->x[stp->Rt2];
+                    }
+                }
+            }
+        }
+        else if(is_stxr(ptr))
+        {
+            stxr_t *stxr = ptr;
+            // Always set success
+            state->x[stxr->Rs] = 0;
+            state->valid  |= 1 << stxr->Rs;
+            state->wide &= ~(1 << stxr->Rs);
+            state->host &= ~(1 << stxr->Rs);
+            if((state->valid & (1 << stxr->Rn)) && (state->host & (1 << stxr->Rn))) // Only if valid & host
+            {
+                if(!(state->valid & (1 << stxr->Rt)))
+                {
+                    WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                    return kEmuErr;
+                }
+                kptr_t staddr = state->x[stxr->Rn];
+                if(stxr->sf)
+                {
+                    *(uint64_t*)staddr = state->x[stxr->Rt];
+                }
+                else
+                {
+                    *(uint32_t*)staddr = (uint32_t)state->x[stxr->Rt];
+                }
             }
         }
         else if(is_adr(ptr) || is_adrp(ptr))
         {
-            adr_t *adr = (adr_t*)ptr;
+            adr_t *adr = ptr;
             state->x[adr->Rd] = (adr->op1 ? (addr & ~0xfff) : addr) + get_adr_off(adr);
-            state->valid |= 1 << adr->Rd;
-            state->wide  |= 1 << adr->Rd;
+            state->valid |=   1 << adr->Rd;
+            state->wide  |=   1 << adr->Rd;
+            state->host  &= ~(1 << adr->Rd);
         }
         else if(is_add_imm(ptr) || is_sub_imm(ptr))
         {
@@ -403,50 +540,166 @@ static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32
             }
             else
             {
-                state->x[add->Rd] = state->x[add->Rn] + (is_add_imm(add) ? 1 : -1) * get_add_sub_imm(add);
+                state->x[add->Rd] = state->x[add->Rn] + (is_add_imm(add) ? 1LL : -1LL) * get_add_sub_imm(add);
                 state->valid |= 1 << add->Rd;
                 state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
+                state->host = (state->host & ~(1 << add->Rd)) | (((state->host >> add->Rn) & 0x1) << add->Rd);
             }
         }
         else if(is_ldr_imm_uoff(ptr))
         {
-            ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)ptr;
+            ldr_imm_uoff_t *ldr = ptr;
             if(!(state->valid & (1 << ldr->Rn))) // Unset validity
             {
                 state->valid &= ~(1 << ldr->Rt);
             }
             else
             {
-                void *ldr_addr = addr2ptr(kernel, state->x[ldr->Rn] + get_ldr_imm_uoff(ldr));
+                kptr_t laddr = state->x[ldr->Rn] + get_ldr_imm_uoff(ldr);
+                void *ldr_addr = (state->host & (1 << ldr->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
-                    return false;
+                    return kEmuErr;
                 }
                 state->x[ldr->Rt] = *(kptr_t*)ldr_addr;
                 state->valid |= 1 << ldr->Rt;
                 state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
+                state->host &= ~(1 << ldr->Rt);
             }
         }
         else if(is_ldr_lit(ptr))
         {
-            ldr_lit_t *ldr = (ldr_lit_t*)ptr;
+            ldr_lit_t *ldr = ptr;
             void *ldr_addr = addr2ptr(kernel, addr + get_ldr_lit_off(ldr));
             if(!ldr_addr)
             {
-                return false;
+                return kEmuErr;
             }
             state->x[ldr->Rt] = *(kptr_t*)ldr_addr;
             state->valid |= 1 << ldr->Rt;
             state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
+            state->host &= ~(1 << ldr->Rt);
+        }
+        else if(is_ldp_pre(ptr) || is_ldp_post(ptr) || is_ldp_uoff(ptr))
+        {
+            ldp_t *ldp = ptr;
+            if(!(state->valid & (1 << ldp->Rn))) // Unset validity
+            {
+                state->valid &= ~((1 << ldp->Rt) | (1 << ldp->Rt2));
+            }
+            else
+            {
+                kptr_t laddr = state->x[ldp->Rn] + get_ldp_off(ldp);
+                if(is_ldp_pre(ldp))
+                {
+                    state->x[ldp->Rn] = laddr;
+                }
+                else if(is_ldp_post(ldp))
+                {
+                    kptr_t tmp = state->x[ldp->Rn];
+                    state->x[ldp->Rn] = laddr;
+                    laddr = tmp;
+                }
+                void *ldr_addr = (state->host & (1 << ldp->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                if(!ldr_addr)
+                {
+                    return kEmuErr;
+                }
+                if(ldp->sf)
+                {
+                    uint64_t *p = ldr_addr;
+                    state->x[ldp->Rt]  = p[0];
+                    state->x[ldp->Rt2] = p[1];
+                }
+                else
+                {
+                    uint32_t *p = ldr_addr;
+                    state->x[ldp->Rt]  = p[0];
+                    state->x[ldp->Rt2] = p[1];
+                }
+                state->valid |= (1 << ldp->Rt) | (1 << ldp->Rt2);
+                state->wide = (state->wide & ~((1 << ldp->Rt) | (1 << ldp->Rt2))) | (ldp->sf << ldp->Rt) | (ldp->sf << ldp->Rt2);
+                state->host &= ~((1 << ldp->Rt) | (1 << ldp->Rt2));
+            }
+        }
+        else if(is_ldxr(ptr))
+        {
+            ldxr_t *ldxr = ptr;
+            if(!(state->valid & (1 << ldxr->Rn))) // Unset validity
+            {
+                state->valid &= ~(1 << ldxr->Rt);
+            }
+            else
+            {
+                kptr_t laddr = state->x[ldxr->Rn];
+                void *ldr_addr = (state->host & (1 << ldxr->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                if(!ldr_addr)
+                {
+                    return kEmuErr;
+                }
+                state->x[ldxr->Rt] = *(kptr_t*)ldr_addr;
+                state->valid |= 1 << ldxr->Rt;
+                state->wide = (state->wide & ~(1 << ldxr->Rt)) | (ldxr->sf << ldxr->Rt);
+                state->host &= ~(1 << ldxr->Rt);
+            }
+        }
+        else if(is_ldadd(ptr))
+        {
+            ldadd_t *ldadd = ptr;
+            if(!(state->valid & (1 << ldadd->Rn))) // Unset validity
+            {
+                if(ldadd->Rt != 31)
+                {
+                    state->valid &= ~(1 << ldadd->Rt);
+                }
+            }
+            else
+            {
+                kptr_t daddr = state->x[ldadd->Rn];
+                void *ld_addr = (state->host & (1 << ldadd->Rn)) ? (void*)daddr : addr2ptr(kernel, daddr);
+                if(!ld_addr)
+                {
+                    return kEmuErr;
+                }
+                kptr_t val = *(kptr_t*)ld_addr;
+                if(ldadd->Rt != 31)
+                {
+                    state->x[ldadd->Rt] = val;
+                    state->valid |= 1 << ldadd->Rt;
+                    state->wide = (state->wide & ~(1 << ldadd->Rt)) | (ldadd->sf << ldadd->Rt);
+                    state->host &= ~(1 << ldadd->Rt);
+                }
+                if((state->host & (1 << ldadd->Rn)))
+                {
+                    if(!(state->valid & (1 << ldadd->Rs)))
+                    {
+                        WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                        return kEmuErr;
+                    }
+                    val += state->x[ldadd->Rs];
+                    if(ldadd->sf)
+                    {
+                        *(uint64_t*)ld_addr = val;
+                    }
+                    else
+                    {
+                        *(uint32_t*)ld_addr = (uint32_t)val;
+                    }
+                }
+            }
         }
         else if(is_bl(ptr))
         {
-            state->valid &= ~0x3FFFF;
+            state->valid &= ~0x3fffe;
+            if(!assume_x0 || !((state->valid & 0x1) && (state->host & 0x1)))
+            {
+                state->valid &= ~0x1;
+            }
             // TODO: x30?
         }
         else if(is_mov(ptr))
         {
-            mov_t *mov = (mov_t*)ptr;
+            mov_t *mov = ptr;
             if(!(state->valid & (1 << mov->Rm))) // Unset validity
             {
                 state->valid &= ~(1 << mov->Rd);
@@ -455,54 +708,120 @@ static bool a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32
             {
                 state->x[mov->Rd] = state->x[mov->Rm];
                 state->valid |= 1 << mov->Rd;
-                state->wide = (state->wide & ~(1 << mov->Rd)) | (mov->sf << mov->Rd);
+                state->wide = (state->wide & ~(1 << mov->Rd)) | (((state->wide >> mov->Rm) & 0x1 & mov->sf) << mov->Rd);
+                state->host = (state->host & ~(1 << mov->Rd)) | (((state->host >> mov->Rm) & 0x1) << mov->Rd);
             }
         }
         else if(is_movz(ptr))
         {
-            movz_t *movz = (movz_t*)ptr;
+            movz_t *movz = ptr;
             state->x[movz->Rd] = get_movzk_imm(movz);
             state->valid |= 1 << movz->Rd;
             state->wide = (state->wide & ~(1 << movz->Rd)) | (movz->sf << movz->Rd);
+            state->host &= ~(1 << movz->Rd);
         }
         else if(is_movk(ptr))
         {
-            movk_t *movk = (movk_t*)ptr;
+            movk_t *movk = ptr;
             if(state->valid & (1 << movk->Rd)) // Only if valid
             {
                 state->x[movk->Rd] = (state->x[movk->Rd] & ~(0xffff << (movk->hw << 4))) | get_movzk_imm(movk);
                 state->valid |= 1 << movk->Rd;
                 state->wide = (state->wide & ~(1 << movk->Rd)) | (movk->sf << movk->Rd);
+                state->host &= ~(1 << movk->Rd);
             }
         }
         else if(is_movn(ptr))
         {
-            movn_t *movn = (movn_t*)ptr;
+            movn_t *movn = ptr;
             state->x[movn->Rd] = get_movn_imm(movn);
             state->valid |= 1 << movn->Rd;
             state->wide = (state->wide & ~(1 << movn->Rd)) | (movn->sf << movn->Rd);
+            state->host &= ~(1 << movn->Rd);
         }
         else if(is_orr(ptr))
         {
-            orr_t *orr = (orr_t*)ptr;
+            orr_t *orr = ptr;
             if(orr->Rn == 31 || (state->valid & (1 << orr->Rn)))
             {
                 state->x[orr->Rd] = (orr->Rd == 31 ? 0 : state->x[orr->Rd]) | get_orr_imm(orr);
                 state->valid |= 1 << orr->Rd;
                 state->wide = (state->wide & ~(1 << orr->Rd)) | (orr->sf << orr->Rd);
+                state->host &= ~(1 << orr->Rd);
             }
             else
             {
                 state->valid &= ~(1 << orr->Rd);
             }
         }
+        else if(is_b(ptr))
+        {
+            from = (uint32_t*)((uintptr_t)from + get_bl_off(ptr));
+            goto continue_skip_increment;
+        }
+        else if(is_cbz(ptr) || is_cbnz(ptr))
+        {
+            cbz_t *cbz = ptr;
+            if(!(state->valid & (1 << cbz->Rt)))
+            {
+                WRN("Cannot decide cbz/cbnz at " ADDR, addr);
+                return kEmuErr;
+            }
+            if((state->x[cbz->Rt] == 0) == is_cbz(cbz))
+            {
+                from = (uint32_t*)((uintptr_t)from + get_cbz_off(cbz));
+                goto continue_skip_increment;
+            }
+        }
+        else if(is_ret(ptr))
+        {
+            return kEmuRet;
+        }
         else
         {
             WRN("Unexpected instruction at " ADDR, addr);
-            return false;
+            return kEmuErr;
         }
     }
-    return true;
+    return kEmuEnd;
+}
+
+static bool is_vtab_store(uintptr_t base, uint32_t *m, kptr_t *vtab)
+{
+    // TODO: this entire thing could also be spread out with other instructions in between...
+    adr_t     *adrp = (adr_t*)(      m + 0);
+    add_imm_t *add1 = (add_imm_t*)(  m + 1);
+    add_imm_t *add2 = (add_imm_t*)(  m + 2);
+    pac_t     *pac  = (pac_t*)(      m + 3);
+    bool iz_pac = is_pac(pac);
+    str_uoff_t *stru = (str_uoff_t*)(m + (iz_pac ? 4 : 3));
+    if
+    (
+        is_adrp(adrp) && is_add_imm(add1) && is_add_imm(add2) && is_str_uoff(stru) && // TODO: adr + nop + add ?
+        adrp->Rd == add1->Rn && add1->Rd == add2->Rn && add2->Rd == stru->Rt &&
+        (!iz_pac || pac->Rd == add2->Rd) &&
+        get_str_uoff(stru) == 0 && get_add_sub_imm(add2) == 2 * sizeof(kptr_t) /*&&
+        (
+            stru->Rn == 0 ||
+            (
+                (state.valid & (1 << stru->Rn)) && (state.wide & (1 << stru->Rn)) && state.x[stru->Rn] == state.x[0] // can be e.g. x20
+            )
+        ) TODO: can't even check this without ability to trace unknown function return values */
+    )
+    {
+        kptr_t addr = ((uintptr_t)adrp - base) & ~0xfff;
+        addr += get_adr_off(adrp);
+        addr += get_add_sub_imm(add1);
+        addr += get_add_sub_imm(add2);
+        *vtab = addr;
+        return true;
+    }
+    return false;
+}
+
+static int compare_strings(const void *a, const void *b)
+{
+    return strcmp(*(char * const*)a, *(char * const*)b);
 }
 
 static int compare_names(const void *a, const void *b)
@@ -598,7 +917,7 @@ static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
     }
     if(opt.meta)
     {
-        printf("meta=" ADDR " parent=" ADDR " ", meta->addr, meta->parent);
+        printf("meta=" ADDR " parent=" ADDR " metavtab=" ADDR " ", meta->addr, meta->parent, meta->metavtab);
     }
     printf("%s%-*s%s", colorCyan, namelen, meta->name, colorReset);
     if(opt.bundle)
@@ -864,6 +1183,7 @@ int main(int argc, const char **argv)
     {
         filt_override = argv[aoff++];
     }
+    bool want_vtabs = opt.vtab || opt.overrides || opt.ofilt;
 
     int fd = open(argv[aoff], O_RDONLY);
     if(fd == -1)
@@ -1131,7 +1451,7 @@ int main(int argc, const char **argv)
                                     if(is_bl(bl))
                                     {
                                         a64_state_t state;
-                                        if(!a64_emulate(kernel, &state, mem, m, true))
+                                        if(a64_emulate(kernel, &state, mem, m, true, false) != kEmuEnd)
                                         {
                                             // a64_emulate should've printed error already
                                             goto skip;
@@ -1267,6 +1587,7 @@ int main(int argc, const char **argv)
     }
 
     ARRDECL(metaclass_t, metas, 0x1000);
+    ARRDECL(const char*, namelist, 0x1000);
 
     FOREACH_CMD(hdr, cmd)
     {
@@ -1309,8 +1630,20 @@ int main(int argc, const char **argv)
                                     --fnstart;
                                 }
                                 a64_state_t state;
-                                if(a64_emulate(kernel, &state, fnstart, mem, true))
+                                if(a64_emulate(kernel, &state, fnstart, mem, true, false) == kEmuEnd)
                                 {
+                                    const char *name = NULL;
+                                    if((state.valid & 0x2) && (state.wide & 0x2))
+                                    {
+                                        name = addr2ptr(kernel, state.x[1]);
+                                        if(!name)
+                                        {
+                                            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state.x[1], kuntag(kbase, x1469, state.x[1], NULL));
+                                            ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
+                                            return -1;
+                                        }
+                                    }
+
                                     if((state.valid & 0x1) != 0x1)
                                     {
                                         if(unknown)
@@ -1320,45 +1653,66 @@ int main(int argc, const char **argv)
                                         else
                                         {
                                             DBG("Skipping constructor call without x0 at " ADDR, bladdr);
-                                            // TODO: grab class name anyway?
                                         }
-                                        goto next;
+                                        // Fall through
                                     }
-                                    if((state.valid & 0xe) != 0xe)
+                                    else if((state.valid & 0xe) != 0xe)
                                     {
                                         if(unknown)
                                         {
                                             WRN("Hit unknown instruction at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)(fnstart - 1) - ((uintptr_t)kernel + seg->fileoff)), bladdr);
                                         }
                                         WRN("Skipping constructor call without x1-x3 (%x) at " ADDR, state.valid, bladdr);
-                                        goto next;
+                                        // Fall through
                                     }
-                                    if((state.wide & 0xf) != 0x7)
+                                    else if((state.wide & 0xf) != 0x7)
                                     {
                                         WRN("Skipping constructor call with unexpected registers width (%x) at " ADDR, state.wide, bladdr);
+                                        // Fall through
+                                    }
+                                    else
+                                    {
+                                        DBG("Processing constructor call at " ADDR " (%s)", bladdr, name);
+                                        metaclass_t *meta;
+                                        ARRNEXT(metas, meta);
+                                        meta->addr = state.x[0];
+                                        meta->parent = state.x[2];
+                                        meta->vtab = 0;
+                                        meta->metavtab = 0;
+                                        meta->callsite = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
+                                        meta->parentP = NULL;
+                                        meta->name = name;
+                                        meta->bundle = NULL;
+                                        meta->methods = NULL;
+                                        meta->nmethods = 0;
+                                        meta->objsize = state.x[3];
+                                        meta->methods_done = 0;
+                                        meta->methods_err = 0;
+                                        meta->reserved = 0;
+                                        if(want_vtabs)
+                                        {
+                                            uintptr_t base = ((uintptr_t)kernel + seg->fileoff) - seg->vmaddr;
+                                            for(uint32_t *m = mem + 1; is_linear_inst(m); ++m)
+                                            {
+                                                kptr_t metavtab;
+                                                if(is_vtab_store(base, m, &metavtab))
+                                                {
+                                                    meta->metavtab = metavtab;
+                                                    break;
+                                                }
+                                            }
+                                            if(!meta->metavtab)
+                                            {
+                                                WRN("Failed to find metavtab for %s", name);
+                                            }
+                                        }
+                                        // Do NOT fall through
                                         goto next;
                                     }
-                                    DBG("Processing constructor call at " ADDR, bladdr);
-                                    metaclass_t *meta;
-                                    ARRNEXT(metas, meta);
-                                    meta->addr = state.x[0];
-                                    meta->parent = state.x[2];
-                                    meta->vtab = 0;
-                                    meta->callsite = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
-                                    meta->parentP = NULL;
-                                    meta->name = addr2ptr(kernel, state.x[1]);
-                                    meta->bundle = NULL;
-                                    meta->methods = NULL;
-                                    meta->nmethods = 0;
-                                    meta->objsize = state.x[3];
-                                    meta->methods_done = 0;
-                                    meta->methods_err = 0;
-                                    meta->reserved = 0;
-                                    if(!meta->name)
+                                    // We only get here on failure:
+                                    if(name)
                                     {
-                                        DBG("meta->name: " ADDR " (untagged: " ADDR ")", state.x[1], kuntag(kbase, x1469, state.x[1], NULL));
-                                        ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
-                                        return -1;
+                                        ARRPUSH(namelist, name);
                                     }
                                 }
                                 next:;
@@ -1395,7 +1749,30 @@ int main(int argc, const char **argv)
         }
     }
 
-    if(opt.vtab || opt.overrides || opt.ofilt)
+    DBG("Got %lu names (probably a ton of dupes)", namelist.idx);
+    qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_strings);
+    for(size_t i = 0; i < namelist.idx; ++i)
+    {
+        const char *current = namelist.val[i];
+        if(i > 0 && strcmp(current, namelist.val[i - 1]) == 0)
+        {
+            continue;
+        }
+        for(size_t j = 0; j < metas.idx; ++j)
+        {
+            if(strcmp(current, metas.val[j].name) == 0)
+            {
+                goto onward;
+            }
+        }
+        WRN("Failed to find MetaClass constructor for %s", current);
+        onward:;
+    }
+    free(namelist.val);
+    namelist.val = NULL;
+    namelist.size = namelist.idx = 0;
+
+    if(want_vtabs)
     {
         metaclass_t *metaclassHandle = NULL;
         kptr_t OSMetaClassMetaClass = 0;
@@ -1468,7 +1845,8 @@ int main(int argc, const char **argv)
                                     }
                                     state.valid = 1;
                                     state.wide = 1;
-                                    if(a64_emulate(kernel, &state, start, mem, false))
+                                    state.host = 0;
+                                    if(a64_emulate(kernel, &state, start, mem, false, false) == kEmuEnd)
                                     {
                                         if(!(state.valid & (1 << str->Rn)) || !(state.wide & (1 << str->Rn)) || !(state.valid & (1 << str->Rt)) || !(state.wide & (1 << str->Rt)))
                                         {
@@ -1563,36 +1941,223 @@ int main(int argc, const char **argv)
                 }
             }
         }
-        size_t VtabGetMetaClassOff = 0;
-        if(!OSObjectVtab)
+        size_t VtabGetMetaClassIdx = 0;
+        // block for variable scoping
         {
-            ERR("Failed to find OSObjectVtab.");
-            return -1;
-        }
-        if(!OSObjectGetMetaClass)
-        {
-            ERR("Failed to find OSObjectGetMetaClass.");
-            return -1;
-        }
-        kptr_t *ovtab = addr2ptr(kernel, OSObjectVtab);
-        if(!ovtab)
-        {
-            ERR("OSObjectVtab lies outside all segments.");
-            return -1;
-        }
-        for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
-        {
-            if(kuntag(kbase, x1469, ovtab[i], NULL) == OSObjectGetMetaClass)
+            if(!OSObjectVtab)
             {
-                VtabGetMetaClassOff = i;
-                DBG("VtabGetMetaClassOff: 0x%lx", VtabGetMetaClassOff);
-                break;
+                ERR("Failed to find OSObjectVtab.");
+                return -1;
+            }
+            if(!OSObjectGetMetaClass)
+            {
+                ERR("Failed to find OSObjectGetMetaClass.");
+                return -1;
+            }
+            kptr_t *ovtab = addr2ptr(kernel, OSObjectVtab);
+            if(!ovtab)
+            {
+                ERR("OSObjectVtab lies outside all segments.");
+                return -1;
+            }
+            for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
+            {
+                if(kuntag(kbase, x1469, ovtab[i], NULL) == OSObjectGetMetaClass)
+                {
+                    VtabGetMetaClassIdx = i;
+                    DBG("VtabGetMetaClassIdx: 0x%lx", VtabGetMetaClassIdx);
+                    break;
+                }
+            }
+            if(!VtabGetMetaClassIdx)
+            {
+                ERR("Failed to find OSObjectGetMetaClass in OSObjectVtab.");
+                return -1;
             }
         }
-        if(!VtabGetMetaClassOff)
+
+        kptr_t pure_virtual = 0;
+        size_t VtabAllocIdx = 0;
+        if(hdr->filetype != MH_KEXT_BUNDLE)
         {
-            ERR("Failed to find OSObjectGetMetaClass in OSObjectVtab.");
-            return -1;
+            do
+            {
+                pure_virtual = find_sym_by_name("___cxa_pure_virtual", bsyms, nsyms);
+                if(pure_virtual)
+                {
+                    break;
+                }
+
+                ARRDECL(kptr_t, strref, 4);
+                find_str(kernel, kernelsize, &strref, "__cxa_pure_virtual");
+                if(strref.idx == 0)
+                {
+                    DBG("Failed to find string: __cxa_pure_virtual");
+                    break;
+                }
+                DBG("Found \"__cxa_pure_virtual\" %lu times", strref.idx);
+
+                FOREACH_CMD(hdr, cmd)
+                {
+                    if(cmd->cmd == MACH_SEGMENT)
+                    {
+                        mach_seg_t *seg = (mach_seg_t*)cmd;
+                        if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
+                        {
+                            uintptr_t start = (uintptr_t)kernel + seg->fileoff;
+                            STEP_MEM(uint32_t, mem, start, seg->filesize, 6)
+                            {
+                                adr_t      *adr1 = (adr_t*     )(mem + 0);
+                                add_imm_t  *add1 = (add_imm_t* )(mem + 1);
+                                str_imm_t  *stri = (str_imm_t* )(mem + 2);
+                                str_uoff_t *stru = (str_uoff_t*)(mem + 2);
+                                adr_t      *adr2 = (adr_t*     )(mem + 3);
+                                add_imm_t  *add2 = (add_imm_t* )(mem + 4);
+                                bl_t       *bl   = (bl_t*      )(mem + 5);
+                                if
+                                (
+                                    is_bl(bl) &&
+                                    (
+                                        (is_adr(adr2)  && is_nop(mem + 4)  && adr2->Rd == 0) ||
+                                        (is_adrp(adr2) && is_add_imm(add2) && adr2->Rd == add2->Rn && add2->Rd == 0)
+                                    ) &&
+                                    (
+                                        (is_str_uoff(stru) && stru->Rn == 31 && get_str_uoff(stru) == 0) ||
+                                        (is_str_pre(stri)  && stri->Rn == 31)
+                                    ) &&
+                                    (
+                                        // stri and stru have Rt and Rn at same offsets
+                                        (is_adr(adr1)  && is_nop(mem + 1)  && adr1->Rd == stru->Rt) ||
+                                        (is_adrp(adr1) && is_add_imm(add1) && adr1->Rd == add1->Rn && add1->Rd == stru->Rt)
+                                    )
+                                )
+                                {
+                                    kptr_t refloc = off2addr(kernel, (uintptr_t)adr1 - (uintptr_t)kernel),
+                                           ref1   = refloc,
+                                           ref2   = refloc + 3 * sizeof(uint32_t);
+                                    if(is_adrp(adr1))
+                                    {
+                                        ref1 &= ~0xfff;
+                                        ref1 += get_add_sub_imm(add1);
+                                    }
+                                    ref1 += get_adr_off(adr1);
+                                    for(size_t i = 0; i < strref.idx; ++i)
+                                    {
+                                        if(ref1 == strref.val[i])
+                                        {
+                                            DBG("Found ref to \"__cxa_pure_virtual\" at " ADDR, refloc);
+                                            goto ref_matches;
+                                        }
+                                    }
+                                    continue;
+
+                                    ref_matches:;
+                                    if(is_adrp(adr2))
+                                    {
+                                        ref2 &= ~0xfff;
+                                        ref2 += get_add_sub_imm(add2);
+                                    }
+                                    ref2 += get_adr_off(adr2);
+                                    const char *x0 = addr2ptr(kernel, ref2);
+                                    if(strcmp(x0, "\"%s\"") != 0)
+                                    {
+                                        DBG("__cxa_pure_virtual: x0 != \"%%s\"");
+                                        continue;
+                                    }
+
+                                    uint32_t *loc = mem;
+                                    add_imm_t *add = (add_imm_t*)(loc - 1);
+                                    if(!(is_add_imm(add) && add->Rd == 29 && add->Rn == 31)) // ignore add amount
+                                    {
+                                        DBG("__cxa_pure_virtual: add x29, sp, ...");
+                                        continue;
+                                    }
+                                    loc--;
+                                    refloc -= sizeof(uint32_t);
+
+                                    stp_t *stp = (stp_t*)(loc - 1);
+                                    if(!((is_stp_uoff(stp) || is_stp_pre(stp)) && stp->Rt == 29 && stp->Rt2 == 30 && stp->Rn == 31))
+                                    {
+                                        DBG("__cxa_pure_virtual: stp x29, x30, [sp, ...]");
+                                        continue;
+                                    }
+                                    loc--;
+                                    refloc -= sizeof(uint32_t);
+
+                                    if(is_stp_uoff(stp))
+                                    {
+                                        sub_imm_t *sub = (sub_imm_t*)(loc - 1);
+                                        if(!(is_sub_imm(sub) && sub->Rd == 31 && sub->Rn == 31))
+                                        {
+                                            DBG("__cxa_pure_virtual: sub sp, sp, ...");
+                                            continue;
+                                        }
+                                        loc--;
+                                        refloc -= sizeof(uint32_t);
+                                    }
+                                    pacsys_t *pac = (pacsys_t*)(loc - 1);
+                                    if(is_pacsys(pac))
+                                    {
+                                        loc--;
+                                        refloc -= sizeof(uint32_t);
+                                    }
+                                    if(pure_virtual == -1)
+                                    {
+                                        DBG("__cxa_pure_virtual candidate: " ADDR, refloc);
+                                    }
+                                    else if(pure_virtual != 0)
+                                    {
+                                        DBG("__cxa_pure_virtual candidate: " ADDR, pure_virtual);
+                                        DBG("__cxa_pure_virtual candidate: " ADDR, refloc);
+                                        pure_virtual = -1;
+                                    }
+                                    else
+                                    {
+                                        pure_virtual = refloc;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } while(0);
+            if(pure_virtual == -1)
+            {
+                WRN("Multiple __cxa_pure_virtual candidates!");
+                pure_virtual = 0;
+            }
+            else if(pure_virtual)
+            {
+                DBG("__cxa_pure_virtual: " ADDR, pure_virtual);
+            }
+            else
+            {
+                WRN("Failed to find __cxa_pure_virtual");
+            }
+
+            if(pure_virtual && OSMetaClassVtab)
+            {
+                kptr_t *ovtab = addr2ptr(kernel, OSMetaClassVtab);
+                if(!ovtab)
+                {
+                    ERR("OSMetaClassVtab lies outside all segments.");
+                    return -1;
+                }
+                for(size_t i = 0; ovtab[i] != 0; ++i)
+                {
+                    if(kuntag(kbase, x1469, ovtab[i], NULL) == pure_virtual)
+                    {
+                        VtabAllocIdx = i;
+                        DBG("VtabAllocIdx: 0x%lx", VtabAllocIdx);
+                        break;
+                    }
+                }
+                if(!VtabAllocIdx)
+                {
+                    ERR("Failed to find OSMetaClassAlloc in OSMetaClassVtab.");
+                    return -1;
+                }
+            }
         }
 
         ARRDECL(kptr_t, candidates, 0x100);
@@ -1649,15 +2214,15 @@ int main(int argc, const char **argv)
                                                 mach_seg_t *seg2 = (mach_seg_t*)cmd2;
                                                 if
                                                 (
-                                                    seg2->filesize > (VtabGetMetaClassOff + 2) * sizeof(kptr_t) &&
+                                                    seg2->filesize > (VtabGetMetaClassIdx + 2) * sizeof(kptr_t) &&
                                                     (strcmp("__DATA", seg2->segname) == 0 || strcmp("__DATA_CONST", seg2->segname) == 0 || strcmp("__PRELINK_DATA", seg2->segname) == 0 || strcmp("__PLK_DATA_CONST", seg2->segname) == 0)
                                                 )
                                                 {
-                                                    STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassOff + 2, seg2->filesize - (VtabGetMetaClassOff + 2) * sizeof(kptr_t), 1)
+                                                    STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassIdx + 2, seg2->filesize - (VtabGetMetaClassIdx + 2) * sizeof(kptr_t), 1)
                                                     {
-                                                        if(kuntag(kbase, x1469, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassOff - 1) == 0 && *(mem2 - VtabGetMetaClassOff - 2) == 0)
+                                                        if(kuntag(kbase, x1469, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
                                                         {
-                                                            kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassOff) - (uintptr_t)kernel);
+                                                            kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
                                                             if(meta->vtab == 0)
                                                             {
                                                                 meta->vtab = ref;
@@ -1678,6 +2243,7 @@ int main(int argc, const char **argv)
                                                 }
                                             }
                                         }
+#if 0
                                         if(candidates.idx > 0)
                                         {
                                             kptr_t cnd = 0;
@@ -1733,6 +2299,129 @@ int main(int argc, const char **argv)
                                                 meta->vtab = cnd;
                                             }
                                         }
+#endif
+                                        if(candidates.idx >= 2 && meta->metavtab && VtabAllocIdx)
+                                        {
+                                            DBG("Attempting to get vtab via %s::metaClass::alloc", meta->name);
+                                            kptr_t *ovtab = addr2ptr(kernel, meta->metavtab);
+                                            if(!ovtab)
+                                            {
+                                                ERR("Metavtab of %s lies outside all segments.", meta->name);
+                                                return -1;
+                                            }
+                                            kptr_t fnaddr = kuntag(kbase, x1469, ovtab[VtabAllocIdx], NULL);
+                                            FOREACH_CMD(hdr, cmd2)
+                                            {
+                                                if(cmd2->cmd == MACH_SEGMENT)
+                                                {
+                                                    mach_seg_t *seg2 = (mach_seg_t*)cmd2;
+                                                    if(seg2->vmaddr <= fnaddr && seg2->vmaddr + seg2->filesize > fnaddr)
+                                                    {
+                                                        uint32_t *end = (uint32_t*)((uintptr_t)kernel + seg2->fileoff + seg2->filesize),
+                                                                 *fnstart = (uint32_t*)((uintptr_t)kernel + seg2->fileoff + (fnaddr - seg2->vmaddr));
+                                                        bl_t *bl = NULL;
+                                                        for(uint32_t *m = fnstart; is_linear_inst(m); ++m)
+                                                        {
+                                                            if(is_bl((bl_t*)m))
+                                                            {
+                                                                bl = (bl_t*)m;
+                                                                break;
+                                                            }
+                                                        }
+                                                        if(!bl)
+                                                        {
+                                                            WRN("Failed to find call to kalloc/new in %s::metaClass::alloc", meta->name);
+                                                        }
+                                                        else
+                                                        {
+#define SPSIZE 0x1000
+                                                            void *sp = malloc(SPSIZE),
+                                                                 *obj = NULL;
+                                                            if(!sp)
+                                                            {
+                                                                ERR("malloc(sp)");
+                                                                return -1;
+                                                            }
+                                                            a64_state_t state;
+                                                            for(size_t i = 0; i < 31; ++i)
+                                                            {
+                                                                state.x[i] = 0;
+                                                            }
+                                                            state.x[31] = (uintptr_t)sp + SPSIZE;
+                                                            state.valid = 0xfff80000;
+                                                            state.wide  = 0xfff80000;
+                                                            state.host  = 0x80000000;
+                                                            switch(a64_emulate(kernel, &state, fnstart, (uint32_t*)bl, false, false))
+                                                            {
+                                                                case kEmuRet:
+                                                                    WRN("Unexpected ret in %s::metaClass::alloc", meta->name);
+                                                                    break;
+                                                                case kEmuEnd:
+                                                                    {
+                                                                        kptr_t allocsz;
+                                                                        if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && (state.host & 0x1) == 0x1) // kalloc
+                                                                        {
+                                                                            allocsz = *(kptr_t*)state.x[0];
+                                                                        }
+                                                                        else if((state.valid & 0xff) == 0x1 && (state.wide & 0x1) == 0x0) // new
+                                                                        {
+                                                                            allocsz = state.x[0];
+                                                                        }
+                                                                        else
+                                                                        {
+                                                                            WRN("Bad pre-bl state in %s::metaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
+                                                                            break;
+                                                                        }
+                                                                        if(allocsz != meta->objsize)
+                                                                        {
+                                                                            WRN("Alloc has wrong size in %s::metaClass::alloc", meta->name);
+                                                                            break;
+                                                                        }
+                                                                        uint32_t *m = (uint32_t*)bl;
+                                                                        if(a64_emulate(kernel, &state, m, m + 1, false, false) != kEmuEnd)
+                                                                        {
+                                                                            break;
+                                                                        }
+                                                                        obj = malloc(allocsz);
+                                                                        if(!obj)
+                                                                        {
+                                                                            ERR("malloc(obj)");
+                                                                            return -1;
+                                                                        }
+                                                                        bzero(obj, allocsz);
+                                                                        state.x[0] = (uintptr_t)obj;
+                                                                        state.valid |= 0x1;
+                                                                        state.wide  |= 0x1;
+                                                                        state.host  |= 0x1;
+                                                                        if(a64_emulate(kernel, &state, m + 1, end, false, true) != kEmuRet)
+                                                                        {
+                                                                            break;
+                                                                        }
+                                                                        if(!(state.valid & 0x1) || !(state.wide & 0x1) || !(state.host & 0x1))
+                                                                        {
+                                                                            WRN("Bad end state in %s::metaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
+                                                                            break;
+                                                                        }
+                                                                        kptr_t vt = *(kptr_t*)state.x[0];
+                                                                        if(!vt)
+                                                                        {
+                                                                            WRN("Failed to capture vtab via %s::metaClass::alloc", meta->name);
+                                                                            break;
+                                                                        }
+                                                                        meta->vtab = vt;
+                                                                    }
+                                                                default:
+                                                                    break;
+                                                            }
+                                                            if(obj) free(obj);
+                                                            free(sp);
+#undef SPSIZE
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
                                         break;
                                     }
                                 }
@@ -1743,6 +2432,8 @@ int main(int argc, const char **argv)
             }
         }
         free(candidates.val);
+        candidates.val = NULL;
+        candidates.size = candidates.idx = 0;
 
         for(size_t i = 0; i < metas.idx; ++i)
         {
@@ -1756,7 +2447,6 @@ int main(int argc, const char **argv)
         {
             char **relocs = NULL;
             size_t reloc_min = ~0, reloc_max = 0;
-            kptr_t pure_virtual = 0;
             if(hdr->filetype == MH_KEXT_BUNDLE)
             {
                 FOREACH_CMD(hdr, cmd)
@@ -1792,7 +2482,7 @@ int main(int argc, const char **argv)
                                 ERRNO("malloc(relocs)");
                                 return -1;
                             }
-                            memset(relocs, 0, relocsize);
+                            bzero(relocs, relocsize);
                             for(size_t i = 0; i < dstab->nextrel; ++i)
                             {
                                 relocs[(reloc[i].r_address - reloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx];
@@ -1800,163 +2490,6 @@ int main(int argc, const char **argv)
                         }
                         break;
                     }
-                }
-            }
-            else
-            {
-                do
-                {
-                    pure_virtual = find_sym_by_name("___cxa_pure_virtual", bsyms, nsyms);
-                    if(pure_virtual)
-                    {
-                        break;
-                    }
-
-                    ARRDECL(kptr_t, strref, 4);
-                    find_str(kernel, kernelsize, &strref, "__cxa_pure_virtual");
-                    if(strref.idx == 0)
-                    {
-                        DBG("Failed to find string: __cxa_pure_virtual");
-                        break;
-                    }
-                    DBG("Found \"__cxa_pure_virtual\" %lu times", strref.idx);
-
-                    FOREACH_CMD(hdr, cmd)
-                    {
-                        if(cmd->cmd == MACH_SEGMENT)
-                        {
-                            mach_seg_t *seg = (mach_seg_t*)cmd;
-                            if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
-                            {
-                                uintptr_t start = (uintptr_t)kernel + seg->fileoff;
-                                STEP_MEM(uint32_t, mem, start, seg->filesize, 6)
-                                {
-                                    adr_t      *adr1 = (adr_t*     )(mem + 0);
-                                    add_imm_t  *add1 = (add_imm_t* )(mem + 1);
-                                    str_imm_t  *stri = (str_imm_t* )(mem + 2);
-                                    str_uoff_t *stru = (str_uoff_t*)(mem + 2);
-                                    adr_t      *adr2 = (adr_t*     )(mem + 3);
-                                    add_imm_t  *add2 = (add_imm_t* )(mem + 4);
-                                    bl_t       *bl   = (bl_t*      )(mem + 5);
-                                    if
-                                    (
-                                        is_bl(bl) &&
-                                        (
-                                            (is_adr(adr2)  && is_nop(mem + 4)  && adr2->Rd == 0) ||
-                                            (is_adrp(adr2) && is_add_imm(add2) && adr2->Rd == add2->Rn && add2->Rd == 0)
-                                        ) &&
-                                        (
-                                            (is_str_uoff(stru) && stru->Rn == 31 && get_str_uoff(stru) == 0) ||
-                                            (is_str_pre(stri)  && stri->Rn == 31)
-                                        ) &&
-                                        (
-                                            // stri and stru have Rt and Rn at same offsets
-                                            (is_adr(adr1)  && is_nop(mem + 1)  && adr1->Rd == stru->Rt) ||
-                                            (is_adrp(adr1) && is_add_imm(add1) && adr1->Rd == add1->Rn && add1->Rd == stru->Rt)
-                                        )
-                                    )
-                                    {
-                                        kptr_t refloc = off2addr(kernel, (uintptr_t)adr1 - (uintptr_t)kernel),
-                                               ref1   = refloc,
-                                               ref2   = refloc + 3 * sizeof(uint32_t);
-                                        if(is_adrp(adr1))
-                                        {
-                                            ref1 &= ~0xfff;
-                                            ref1 += get_add_sub_imm(add1);
-                                        }
-                                        ref1 += get_adr_off(adr1);
-                                        for(size_t i = 0; i < strref.idx; ++i)
-                                        {
-                                            if(ref1 == strref.val[i])
-                                            {
-                                                DBG("Found ref to \"__cxa_pure_virtual\" at " ADDR, refloc);
-                                                goto ref_matches;
-                                            }
-                                        }
-                                        continue;
-
-                                        ref_matches:;
-                                        if(is_adrp(adr2))
-                                        {
-                                            ref2 &= ~0xfff;
-                                            ref2 += get_add_sub_imm(add2);
-                                        }
-                                        ref2 += get_adr_off(adr2);
-                                        const char *x0 = addr2ptr(kernel, ref2);
-                                        if(strcmp(x0, "\"%s\"") != 0)
-                                        {
-                                            DBG("__cxa_pure_virtual: x0 != \"%%s\"");
-                                            continue;
-                                        }
-
-                                        uint32_t *loc = mem;
-                                        add_imm_t *add = (add_imm_t*)(loc - 1);
-                                        if(!(is_add_imm(add) && add->Rd == 29 && add->Rn == 31)) // ignore add amount
-                                        {
-                                            DBG("__cxa_pure_virtual: add x29, sp, ...");
-                                            continue;
-                                        }
-                                        loc--;
-                                        refloc -= sizeof(uint32_t);
-
-                                        stp_t *stp = (stp_t*)(loc - 1);
-                                        if(!((is_stp_uoff(stp) || is_stp_pre(stp)) && stp->Rt == 29 && stp->Rt2 == 30 && stp->Rn == 31))
-                                        {
-                                            DBG("__cxa_pure_virtual: stp x29, x30, [sp, ...]");
-                                            continue;
-                                        }
-                                        loc--;
-                                        refloc -= sizeof(uint32_t);
-
-                                        if(is_stp_uoff(stp))
-                                        {
-                                            sub_imm_t *sub = (sub_imm_t*)(loc - 1);
-                                            if(!(is_sub_imm(sub) && sub->Rd == 31 && sub->Rn == 31))
-                                            {
-                                                DBG("__cxa_pure_virtual: sub sp, sp, ...");
-                                                continue;
-                                            }
-                                            loc--;
-                                            refloc -= sizeof(uint32_t);
-                                        }
-                                        pacsys_t *pac = (pacsys_t*)(loc - 1);
-                                        if(is_pacsys(pac))
-                                        {
-                                            loc--;
-                                            refloc -= sizeof(uint32_t);
-                                        }
-                                        if(pure_virtual == -1)
-                                        {
-                                            DBG("__cxa_pure_virtual candidate: " ADDR, refloc);
-                                        }
-                                        else if(pure_virtual != 0)
-                                        {
-                                            DBG("__cxa_pure_virtual candidate: " ADDR, pure_virtual);
-                                            DBG("__cxa_pure_virtual candidate: " ADDR, refloc);
-                                            pure_virtual = -1;
-                                        }
-                                        else
-                                        {
-                                            pure_virtual = refloc;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } while(0);
-                if(pure_virtual == -1)
-                {
-                    WRN("Multiple __cxa_pure_virtual candidates!");
-                    pure_virtual = 0;
-                }
-                else if(pure_virtual)
-                {
-                    DBG("__cxa_pure_virtual: " ADDR, pure_virtual);
-                }
-                else
-                {
-                    WRN("Failed to find __cxa_pure_virtual");
                 }
             }
             for(size_t i = 0; i < metas.idx; ++i)
