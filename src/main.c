@@ -786,39 +786,6 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
     return kEmuEnd;
 }
 
-static bool is_vtab_store(uintptr_t base, uint32_t *m, kptr_t *vtab)
-{
-    // TODO: this entire thing could also be spread out with other instructions in between...
-    adr_t     *adrp = (adr_t*)(      m + 0);
-    add_imm_t *add1 = (add_imm_t*)(  m + 1);
-    add_imm_t *add2 = (add_imm_t*)(  m + 2);
-    pac_t     *pac  = (pac_t*)(      m + 3);
-    bool iz_pac = is_pac(pac);
-    str_uoff_t *stru = (str_uoff_t*)(m + (iz_pac ? 4 : 3));
-    if
-    (
-        is_adrp(adrp) && is_add_imm(add1) && is_add_imm(add2) && is_str_uoff(stru) && // TODO: adr + nop + add ?
-        adrp->Rd == add1->Rn && add1->Rd == add2->Rn && add2->Rd == stru->Rt &&
-        (!iz_pac || pac->Rd == add2->Rd) &&
-        get_str_uoff(stru) == 0 && get_add_sub_imm(add2) == 2 * sizeof(kptr_t) /*&&
-        (
-            stru->Rn == 0 ||
-            (
-                (state.valid & (1 << stru->Rn)) && (state.wide & (1 << stru->Rn)) && state.x[stru->Rn] == state.x[0] // can be e.g. x20
-            )
-        ) TODO: can't even check this without ability to trace unknown function return values */
-    )
-    {
-        kptr_t addr = ((uintptr_t)adrp - base) & ~0xfff;
-        addr += get_adr_off(adrp);
-        addr += get_add_sub_imm(add1);
-        addr += get_add_sub_imm(add2);
-        *vtab = addr;
-        return true;
-    }
-    return false;
-}
-
 static int compare_strings(const void *a, const void *b)
 {
     return strcmp(*(char * const*)a, *(char * const*)b);
@@ -1694,10 +1661,42 @@ int main(int argc, const char **argv)
                                             uintptr_t base = ((uintptr_t)kernel + seg->fileoff) - seg->vmaddr;
                                             for(uint32_t *m = mem + 1; is_linear_inst(m); ++m)
                                             {
-                                                kptr_t metavtab;
-                                                if(is_vtab_store(base, m, &metavtab))
+                                                str_uoff_t *stru = (str_uoff_t*)m;
+                                                if(is_str_uoff(stru) && get_str_uoff(stru) == 0)
                                                 {
-                                                    meta->metavtab = metavtab;
+                                                    DBG("Got str at " ADDR, off2addr(kernel, (uintptr_t)stru - (uintptr_t)kernel));
+                                                    for(uint32_t *m2 = m - 1; m2 > mem; --m2)
+                                                    {
+                                                        add_imm_t *add2 = (add_imm_t*)m2;
+                                                        if(is_add_imm(add2) && get_add_sub_imm(add2) == 2 * sizeof(kptr_t) && add2->Rd == stru->Rt)
+                                                        {
+                                                            DBG("Got add2 at " ADDR, off2addr(kernel, (uintptr_t)add2 - (uintptr_t)kernel));
+                                                            for(uint32_t *m3 = m2 - 1; m3 > mem; --m3)
+                                                            {
+                                                                add_imm_t *add1 = (add_imm_t*)m3;
+                                                                if(is_add_imm(add1) && add1->Rd == add2->Rn)
+                                                                {
+                                                                    DBG("Got add2 at " ADDR, off2addr(kernel, (uintptr_t)add1 - (uintptr_t)kernel));
+                                                                    for(uint32_t *m4 = m3 - 1; m4 > mem; --m4)
+                                                                    {
+                                                                        adr_t *adrp = (adr_t*)m4;
+                                                                        if(is_adrp(adrp) && adrp->Rd == add1->Rn)
+                                                                        {
+                                                                            DBG("Got adrp at " ADDR, off2addr(kernel, (uintptr_t)adrp - (uintptr_t)kernel));
+                                                                            kptr_t metavtab = ((uintptr_t)adrp - base) & ~0xfff;
+                                                                            metavtab += get_adr_off(adrp);
+                                                                            metavtab += get_add_sub_imm(add1);
+                                                                            metavtab += get_add_sub_imm(add2);
+                                                                            meta->metavtab = metavtab;
+                                                                            break;
+                                                                        }
+                                                                    }
+                                                                    break;
+                                                                }
+                                                            }
+                                                            break;
+                                                        }
+                                                    }
                                                     break;
                                                 }
                                             }
