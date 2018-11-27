@@ -251,9 +251,11 @@ typedef struct
              overrides :  1,
              ofilt     :  1,
              parent    :  1,
+             radare    :  1,
              size      :  1,
+             symmap    :  1,
              vtab      :  1,
-             _reserved : 19;
+             _reserved : 18;
 } opt_t;
 
 static kptr_t kuntag(kptr_t kbase, bool x1469, kptr_t ptr, uint16_t *pac)
@@ -363,6 +365,7 @@ static bool is_linear_inst(void *ptr)
            is_aut(ptr) ||
            is_autsys(ptr) ||
            is_nop(ptr);
+    // TODO: strb, strh, ldrb, ldrh, some floating point instrs (see 10.3.3 kernel)
 }
 
 typedef struct
@@ -867,54 +870,74 @@ static kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms)
 
 static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
 {
-    if(opt.vtab)
+    if(opt.symmap)
     {
-        if(meta->vtab == -1)
+        printf("%s", meta->name);
+        if(meta->parentP)
         {
-            printf("%svtab=??????????????????%s ", colorRed, colorReset);
+            printf(" : %s", meta->parentP->name);
         }
-        else
+        printf("\n");
+        for(size_t i = meta->parentP ? meta->parentP->nmethods : 0; i < meta->nmethods; ++i)
         {
-            printf("vtab=" ADDR " ", meta->vtab);
-        }
-    }
-    if(opt.size)
-    {
-        printf("size=0x%08x ", meta->objsize);
-    }
-    if(opt.meta)
-    {
-        printf("meta=" ADDR " parent=" ADDR " metavtab=" ADDR " ", meta->addr, meta->parent, meta->metavtab);
-    }
-    printf("%s%-*s%s", colorCyan, namelen, meta->name, colorReset);
-    if(opt.bundle)
-    {
-        if(meta->bundle)
-        {
-            printf(" (%s%s%s)", colorBlue, meta->bundle, colorReset);
-        }
-        else
-        {
-            printf(" (%s???%s)", colorRed, colorReset);
+            printf("- %s\n", meta->methods[i].method);
         }
     }
-    printf("\n");
-    if(opt.overrides)
+    else if(opt.radare)
     {
-        metaclass_t *parent = meta->parentP;
-        for(size_t i = 0; i < meta->nmethods; ++i)
+        // TODO
+    }
+    else
+    {
+        if(opt.vtab)
         {
-            vtab_entry_t *ent = &meta->methods[i];
-            if(!ent->overrides && !opt.inherit)
+            if(meta->vtab == -1)
             {
-                continue;
+                printf("%svtab=??????????????????%s ", colorRed, colorReset);
             }
-            const char *color = ent->addr == -1 ? colorRed : !ent->overrides ? colorGray : "";
-            vtab_entry_t *pent = (parent && i < parent->nmethods) ? &parent->methods[i] : NULL;
-            size_t hex = i * sizeof(kptr_t);
-            int hexlen = 5;
-            for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
-            printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
+            else
+            {
+                printf("vtab=" ADDR " ", meta->vtab);
+            }
+        }
+        if(opt.size)
+        {
+            printf("size=0x%08x ", meta->objsize);
+        }
+        if(opt.meta)
+        {
+            printf("meta=" ADDR " parent=" ADDR " metavtab=" ADDR " ", meta->addr, meta->parent, meta->metavtab);
+        }
+        printf("%s%-*s%s", colorCyan, namelen, meta->name, colorReset);
+        if(opt.bundle)
+        {
+            if(meta->bundle)
+            {
+                printf(" (%s%s%s)", colorBlue, meta->bundle, colorReset);
+            }
+            else
+            {
+                printf(" (%s???%s)", colorRed, colorReset);
+            }
+        }
+        printf("\n");
+        if(opt.overrides)
+        {
+            metaclass_t *parent = meta->parentP;
+            for(size_t i = 0; i < meta->nmethods; ++i)
+            {
+                vtab_entry_t *ent = &meta->methods[i];
+                if(!ent->overrides && !opt.inherit)
+                {
+                    continue;
+                }
+                const char *color = ent->addr == -1 ? colorRed : !ent->overrides ? colorGray : "";
+                vtab_entry_t *pent = (parent && i < parent->nmethods) ? &parent->methods[i] : NULL;
+                size_t hex = i * sizeof(kptr_t);
+                int hexlen = 5;
+                for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
+                printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
+            }
         }
     }
 }
@@ -922,7 +945,7 @@ static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
 static void print_help(const char *self)
 {
     fprintf(stderr, "Usage:\n"
-                    "    %s [-aAbBCdeGinmoOpsSv] [ClassName] [OverrideName] [BundleName] kernel\n"
+                    "    %s [-aAbBCdeGinmMoOpsSv] [ClassName] [OverrideName] [BundleName] kernel [SymbolMap]\n"
                     "\n"
                     "Description:\n"
                     "    Extract and print C++ class information from an arm64 iOS kernel.\n"
@@ -936,7 +959,9 @@ static void print_help(const char *self)
                     "    -b  Print bundle identifier\n"
                     "    -i  Print inherited virtual methods (implies -o)\n"
                     "    -m  Print MetaClass addresses\n"
+                    "    -M  Print symbol map (implies -o, takes precedence)\n"
                     "    -o  Print overridden/new virtual methods\n"
+                    "    -R  Print symbols for radare2 (implies -iov, takes precedence)\n"
                     "    -s  Print object sizes\n"
                     "    -v  Print object vtabs\n"
                     "\n"
@@ -1049,6 +1074,12 @@ int main(int argc, const char **argv)
                     opt.meta = 1;
                     break;
                 }
+                case 'M':
+                {
+                    opt.overrides = 1;
+                    opt.symmap    = 1;
+                    break;
+                }
                 case 'n':
                 {
                     colorGray   = "";
@@ -1074,6 +1105,14 @@ int main(int argc, const char **argv)
                 {
                     opt.parent = 1;
                     opt.cfilt  = 1;
+                    break;
+                }
+                case 'R':
+                {
+                    opt.inherit   = 1;
+                    opt.overrides = 1;
+                    opt.radare    = 1;
+                    opt.vtab      = 1;
                     break;
                 }
                 case 's':
@@ -1102,7 +1141,13 @@ int main(int argc, const char **argv)
         }
     }
 
+    bool have_symmap = false;
     int wantargs = 1 + (opt.bfilt ? 1 : 0) + (opt.cfilt ? 1 : 0) + (opt.ofilt ? 1 : 0);
+    if(argc - aoff == wantargs + 1)
+    {
+        ++wantargs;
+        have_symmap = true;
+    }
     if(argc - aoff != wantargs)
     {
         if(argc > 1)
@@ -1131,10 +1176,14 @@ int main(int argc, const char **argv)
         ERR("Only one of -e and -p may be given.");
         return -1;
     }
-
     if(opt.bsort && opt.csort)
     {
         ERR("Only one of -G and -S may be given.");
+        return -1;
+    }
+    if(opt.symmap && opt.radare)
+    {
+        ERR("Only one of -M and -R may be given.");
         return -1;
     }
 
@@ -1152,7 +1201,7 @@ int main(int argc, const char **argv)
     }
     bool want_vtabs = opt.vtab || opt.overrides || opt.ofilt;
 
-    int fd = open(argv[aoff], O_RDONLY);
+    int fd = open(argv[aoff++], O_RDONLY);
     if(fd == -1)
     {
         ERRNO("open");
@@ -1220,6 +1269,11 @@ int main(int argc, const char **argv)
         return -1;
     }
 
+    if(have_symmap)
+    {
+        // TODO: parse symbol map
+    }
+
     ARRDECL(kptr_t, aliases, 0x100);
     ARRDECL(kptr_t, refs, 0x100);
 
@@ -1229,7 +1283,9 @@ int main(int argc, const char **argv)
            OSObjectGetMetaClass = 0,
            kbase = 0,
            initcode = 0;
-    bool x1469 = false;
+    bool x1469 = false,
+         have_plk_text_exec = false;
+#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!x1469 && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
     mach_nlist_t *symtab = NULL;
     char *strtab = NULL;
     size_t nsyms = 0;
@@ -1256,6 +1312,10 @@ int main(int argc, const char **argv)
                         break;
                     }
                 }
+            }
+            if(strcmp("__PLK_TEXT_EXEC", seg->segname) == 0)
+            {
+                have_plk_text_exec = true;
             }
         }
         else if(cmd->cmd == LC_SYMTAB)
@@ -1379,7 +1439,7 @@ int main(int argc, const char **argv)
                 if(cmd->cmd == MACH_SEGMENT)
                 {
                     mach_seg_t *seg = (mach_seg_t*)cmd;
-                    if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
+                    if(seg->filesize > 0 && SEG_IS_EXEC(seg))
                     {
                         uintptr_t start = (uintptr_t)kernel + seg->fileoff;
                         STEP_MEM(uint32_t, mem, start, seg->filesize, 2)
@@ -1520,7 +1580,7 @@ int main(int argc, const char **argv)
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
+                if(seg->filesize > 0 && SEG_IS_EXEC(seg))
                 {
                     STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                     {
@@ -1561,7 +1621,7 @@ int main(int argc, const char **argv)
         if(cmd->cmd == MACH_SEGMENT)
         {
             mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
+            if(seg->filesize > 0 && SEG_IS_EXEC(seg))
             {
                 STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
                 {
@@ -1658,14 +1718,27 @@ int main(int argc, const char **argv)
                                         meta->reserved = 0;
                                         if(want_vtabs)
                                         {
-                                            uintptr_t base = ((uintptr_t)kernel + seg->fileoff) - seg->vmaddr;
+                                            kptr_t x0 = state.x[0];
+                                            //uintptr_t base = ((uintptr_t)kernel + seg->fileoff) - seg->vmaddr;
                                             for(uint32_t *m = mem + 1; is_linear_inst(m); ++m)
                                             {
+                                                if(a64_emulate(kernel, &state, m, m + 1, false, false) != kEmuEnd)
+                                                {
+                                                    break;
+                                                }
                                                 str_uoff_t *stru = (str_uoff_t*)m;
-                                                if(is_str_uoff(stru) && get_str_uoff(stru) == 0)
+                                                if(is_str_uoff(stru) && (state.valid & (1 << stru->Rn)) && state.x[stru->Rn] + get_str_uoff(stru) == x0)
                                                 {
                                                     DBG("Got str at " ADDR, off2addr(kernel, (uintptr_t)stru - (uintptr_t)kernel));
-                                                    for(uint32_t *m2 = m - 1; m2 > mem; --m2)
+                                                    if(!(state.valid & (1 << stru->Rt)))
+                                                    {
+                                                        DBG("Store has no valid source register");
+                                                    }
+                                                    else
+                                                    {
+                                                        meta->metavtab = state.x[stru->Rt];
+                                                    }
+                                                    /*for(uint32_t *m2 = m - 1; m2 > mem; --m2)
                                                     {
                                                         add_imm_t *add2 = (add_imm_t*)m2;
                                                         if(is_add_imm(add2) && get_add_sub_imm(add2) == 2 * sizeof(kptr_t) && add2->Rd == stru->Rt)
@@ -1696,7 +1769,7 @@ int main(int argc, const char **argv)
                                                             }
                                                             break;
                                                         }
-                                                    }
+                                                    }*/
                                                     break;
                                                 }
                                             }
@@ -1887,7 +1960,7 @@ int main(int argc, const char **argv)
                     if(cmd->cmd == MACH_SEGMENT)
                     {
                         mach_seg_t *seg = (mach_seg_t*)cmd;
-                        if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
+                        if(seg->filesize > 0 && SEG_IS_EXEC(seg))
                         {
                             STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                             {
@@ -2001,7 +2074,7 @@ int main(int argc, const char **argv)
                     if(cmd->cmd == MACH_SEGMENT)
                     {
                         mach_seg_t *seg = (mach_seg_t*)cmd;
-                        if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
+                        if(seg->filesize > 0 && SEG_IS_EXEC(seg))
                         {
                             uintptr_t start = (uintptr_t)kernel + seg->fileoff;
                             STEP_MEM(uint32_t, mem, start, seg->filesize, 6)
@@ -2165,21 +2238,24 @@ int main(int argc, const char **argv)
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                if(seg->filesize > 0 && (seg->initprot & VM_PROT_EXECUTE))
+                if(seg->filesize > 0 && SEG_IS_EXEC(seg))
                 {
-                    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
+                    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 2)
                     {
                         adr_t *adr = (adr_t*)mem;
                         add_imm_t *add = (add_imm_t*)(mem + 1);
+                        add_imm_t *add2 = (add_imm_t*)(mem + 2);
                         nop_t *nop = (nop_t*)(mem + 1);
                         ret_t *ret1 = (ret_t*)(mem + 1);
                         ret_t *ret2 = (ret_t*)(mem + 2);
+                        ret_t *ret3 = (ret_t*)(mem + 3);
                         bool iz_adrp = is_adrp(adr),
                              iz_add  = is_add_imm(add);
                         if
                         (
                             (iz_adrp && iz_add && is_ret(ret2) && adr->Rd == add->Rn && add->Rd == 0) ||
-                            (is_adr(adr) && (is_ret(ret1) || (is_nop(nop) && is_ret(ret2))) && adr->Rd == 0)
+                            (is_adr(adr) && (is_ret(ret1) || (is_nop(nop) && is_ret(ret2))) && adr->Rd == 0) ||
+                            (is_ret(ret3) && is_add_imm(add2) && iz_add && iz_adrp && add2->Rd == 0 && add2->Rn == add->Rd && adr->Rd == add->Rn) // iOS 9
                         )
                         {
                             kptr_t func = seg->vmaddr + ((uintptr_t)adr - ((uintptr_t)kernel + seg->fileoff)),
@@ -2192,6 +2268,10 @@ int main(int argc, const char **argv)
                             {
                                 addr += get_adr_off(adr);
                                 addr += get_add_sub_imm(add);
+                                if(is_add_imm(add2))
+                                {
+                                    addr += get_add_sub_imm(add2);
+                                }
                             }
                             else
                             {
@@ -2242,185 +2322,6 @@ int main(int argc, const char **argv)
                                                 }
                                             }
                                         }
-#if 0
-                                        if(candidates.idx > 0)
-                                        {
-                                            kptr_t cnd = 0;
-                                            size_t numcnd = 0;
-                                            FOREACH_CMD(hdr, cmd2)
-                                            {
-                                                if(cmd2->cmd == MACH_SEGMENT)
-                                                {
-                                                    mach_seg_t *seg2 = (mach_seg_t*)cmd2;
-                                                    if(seg2->filesize > 0 && (seg2->initprot & VM_PROT_EXECUTE))
-                                                    {
-                                                        STEP_MEM(uint32_t, mem2, (uintptr_t)kernel + seg2->fileoff, seg2->filesize, 5)
-                                                        {
-                                                            adr_t *adrp = (adr_t*)mem2;
-                                                            add_imm_t *add1 = (add_imm_t*)(mem2 + 1);
-                                                            add_imm_t *add2 = (add_imm_t*)(mem2 + 2);
-                                                            str_uoff_t *str = (str_uoff_t*)(mem2 + 3);
-                                                            uint32_t *ldp = mem2 + 4;
-                                                            ret_t *ret1 = (ret_t*)(mem2 + 4);
-                                                            ret_t *ret2 = (ret_t*)(mem2 + 5);
-                                                            if
-                                                            (
-                                                                is_adrp(adrp) && is_add_imm(add1) && is_add_imm(add2) && is_str_uoff(str) && // TODO: adr + nop + add ?
-                                                                (is_ret(ret1) || (*ldp == 0xa8c17bfd /* ldp x29, x30, [sp], 0x10 */ && is_ret(ret2))) &&
-                                                                adrp->Rd == add1->Rn && add1->Rd == add2->Rn && add2->Rd == str->Rt &&
-                                                                get_str_uoff(str) == 0 && get_add_sub_imm(add2) == 2 * sizeof(kptr_t)
-                                                            )
-                                                            {
-                                                                kptr_t refloc = off2addr(kernel, (uintptr_t)adrp - (uintptr_t)kernel);
-                                                                kptr_t ref = refloc & ~0xfff;
-                                                                ref += get_adr_off(adrp);
-                                                                ref += get_add_sub_imm(add1) + get_add_sub_imm(add2);
-                                                                for(size_t j = 0; j < candidates.idx; ++j)
-                                                                {
-                                                                    if(candidates.val[j] == ref)
-                                                                    {
-                                                                        DBG("Location referencing vtab candidate " ADDR ": " ADDR, ref, refloc);
-                                                                        if(cnd != ref) // One vtab may be referenced multiple times
-                                                                        {
-                                                                            ++numcnd;
-                                                                        }
-                                                                        cnd = ref;
-                                                                        break;
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            if(numcnd == 1)
-                                            {
-                                                meta->vtab = cnd;
-                                            }
-                                        }
-#endif
-                                        if(candidates.idx >= 2 && meta->metavtab && VtabAllocIdx)
-                                        {
-                                            DBG("Attempting to get vtab via %s::metaClass::alloc", meta->name);
-                                            kptr_t *ovtab = addr2ptr(kernel, meta->metavtab);
-                                            if(!ovtab)
-                                            {
-                                                ERR("Metavtab of %s lies outside all segments.", meta->name);
-                                                return -1;
-                                            }
-                                            kptr_t fnaddr = kuntag(kbase, x1469, ovtab[VtabAllocIdx], NULL);
-                                            FOREACH_CMD(hdr, cmd2)
-                                            {
-                                                if(cmd2->cmd == MACH_SEGMENT)
-                                                {
-                                                    mach_seg_t *seg2 = (mach_seg_t*)cmd2;
-                                                    if(seg2->vmaddr <= fnaddr && seg2->vmaddr + seg2->filesize > fnaddr)
-                                                    {
-                                                        uint32_t *end = (uint32_t*)((uintptr_t)kernel + seg2->fileoff + seg2->filesize),
-                                                                 *fnstart = (uint32_t*)((uintptr_t)kernel + seg2->fileoff + (fnaddr - seg2->vmaddr));
-                                                        bl_t *bl = NULL;
-                                                        for(uint32_t *m = fnstart; is_linear_inst(m); ++m)
-                                                        {
-                                                            if(is_bl((bl_t*)m))
-                                                            {
-                                                                bl = (bl_t*)m;
-                                                                break;
-                                                            }
-                                                        }
-                                                        if(!bl)
-                                                        {
-                                                            WRN("Failed to find call to kalloc/new in %s::metaClass::alloc", meta->name);
-                                                        }
-                                                        else
-                                                        {
-#define SPSIZE 0x1000
-                                                            void *sp = malloc(SPSIZE),
-                                                                 *obj = NULL;
-                                                            if(!sp)
-                                                            {
-                                                                ERR("malloc(sp)");
-                                                                return -1;
-                                                            }
-                                                            a64_state_t state;
-                                                            for(size_t i = 0; i < 31; ++i)
-                                                            {
-                                                                state.x[i] = 0;
-                                                            }
-                                                            state.x[31] = (uintptr_t)sp + SPSIZE;
-                                                            state.valid = 0xfff80000;
-                                                            state.wide  = 0xfff80000;
-                                                            state.host  = 0x80000000;
-                                                            switch(a64_emulate(kernel, &state, fnstart, (uint32_t*)bl, false, false))
-                                                            {
-                                                                case kEmuRet:
-                                                                    WRN("Unexpected ret in %s::metaClass::alloc", meta->name);
-                                                                    break;
-                                                                case kEmuEnd:
-                                                                    {
-                                                                        kptr_t allocsz;
-                                                                        if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && (state.host & 0x1) == 0x1) // kalloc
-                                                                        {
-                                                                            allocsz = *(kptr_t*)state.x[0];
-                                                                        }
-                                                                        else if((state.valid & 0xff) == 0x1 && (state.wide & 0x1) == 0x0) // new
-                                                                        {
-                                                                            allocsz = state.x[0];
-                                                                        }
-                                                                        else
-                                                                        {
-                                                                            WRN("Bad pre-bl state in %s::metaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
-                                                                            break;
-                                                                        }
-                                                                        if(allocsz != meta->objsize)
-                                                                        {
-                                                                            WRN("Alloc has wrong size in %s::metaClass::alloc", meta->name);
-                                                                            break;
-                                                                        }
-                                                                        uint32_t *m = (uint32_t*)bl;
-                                                                        if(a64_emulate(kernel, &state, m, m + 1, false, false) != kEmuEnd)
-                                                                        {
-                                                                            break;
-                                                                        }
-                                                                        obj = malloc(allocsz);
-                                                                        if(!obj)
-                                                                        {
-                                                                            ERR("malloc(obj)");
-                                                                            return -1;
-                                                                        }
-                                                                        bzero(obj, allocsz);
-                                                                        state.x[0] = (uintptr_t)obj;
-                                                                        state.valid |= 0x1;
-                                                                        state.wide  |= 0x1;
-                                                                        state.host  |= 0x1;
-                                                                        if(a64_emulate(kernel, &state, m + 1, end, false, true) != kEmuRet)
-                                                                        {
-                                                                            break;
-                                                                        }
-                                                                        if(!(state.valid & 0x1) || !(state.wide & 0x1) || !(state.host & 0x1))
-                                                                        {
-                                                                            WRN("Bad end state in %s::metaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
-                                                                            break;
-                                                                        }
-                                                                        kptr_t vt = *(kptr_t*)state.x[0];
-                                                                        if(!vt)
-                                                                        {
-                                                                            WRN("Failed to capture vtab via %s::metaClass::alloc", meta->name);
-                                                                            break;
-                                                                        }
-                                                                        meta->vtab = vt;
-                                                                    }
-                                                                default:
-                                                                    break;
-                                                            }
-                                                            if(obj) free(obj);
-                                                            free(sp);
-#undef SPSIZE
-                                                        }
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
                                         break;
                                     }
                                 }
@@ -2434,6 +2335,144 @@ int main(int argc, const char **argv)
         candidates.val = NULL;
         candidates.size = candidates.idx = 0;
 
+        for(size_t i = 0; i < metas.idx; ++i)
+        {
+            metaclass_t *meta = &metas.val[i];
+            if((meta->vtab == 0 || meta->vtab == -1) && meta->metavtab && VtabAllocIdx)
+            {
+                DBG("Attempting to get vtab via %s::metaClass::alloc", meta->name);
+                kptr_t *ovtab = addr2ptr(kernel, meta->metavtab);
+                if(!ovtab)
+                {
+                    ERR("Metavtab of %s lies outside all segments.", meta->name);
+                    return -1;
+                }
+                kptr_t fnaddr = kuntag(kbase, x1469, ovtab[VtabAllocIdx], NULL);
+                if(fnaddr != pure_virtual)
+                {
+                    FOREACH_CMD(hdr, cmd)
+                    {
+                        if(cmd->cmd == MACH_SEGMENT)
+                        {
+                            mach_seg_t *seg = (mach_seg_t*)cmd;
+                            if(seg->vmaddr <= fnaddr && seg->vmaddr + seg->filesize > fnaddr)
+                            {
+                                uint32_t *end = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize),
+                                         *fnstart = (uint32_t*)((uintptr_t)kernel + seg->fileoff + (fnaddr - seg->vmaddr));
+                                bl_t *bl = NULL;
+                                for(uint32_t *m = fnstart; is_linear_inst(m); ++m)
+                                {
+                                    if(is_bl((bl_t*)m))
+                                    {
+                                        bl = (bl_t*)m;
+                                        break;
+                                    }
+                                }
+                                if(!bl)
+                                {
+                                    if(meta->vtab == -1)
+                                    {
+                                        WRN("Failed to find call to kalloc/new in %s::metaClass::alloc", meta->name);
+                                    }
+                                }
+                                else
+                                {
+#define SPSIZE 0x1000
+                                    void *sp = malloc(SPSIZE),
+                                         *obj = NULL;
+                                    if(!sp)
+                                    {
+                                        ERR("malloc(sp)");
+                                        return -1;
+                                    }
+                                    a64_state_t state;
+                                    for(size_t i = 0; i < 31; ++i)
+                                    {
+                                        state.x[i] = 0;
+                                    }
+                                    state.x[31] = (uintptr_t)sp + SPSIZE;
+                                    state.valid = 0xfff80000;
+                                    state.wide  = 0xfff80000;
+                                    state.host  = 0x80000000;
+                                    switch(a64_emulate(kernel, &state, fnstart, (uint32_t*)bl, false, false))
+                                    {
+                                        case kEmuRet:
+                                            WRN("Unexpected ret in %s::metaClass::alloc", meta->name);
+                                            break;
+                                        case kEmuEnd:
+                                            {
+                                                kptr_t allocsz;
+                                                if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && (state.host & 0x1) == 0x1) // kalloc
+                                                {
+                                                    allocsz = *(kptr_t*)state.x[0];
+                                                }
+                                                else if((state.valid & 0xff) == 0x1 && (state.wide & 0x1) == 0x0) // new
+                                                {
+                                                    allocsz = state.x[0];
+                                                }
+                                                else
+                                                {
+                                                    if(meta->vtab == -1)
+                                                    {
+                                                        WRN("Bad pre-bl state in %s::metaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
+                                                    }
+                                                    break;
+                                                }
+                                                if(allocsz != meta->objsize)
+                                                {
+                                                    if(meta->vtab == -1)
+                                                    {
+                                                        WRN("Alloc has wrong size in %s::metaClass::alloc", meta->name);
+                                                    }
+                                                    break;
+                                                }
+                                                uint32_t *m = (uint32_t*)bl;
+                                                if(a64_emulate(kernel, &state, m, m + 1, false, false) != kEmuEnd)
+                                                {
+                                                    break;
+                                                }
+                                                obj = malloc(allocsz);
+                                                if(!obj)
+                                                {
+                                                    ERR("malloc(obj)");
+                                                    return -1;
+                                                }
+                                                bzero(obj, allocsz);
+                                                state.x[0] = (uintptr_t)obj;
+                                                state.valid |= 0x1;
+                                                state.wide  |= 0x1;
+                                                state.host  |= 0x1;
+                                                if(a64_emulate(kernel, &state, m + 1, end, false, true) != kEmuRet)
+                                                {
+                                                    break;
+                                                }
+                                                if(!(state.valid & 0x1) || !(state.wide & 0x1) || !(state.host & 0x1))
+                                                {
+                                                    WRN("Bad end state in %s::metaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
+                                                    break;
+                                                }
+                                                kptr_t vt = *(kptr_t*)state.x[0];
+                                                if(!vt)
+                                                {
+                                                    WRN("Failed to capture vtab via %s::metaClass::alloc", meta->name);
+                                                    break;
+                                                }
+                                                meta->vtab = vt;
+                                            }
+                                        default:
+                                            break;
+                                    }
+                                    if(obj) free(obj);
+                                    free(sp);
+#undef SPSIZE
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for(size_t i = 0; i < metas.idx; ++i)
         {
             if(metas.val[i].vtab == -1)
