@@ -53,8 +53,8 @@ How this works:
 #include <stdbool.h>
 #include <stdint.h>             // uintptr_t
 #include <stdio.h>              // fprintf, stderr
-#include <stdlib.h>             // malloc, realloc, qsort, exit
-#include <string.h>             // strerror, strcmp, strstr, memmem
+#include <stdlib.h>             // malloc, realloc, qsort, bsearch, exit
+#include <string.h>             // strerror, strcmp, strstr, memcpy, memmem
 #include <strings.h>            // bzero
 #include <sys/mman.h>           // mmap
 #include <sys/stat.h>           // fstat
@@ -166,6 +166,8 @@ do \
     (name).val[(name).idx++] = (obj); \
 } while(0)
 
+#define NUM_METACLASSES_EXPECT 0x1000
+
 #define KMOD_MAX_NAME 64
 #pragma pack(4)
 typedef struct
@@ -191,6 +193,22 @@ typedef struct
     const char *name;
 } sym_t;
 
+typedef struct
+{
+    const char *class;
+    const char *method;
+    uint32_t structor :  1,
+             reserved : 31;
+} symmap_method_t;
+
+typedef struct
+{
+    struct metaclass *metaclass;
+    const char *name;
+    symmap_method_t *methods;
+    size_t num;
+} symmap_class_t;
+
 typedef struct vtab_entry
 {
     struct vtab_entry *chain; // only used for back-propagating name
@@ -212,6 +230,7 @@ typedef struct metaclass
     kptr_t metavtab;
     kptr_t callsite;
     struct metaclass *parentP;
+    symmap_class_t *symclass;
     const char *name;
     const char *bundle;
     vtab_entry_t *methods;
@@ -219,7 +238,8 @@ typedef struct metaclass
     uint32_t objsize;
     uint32_t methods_done :  1,
              methods_err  :  1,
-             reserved     : 30;
+             visited      :  1,
+             reserved     : 29;
 } metaclass_t;
 
 typedef union
@@ -826,6 +846,29 @@ static int compare_bundles(const void *a, const void *b)
     return r != 0 ? r : compare_names(a, b);
 }
 
+#if 0
+static int compare_inheritance(const void *a, const void *b)
+{
+    const metaclass_t *x = *(const metaclass_t**)a,
+                      *y = *(const metaclass_t**)b;
+    for(const metaclass_t *p = y->parentP; p; p = p->parentP)
+    {
+        if(x == p)
+        {
+            return -1;
+        }
+    }
+    for(const metaclass_t *p = x->parentP; p; p = p->parentP)
+    {
+        if(y == p)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif
+
 static int compare_sym_addrs(const void *a, const void *b)
 {
     kptr_t adda = ((const sym_t*)a)->addr,
@@ -856,6 +899,20 @@ static int compare_sym_name(const void *a, const void *b)
     return strcmp(name, sym->name);
 }
 
+static int compare_symclass(const void *a, const void *b)
+{
+    const symmap_class_t *cla = a,
+                         *clb = b;
+    return strcmp(cla->name, clb->name);
+}
+
+static int compare_symclass_name(const void *a, const void *b)
+{
+    const char *key = a;
+    const symmap_class_t *cls = b;
+    return strcmp(key, cls->name);
+}
+
 static const char* find_sym_by_addr(kptr_t addr, sym_t *asyms, size_t nsyms)
 {
     sym_t *sym = bsearch(&addr, asyms, nsyms, sizeof(*asyms), &compare_sym_addr);
@@ -868,22 +925,392 @@ static kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms)
     return sym ? sym->addr : 0;
 }
 
-static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
+static int map_file(const char *file, int prot, void **addrp, size_t *lenp)
 {
-    if(opt.symmap)
+    int retval = -1;
+
+    int fd = open(file, O_RDONLY);
+    if(fd == -1)
     {
-        printf("%s", meta->name);
-        if(meta->parentP)
+        ERRNO("open(%s)", file);
+        goto out;
+    }
+
+    struct stat s;
+    if(fstat(fd, &s) != 0)
+    {
+        ERRNO("fstat(%s)", file);
+        goto out;
+    }
+
+    size_t len = s.st_size;
+    void *addr = mmap(NULL, len + 1, prot, MAP_PRIVATE, fd, 0); // +1 so that space afterwards is zero-filled
+    if(addr == MAP_FAILED)
+    {
+        ERRNO("mmap(%s)", file);
+        goto out;
+    }
+
+    if(addrp) *addrp = addr;
+    if(lenp)  *lenp = len;
+    retval = 0;
+
+out:;
+    // Always close fd - mapped mem will live on
+    if(fd != 0)
+    {
+        close(fd);
+    }
+    return retval;
+}
+
+static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdrp)
+{
+    void *kernel = *kernelp;
+    size_t kernelsize = *kernelsizep;
+
+    if(kernelsize < sizeof(mach_hdr_t))
+    {
+        ERR("File is too short to be a Mach-O.");
+        return -1;
+    }
+
+    fat_hdr_t *fat = kernel;
+    if(fat->magic == FAT_CIGAM)
+    {
+        bool found = false;
+        fat_arch_t *arch = (fat_arch_t*)(fat + 1);
+        for(size_t i = 0; i < SWAP32(fat->nfat_arch); ++i)
         {
-            printf(" : %s", meta->parentP->name);
+            if(SWAP32(arch[i].cputype) == CPU_TYPE_ARM64)
+            {
+                kernel = (void*)((uintptr_t)kernel + SWAP32(arch[i].offset));
+                kernelsize = SWAP32(arch[i].size);
+                found = true;
+                break;
+            }
         }
-        printf("\n");
-        for(size_t i = meta->parentP ? meta->parentP->nmethods : 0; i < meta->nmethods; ++i)
+        if(!found)
         {
-            printf("- %s\n", meta->methods[i].method);
+            ERR("No arm64 slice in fat binary.");
+            return -1;
         }
     }
-    else if(opt.radare)
+
+    mach_hdr_t *hdr = (mach_hdr_t*)kernel;
+    if(hdr->magic != MACH_MAGIC)
+    {
+        ERR("Wrong magic: 0x%08x", hdr->magic);
+        return -1;
+    }
+    if(hdr->cputype != CPU_TYPE_ARM64)
+    {
+        ERR("Wrong architecture, only arm64 is supported.");
+        return -1;
+    }
+    if(hdr->filetype != MH_EXECUTE && hdr->filetype != MH_KEXT_BUNDLE)
+    {
+        ERR("Wrong Mach-O type: 0x%x", hdr->filetype);
+        return -1;
+    }
+
+    *kernelp     = kernel;
+    *kernelsizep = kernelsize;
+    *hdrp        = hdr;
+    return 0;
+}
+
+static inline bool isws(char ch)
+{
+    return ch == ' ' || ch == '\t' || ch == '\r'; // disregard newline by design
+}
+
+static inline bool isan(char ch)
+{
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
+}
+
+static int parse_symmap(char *mem, size_t len, size_t *num, symmap_class_t **entries)
+{
+    int retval = -1;
+    ARRDECL(symmap_class_t, map, NUM_METACLASSES_EXPECT);
+
+    // One loop iteration = one line of data.
+    // At the end of an iteration, mem points to the newline at the end of the line.
+    // Since we skip leading whitespace, this saves us the ++mem as third for() argument,
+    // which in turn saves us a lot of headache with making sure we stay < end.
+    bool zero_nl = false;
+    size_t line = 1;
+    struct
+    {
+        const char *class;
+        struct
+        {
+            size_t size;
+            size_t idx;
+            symmap_method_t *val;
+        } arr;
+    } current;
+    current.class = NULL;
+    ARRINIT(current.arr, 0x100);
+#define PUSHENT() \
+do \
+{ \
+    symmap_class_t *ent; \
+    ARRNEXT(map, ent); \
+    symmap_method_t *methods = NULL; \
+    if(current.arr.idx > 0) \
+    { \
+        size_t sz = current.arr.idx * sizeof(*methods); \
+        methods = malloc(sz); \
+        if(!methods) \
+        { \
+            ERRNO("malloc(symmap methods)"); \
+            goto bad; \
+        } \
+        memcpy(methods, current.arr.val, sz); \
+    } \
+    ent->metaclass = NULL; \
+    ent->name = current.class; \
+    ent->num = current.arr.idx; \
+    ent->methods = methods; \
+} while(0)
+    for(char *end = mem + len; mem < end;)
+    {
+        char ch;
+
+        // Skip leading whitespace and empty lines
+        while(mem < end)
+        {
+            ch = *mem;
+            if(ch == '\n')
+            {
+                if(zero_nl)
+                {
+                    *mem = '\0';
+                    zero_nl = false;
+                }
+                ++line;
+            }
+            else if(!isws(ch))
+            {
+                break;
+            }
+            ++mem;
+        }
+        if(mem >= end) break;
+        DBG("Symmap line %lu", line);
+
+        ch = *mem;
+
+        // Comment, jump to end of line
+        if(ch == '#')
+        {
+            do
+            {
+                ++mem;
+            } while(mem < end && *mem != '\n');
+        }
+        // This is a method
+        else if(ch == '-')
+        {
+            DBG("Got symmap method");
+
+            // Must have seen a class name before
+            if(!current.class)
+            {
+                ERR("Symbol map, line %lu: method declaration before first class declaration", line);
+                goto bad;
+            }
+            ++mem; // Skip dash
+            // Skip leading whitespace
+            while(mem < end && isws(*mem))
+            {
+                ++mem;
+            }
+            if(mem >= end) break;
+            // Empty lines are permitted as "no name assigned"
+            if(*mem == '\n')
+            {
+                symmap_method_t *ent;
+                ARRNEXT(current.arr, ent);
+                ent->class = NULL;
+                ent->method = NULL;
+                ent->structor = 0;
+                ent->reserved = 0;
+                goto next;
+            }
+
+            bool structor = false;
+            const char *classname = NULL,
+                       *methname  = NULL,
+                       *namestart = mem;
+            // Seek end of identifier
+            while(mem < end && isan(*mem))
+            {
+                ++mem;
+            }
+            if(mem >= end)
+            {
+                ERR("Symbol map, line %lu: incomplete method declaration", line);
+                goto bad;
+            }
+            // If we are at "::", this is a class name
+            if(mem < end - 1 && mem[0] == ':' && mem[1] == ':')
+            {
+                *mem = '\0'; // terminate class name
+                mem += 2;
+                classname = namestart;
+                namestart = mem;
+            }
+            if(mem < end && *mem == '~')
+            {
+                ++mem;
+            }
+            while(mem < end && isan(*mem))
+            {
+                ++mem;
+            }
+            if(mem >= end)
+            {
+                ERR("Symbol map, line %lu: incomplete method declaration (identifier)", line);
+                goto bad;
+            }
+            ch = *mem;
+            if(ch != '(')
+            {
+                ERR("Symbol map, line %lu: expected '(', got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
+                goto bad;
+            }
+            while(mem < end && *mem != '\n')
+            {
+                ++mem;
+            }
+            methname = namestart;
+            zero_nl = true; // Defer termination to next loop iteration
+            if(!classname)
+            {
+                classname = current.class;
+                // Do this here so structors can be suppressed by prefixing with "ClassName::".
+                size_t sz = strlen(classname);
+                const char *tmp = methname;
+                if(tmp[0] == '~')
+                {
+                    ++tmp;
+                }
+                if(strncmp(classname, tmp, sz) == 0 && tmp[sz] == '(')
+                {
+                    structor = true;
+                }
+            }
+            symmap_method_t *ent;
+            ARRNEXT(current.arr, ent);
+            ent->class = classname;
+            ent->method = methname;
+            ent->structor = !!structor;
+            ent->reserved = 0;
+        }
+        // This is a class name
+        else
+        {
+            DBG("Got symmap class");
+
+            const char *classname = mem;
+            while(mem < end && isan(*mem))
+            {
+                ++mem;
+            }
+            if(mem < end && (ch = *mem) != '\n')
+            {
+                ERR("Symbol map, line %lu: expected newline, got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
+                goto bad;
+            }
+            zero_nl = true; // Defer termination to next loop iteration
+            if(current.class)
+            {
+                PUSHENT();
+            }
+            current.class = classname;
+            current.arr.idx = 0; // don't realloc or anything
+        }
+
+    next:;
+        if(mem < end && *mem != '\n')
+        {
+            ERR("Symbol map, line %lu: error in parse_symmap implementation, loop does not end on newline", line);
+            goto bad;
+        }
+    }
+    // Can ignore zero_nl here, since mmap() guarantees zeroed mem afterwards, and we mapped len + 1.
+    if(current.class)
+    {
+        PUSHENT();
+        current.class = NULL;
+    }
+    size_t sz = map.idx * sizeof(*map.val);
+    symmap_class_t *ptr = malloc(sz);
+    if(!ptr)
+    {
+        ERRNO("malloc(symmap final)");
+        goto bad;
+    }
+    memcpy(ptr, map.val, sz);
+    qsort(ptr, map.idx, sizeof(*map.val), &compare_symclass);
+    *entries = ptr;
+    *num = map.idx;
+
+    retval = 0;
+    goto out;
+
+bad:;
+    for(size_t i = 0; i < map.idx; ++i)
+    {
+        free(map.val[i].methods);
+        map.val[i].methods = NULL;
+    }
+out:;
+    if(current.arr.val)
+    {
+        free(current.arr.val);
+        current.arr.val = NULL;
+    }
+    if(map.val)
+    {
+        free(map.val);
+        map.val = NULL;
+    }
+    return retval;
+#undef PUSHENT
+}
+
+static void print_syment(const char *owner, const char *class, const char *method)
+{
+    printf("- ");
+    if(strcmp(class, owner) != 0)
+    {
+        printf("%s::", class);
+    }
+    printf("%s\n", method);
+}
+
+static void print_symmap(metaclass_t *meta)
+{
+    printf("%s\n", meta->name);
+    metaclass_t *parent = meta->parentP;
+    while(parent && !parent->vtab)
+    {
+        parent = parent->parentP;
+    }
+    for(size_t i = parent ? parent->nmethods : 0; i < meta->nmethods; ++i)
+    {
+        vtab_entry_t *ent = &meta->methods[i];
+        print_syment(meta->name, ent->class, ent->method);
+    }
+}
+
+static void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
+{
+    if(opt.radare)
     {
         // TODO
     }
@@ -924,6 +1351,10 @@ static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
         if(opt.overrides)
         {
             metaclass_t *parent = meta->parentP;
+            while(parent && !parent->vtab)
+            {
+                parent = parent->parentP;
+            }
             for(size_t i = 0; i < meta->nmethods; ++i)
             {
                 vtab_entry_t *ent = &meta->methods[i];
@@ -945,7 +1376,7 @@ static void printMetaClass(metaclass_t *meta, int namelen, opt_t opt)
 static void print_help(const char *self)
 {
     fprintf(stderr, "Usage:\n"
-                    "    %s [-aAbBCdeGinmMoOpsSv] [ClassName] [OverrideName] [BundleName] kernel [SymbolMap]\n"
+                    "    %s [-aAbBCdeGimMnoOpRsSv] [ClassName] [OverrideName] [BundleName] kernel [SymbolMap]\n"
                     "\n"
                     "Description:\n"
                     "    Extract and print C++ class information from an arm64 iOS kernel.\n"
@@ -982,6 +1413,7 @@ static void print_help(const char *self)
 
 int main(int argc, const char **argv)
 {
+    int r;
     opt_t opt =
     {
         .bundle    = 0,
@@ -995,7 +1427,9 @@ int main(int argc, const char **argv)
         .overrides = 0,
         .ofilt     = 0,
         .parent    = 0,
+        .radare    = 0,
         .size      = 0,
+        .symmap    = 0,
         .vtab      = 0,
         ._reserved = 0,
     };
@@ -1171,6 +1605,16 @@ int main(int argc, const char **argv)
         return -1;
     }
 
+    if(opt.symmap && (opt.bfilt || opt.cfilt || opt.ofilt || opt.bsort || opt.csort || opt.extend || opt.parent))
+    {
+        ERR("Cannot use filters or sorting with -M.");
+        return -1;
+    }
+    if(opt.symmap && opt.radare)
+    {
+        ERR("Only one of -M and -R may be given.");
+        return -1;
+    }
     if(opt.extend && opt.parent)
     {
         ERR("Only one of -e and -p may be given.");
@@ -1179,11 +1623,6 @@ int main(int argc, const char **argv)
     if(opt.bsort && opt.csort)
     {
         ERR("Only one of -G and -S may be given.");
-        return -1;
-    }
-    if(opt.symmap && opt.radare)
-    {
-        ERR("Only one of -M and -R may be given.");
         return -1;
     }
 
@@ -1201,77 +1640,27 @@ int main(int argc, const char **argv)
     }
     bool want_vtabs = opt.vtab || opt.overrides || opt.ofilt;
 
-    int fd = open(argv[aoff++], O_RDONLY);
-    if(fd == -1)
-    {
-        ERRNO("open");
-        return -1;
-    }
+    void *kernel = NULL;
+    size_t kernelsize = 0;
+    mach_hdr_t *hdr = NULL;
+    r = map_file(argv[aoff++], PROT_READ, &kernel, &kernelsize);
+    if(r != 0) return r;
+    r = validate_kernel(&kernel, &kernelsize, &hdr);
+    if(r != 0) return r;
 
-    struct stat s;
-    if(fstat(fd, &s) != 0)
+    struct
     {
-        ERRNO("fstat");
-        return -1;
-    }
-
-    size_t kernelsize = s.st_size;
-    if(kernelsize < sizeof(mach_hdr_t))
-    {
-        ERR("File is too short to be a Mach-O.");
-        return -1;
-    }
-
-    void *kernel = mmap(NULL, kernelsize, PROT_READ, MAP_PRIVATE, fd, 0);
-    if(kernel == MAP_FAILED)
-    {
-        ERRNO("mmap");
-        return -1;
-    }
-
-    fat_hdr_t *fat = kernel;
-    if(fat->magic == FAT_CIGAM)
-    {
-        bool found = false;
-        fat_arch_t *arch = (fat_arch_t*)(fat + 1);
-        for(size_t i = 0; i < SWAP32(fat->nfat_arch); ++i)
-        {
-            if(SWAP32(arch[i].cputype) == CPU_TYPE_ARM64)
-            {
-                kernel = (void*)((uintptr_t)kernel + SWAP32(arch[i].offset));
-                kernelsize = SWAP32(arch[i].size);
-                found = true;
-                break;
-            }
-        }
-        if(!found)
-        {
-            ERR("No arm64 slice in fat binary.");
-            return -1;
-        }
-    }
-
-    mach_hdr_t *hdr = (mach_hdr_t*)kernel;
-    if(hdr->magic != MACH_MAGIC)
-    {
-        ERR("Wrong magic: 0x%08x", hdr->magic);
-        return -1;
-    }
-    if(hdr->cputype != CPU_TYPE_ARM64)
-    {
-        ERR("Wrong architecture, only arm64 is supported.");
-        return -1;
-    }
-
-    if(hdr->filetype != MH_EXECUTE && hdr->filetype != MH_KEXT_BUNDLE)
-    {
-        ERR("Wrong file type: 0x%x", hdr->filetype);
-        return -1;
-    }
-
+        size_t num;
+        symmap_class_t *map;
+    } symmap = { 0, NULL };
     if(have_symmap)
     {
-        // TODO: parse symbol map
+        void *symmapMem = NULL;
+        size_t symmmapLen = 0;
+        r = map_file(argv[aoff++], PROT_READ | PROT_WRITE, &symmapMem, &symmmapLen);
+        if(r != 0) return r;
+        r = parse_symmap(symmapMem, symmmapLen, &symmap.num, &symmap.map);
+        if(r != 0) return r;
     }
 
     ARRDECL(kptr_t, aliases, 0x100);
@@ -1613,8 +2002,8 @@ int main(int argc, const char **argv)
         }
     }
 
-    ARRDECL(metaclass_t, metas, 0x1000);
-    ARRDECL(const char*, namelist, 0x1000);
+    ARRDECL(metaclass_t, metas, NUM_METACLASSES_EXPECT);
+    ARRDECL(const char*, namelist, NUM_METACLASSES_EXPECT);
 
     FOREACH_CMD(hdr, cmd)
     {
@@ -1708,6 +2097,7 @@ int main(int argc, const char **argv)
                                         meta->metavtab = 0;
                                         meta->callsite = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                                         meta->parentP = NULL;
+                                        meta->symclass = NULL;
                                         meta->name = name;
                                         meta->bundle = NULL;
                                         meta->methods = NULL;
@@ -1715,6 +2105,7 @@ int main(int argc, const char **argv)
                                         meta->objsize = state.x[3];
                                         meta->methods_done = 0;
                                         meta->methods_err = 0;
+                                        meta->visited = 0;
                                         meta->reserved = 0;
                                         if(want_vtabs)
                                         {
@@ -1738,38 +2129,6 @@ int main(int argc, const char **argv)
                                                     {
                                                         meta->metavtab = state.x[stru->Rt];
                                                     }
-                                                    /*for(uint32_t *m2 = m - 1; m2 > mem; --m2)
-                                                    {
-                                                        add_imm_t *add2 = (add_imm_t*)m2;
-                                                        if(is_add_imm(add2) && get_add_sub_imm(add2) == 2 * sizeof(kptr_t) && add2->Rd == stru->Rt)
-                                                        {
-                                                            DBG("Got add2 at " ADDR, off2addr(kernel, (uintptr_t)add2 - (uintptr_t)kernel));
-                                                            for(uint32_t *m3 = m2 - 1; m3 > mem; --m3)
-                                                            {
-                                                                add_imm_t *add1 = (add_imm_t*)m3;
-                                                                if(is_add_imm(add1) && add1->Rd == add2->Rn)
-                                                                {
-                                                                    DBG("Got add2 at " ADDR, off2addr(kernel, (uintptr_t)add1 - (uintptr_t)kernel));
-                                                                    for(uint32_t *m4 = m3 - 1; m4 > mem; --m4)
-                                                                    {
-                                                                        adr_t *adrp = (adr_t*)m4;
-                                                                        if(is_adrp(adrp) && adrp->Rd == add1->Rn)
-                                                                        {
-                                                                            DBG("Got adrp at " ADDR, off2addr(kernel, (uintptr_t)adrp - (uintptr_t)kernel));
-                                                                            kptr_t metavtab = ((uintptr_t)adrp - base) & ~0xfff;
-                                                                            metavtab += get_adr_off(adrp);
-                                                                            metavtab += get_add_sub_imm(add1);
-                                                                            metavtab += get_add_sub_imm(add2);
-                                                                            meta->metavtab = metavtab;
-                                                                            break;
-                                                                        }
-                                                                    }
-                                                                    break;
-                                                                }
-                                                            }
-                                                            break;
-                                                        }
-                                                    }*/
                                                     break;
                                                 }
                                             }
@@ -2563,9 +2922,29 @@ int main(int argc, const char **argv)
                         parent = parent->parentP;
                     }
                 }
+                if(symmap.map)
+                {
+                    symmap_class_t *symcls = bsearch(meta->name, symmap.map, symmap.num, sizeof(*symmap.map), &compare_symclass_name);
+                    if(symcls)
+                    {
+                        if(symcls->metaclass)
+                        {
+                            DBG("Symmap entry for %s has metaclass set already (%s).", meta->name, symcls->metaclass->name);
+                        }
+                        else
+                        {
+                            symcls->metaclass = meta;
+                        }
+                        meta->symclass = symcls;
+                    }
+                }
                 if(meta->vtab == 0)
                 {
                     meta->methods_done = 1;
+                    if(meta->symclass && meta->symclass->num != 0)
+                    {
+                        WRN("Symmap entry for %s has %lu methods, but class has no vtab.", meta->name, meta->symclass->num);
+                    }
                     goto done;
                 }
                 if(meta->vtab == -1)
@@ -2599,6 +2978,29 @@ int main(int argc, const char **argv)
                     return -1;
                 }
                 meta->nmethods = nmeth;
+                size_t pnmeth = parent ? parent->nmethods : 0;
+                bool ignore_symmap = false;
+                if(meta->symclass)
+                {
+                    symmap_class_t *symcls = meta->symclass;
+                    if(hdr->filetype == MH_KEXT_BUNDLE)
+                    {
+                        if(symcls->num > nmeth)
+                        {
+                            WRN("Symmap entry for %s has %lu methods, vtab has %lu.", meta->name, symcls->num, nmeth);
+                            ignore_symmap = true;
+                        }
+                        else
+                        {
+                            pnmeth = nmeth - symcls->num;
+                        }
+                    }
+                    else if(symcls->num + pnmeth != nmeth)
+                    {
+                        WRN("Symmap entry for %s has %lu methods, vtab has %lu.", meta->name, symcls->num, nmeth - pnmeth);
+                        ignore_symmap = true;
+                    }
+                }
                 for(size_t idx = 0; idx < nmeth; ++idx)
                 {
                     vtab_entry_t *ent   = &meta->methods[idx],
@@ -2624,15 +3026,23 @@ int main(int argc, const char **argv)
                         cxx_sym = find_sym_by_addr(func, asyms, nsyms);
                         overrides = !pent || func != pent->addr;
                     }
-                    if(cxx_sym)
+                    if((cxx_sym && strcmp(cxx_sym, "___cxa_pure_virtual") == 0) || (pure_virtual && func == pure_virtual))
                     {
-                        DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
-                        if(strcmp(cxx_sym, "___cxa_pure_virtual") == 0)
+                        func = -1;
+                    }
+                    if(!ignore_symmap && idx >= pnmeth && meta->symclass && meta->symclass->methods[idx - pnmeth].method)
+                    {
+                        symmap_method_t *smeth = &meta->symclass->methods[idx - pnmeth];
+                        class = smeth->class;
+                        method = smeth->method;
+                        structor = smeth->structor;
+                        authoritative = true;
+                    }
+                    else if(func != -1)
+                    {
+                        if(cxx_sym)
                         {
-                            func = -1;
-                        }
-                        else
-                        {
+                            DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
                             if(!cxx_demangle(cxx_sym, &class, &method, &structor))
                             {
                                 if(is_in_reloc)
@@ -2649,14 +3059,10 @@ int main(int argc, const char **argv)
                                 authoritative = true;
                             }
                         }
-                    }
-                    else if(pure_virtual && func == pure_virtual)
-                    {
-                        func = -1;
-                    }
-                    else
-                    {
-                        DBG("Found no symbol for virtual function " ADDR, func);
+                        else
+                        {
+                            DBG("Found no symbol for virtual function " ADDR, func);
+                        }
                     }
                     if(!is_in_reloc) // TODO: reloc parent?
                     {
@@ -2711,7 +3117,6 @@ int main(int argc, const char **argv)
                             }
                         }
                     }
-                    // TODO: symbol map
                     if(!method)
                     {
                         char *meth = NULL;
@@ -2783,7 +3188,7 @@ int main(int argc, const char **argv)
         }
     }
 
-    const char *filter = NULL;
+    const char **filter = NULL;
     const char *__kernel__ = "__kernel__"; // Single ref for pointer comparisons
 
     if(opt.bundle || opt.bfilt)
@@ -3091,38 +3496,51 @@ int main(int argc, const char **argv)
                 return -1;
             }
             bundleList[bundleIdx++] = __kernel__;
+            // Exact match
             for(size_t i = 0; i < bundleIdx; ++i)
             {
                 if(strcmp(bundleList[i], filt_bundle) == 0)
                 {
-                    filter = bundleList[i];
+                    filter = malloc(sizeof(*filter) * 2);
+                    if(!filter)
+                    {
+                        ERRNO("malloc(filter)");
+                        return -1;
+                    }
+                    // Since these are strings, we can unique them even if there was more than one exact match
+                    filter[0] = filt_bundle;
+                    filter[1] = NULL;
                     break;
                 }
             }
+            // Partial match
             if(!filter)
             {
-                bool ambiguousFilter = false;
+                size_t num = 0;
                 for(size_t i = 0; i < bundleIdx; ++i)
                 {
                     if(strstr(bundleList[i], filt_bundle))
                     {
-                        if(ambiguousFilter || filter)
-                        {
-                            if(filter)
-                            {
-                                ERR("More than one bundle matching filter: %s", filter);
-                                ambiguousFilter = true;
-                                filter = NULL;
-                            }
-                            ERR("More than one bundle matching filter: %s", bundleList[i]);
-                            continue;
-                        }
-                        filter = bundleList[i];
+                        ++num;
                     }
                 }
-                if(ambiguousFilter)
+                if(num)
                 {
-                    return -1;
+                    filter = malloc((num + 1) * sizeof(*filter));
+                    if(!filter)
+                    {
+                        ERRNO("malloc(filter)");
+                        return -1;
+                    }
+                    filter[num] = NULL;
+                    num = 0;
+                    for(size_t i = 0; i < bundleIdx; ++i)
+                    {
+                        if(strstr(bundleList[i], filt_bundle))
+                        {
+                            filter[num++] = bundleList[i];
+                        }
+                    }
                 }
             }
             if(!filter)
@@ -3134,52 +3552,118 @@ int main(int argc, const char **argv)
         }
     }
 
-    metaclass_t *target = NULL;
+    metaclass_t **target = NULL;
     if(filt_class)
     {
-        for(size_t i = 0; i < metas.idx; ++i)
+        // Exact match
         {
-            if(strcmp(metas.val[i].name, filt_class) == 0)
+            size_t num = 0;
+            for(size_t i = 0; i < metas.idx; ++i)
             {
-                target = &metas.val[i];
-                break;
+                if(strcmp(metas.val[i].name, filt_class) == 0)
+                {
+                    ++num;
+                }
+            }
+            if(num)
+            {
+                target = malloc((num + 1) * sizeof(*target));
+                if(!target)
+                {
+                    ERRNO("malloc(target)");
+                    return -1;
+                }
+                target[num] = NULL;
+                num = 0;
+                for(size_t i = 0; i < metas.idx; ++i)
+                {
+                    if(strcmp(metas.val[i].name, filt_class) == 0)
+                    {
+                        target[num++] = &metas.val[i];
+                    }
+                }
+            }
+        }
+        // Partial match
+        if(!target)
+        {
+            size_t num = 0;
+            for(size_t i = 0; i < metas.idx; ++i)
+            {
+                if(strstr(metas.val[i].name, filt_class) == 0)
+                {
+                    ++num;
+                }
+            }
+            if(num)
+            {
+                target = malloc((num + 1) * sizeof(*target));
+                if(!target)
+                {
+                    ERRNO("malloc(target)");
+                    return -1;
+                }
+                target[num] = NULL;
+                num = 0;
+                for(size_t i = 0; i < metas.idx; ++i)
+                {
+                    if(strstr(metas.val[i].name, filt_class) == 0)
+                    {
+                        target[num++] = &metas.val[i];
+                    }
+                }
             }
         }
         if(!target)
         {
-            bool ambiguousClass = false;
-            for(size_t i = 0; i < metas.idx; ++i)
-            {
-                if(strstr(metas.val[i].name, filt_class))
-                {
-                    if(ambiguousClass || target)
-                    {
-                        if(target)
-                        {
-                            ERR("More than one class matching filter: %s", target->name);
-                            ambiguousClass = true;
-                            target = NULL;
-                        }
-                        ERR("More than one class matching filter: %s", metas.val[i].name);
-                        continue;
-                    }
-                    target = &metas.val[i];
-                }
-            }
-            if(ambiguousClass)
-            {
-                return -1;
-            }
-            if(!target)
-            {
-                ERR("No class matching %s.", filt_class);
-                return -1;
-            }
+            ERR("No class matching %s.", filt_class);
+            return -1;
         }
     }
-    if(target && !(opt.parent || opt.extend))
+    if(opt.symmap)
     {
-        printMetaClass(target, 0, opt);
+        metaclass_t **list = malloc(metas.idx * sizeof(metaclass_t*));
+        if(!list)
+        {
+            ERRNO("malloc(list)");
+            return -1;
+        }
+        size_t lsize = 0;
+        for(size_t i = 0; i < metas.idx; ++i)
+        {
+            list[lsize++] = &metas.val[i];
+        }
+        qsort(list, lsize, sizeof(*list), opt.bsort ? &compare_bundles : &compare_names);
+
+        // Merge two sorted lists, ugh
+        for(size_t i = 0, j = 0; i < symmap.num || j < lsize; )
+        {
+            if(j >= lsize || (i < symmap.num && strcmp(symmap.map[i].name, list[j]->name) <= 0))
+            {
+                symmap_class_t *class = &symmap.map[i++];
+                if(class->metaclass)
+                {
+                    print_symmap(class->metaclass);
+                }
+                else
+                {
+                    printf("%s\n", class->name);
+                    for(size_t k = 0; k < class->num; ++k)
+                    {
+                        symmap_method_t *ent = &class->methods[k];
+                        print_syment(class->name, ent->class, ent->method);
+                    }
+                }
+            }
+            else
+            {
+                metaclass_t *meta = list[j++];
+                if(!meta->symclass) // Only print if novelty
+                {
+                    print_symmap(meta);
+                }
+            }
+        }
     }
     else
     {
@@ -3192,23 +3676,40 @@ int main(int argc, const char **argv)
         size_t lsize = 0;
         if(opt.parent)
         {
-            for(metaclass_t *meta = target; meta; )
+            for(metaclass_t **ptr = target; *ptr; ++ptr)
             {
-                list[lsize++] = meta;
-                meta = meta->parentP;
+                for(metaclass_t *meta = *ptr; meta; )
+                {
+                    if(meta->visited)
+                    {
+                        break;
+                    }
+                    meta->visited = 1;
+                    list[lsize++] = meta;
+                    meta = meta->parentP;
+                }
             }
         }
-        else if(opt.extend)
+        else if(target)
         {
-            list[0] = target;
-            lsize = 1;
-            for(size_t j = 0; j < lsize; ++j)
+            for(metaclass_t **ptr = target; *ptr; ++ptr)
             {
-                for(size_t i = 0; i < metas.idx; ++i)
+                (*ptr)->visited = 1;
+                list[lsize++] = *ptr;
+            }
+            if(opt.extend)
+            {
+                for(size_t j = 0; j < lsize; ++j)
                 {
-                    if(metas.val[i].parent == list[j]->addr)
+                    kptr_t addr = list[j]->addr;
+                    for(size_t i = 0; i < metas.idx; ++i)
                     {
-                        list[lsize++] = &metas.val[i];
+                        metaclass_t *meta = &metas.val[i];
+                        if(!meta->visited && meta->parent == addr)
+                        {
+                            list[lsize++] = meta;
+                            meta->visited = 1;
+                        }
                     }
                 }
             }
@@ -3225,9 +3726,13 @@ int main(int argc, const char **argv)
             size_t nsize = 0;
             for(size_t i = 0; i < lsize; ++i)
             {
-                if(list[i]->bundle == filter)
+                const char *bundle = list[i]->bundle;
+                for(const char **ptr = filter; *ptr; ++ptr)
                 {
-                    list[nsize++] = list[i];
+                    if(bundle == *ptr)
+                    {
+                        list[nsize++] = list[i];
+                    }
                 }
             }
             lsize = nsize;
@@ -3242,7 +3747,7 @@ int main(int argc, const char **argv)
                 for(size_t i = 0; i < m->nmethods; ++i)
                 {
                     vtab_entry_t *ent = &m->methods[i];
-                    if(ent->overrides && strncmp(ent->method, filt_override, slen) == 0 && ent->method[slen] == '(') // TODO: fix dirty hack
+                    if(ent->overrides && strncmp(ent->method, filt_override, slen) == 0 && ent->method[slen] == '(') // TODO: does this need to be fixed?
                     {
                         list[nsize++] = m;
                         break;
@@ -3269,7 +3774,7 @@ int main(int argc, const char **argv)
         }
         for(size_t i = 0; i < lsize; ++i)
         {
-            printMetaClass(list[i], (int)namelen, opt);
+            print_metaclass(list[i], (int)namelen, opt);
         }
     }
 

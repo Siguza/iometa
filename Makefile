@@ -1,7 +1,7 @@
 VERSION = 1.2.3
 TARGET  = iometa
 SRCDIR  = src
-FLAGS   = -Wall -O3 -DVERSION=$(VERSION) -DTIMESTAMP="`date +'%d. %B %Y %H:%M:%S'`" -framework CoreFoundation -framework IOKit $(CFLAGS)
+FLAGS   = -Wall -O3 -DVERSION=$(VERSION) -DTIMESTAMP="`date +'%d. %B %Y %H:%M:%S'`" -framework CoreFoundation -framework IOKit -lc++abi $(CFLAGS)
 
 .PHONY: all clean
 

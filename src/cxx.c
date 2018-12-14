@@ -10,7 +10,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>              // asprintf
-#include <stdlib.h>             // malloc
+#include <stdlib.h>             // malloc, free
 #include <string.h>             // strncmp, memcpy
 
 #include "cxx.h"
@@ -31,6 +31,59 @@ static int demangle_num(const char **ptr)
     *ptr = sym;
     return ret;
 }
+
+#if 1
+
+extern char* __cxa_demangle(const char *sym, char *buf, size_t *len, int *status);
+
+bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr, bool *structorptr)
+{
+    bool retval = false;
+    char *str  = NULL,
+         *copy = NULL;
+    if(sym[0] != '_') goto out;
+
+    const char *dot = strchr(sym, '.');
+    if(dot)
+    {
+        copy = strndup(sym, dot - sym);
+        if(!copy) goto out;
+        sym = copy;
+    }
+
+    int r = 0;
+    str = __cxa_demangle(sym + 1, NULL, NULL, &r);
+    if(!str || r != 0) goto out;
+
+    int len = 0;
+    for(int i = 0; str[i] != '\0' && str[i] != '('; ++i)
+    {
+        if(str[i] == ':' && str[i+1] == ':')
+        {
+            len = i;
+            break;
+        }
+    }
+    if(!len) goto out;
+
+    str[len] = '\0';
+    str[len+1] = '\0';
+    const char *p = sym + 4;
+    int slen = demangle_num(&p);
+    *structorptr = slen == len && strncmp(p, str, len) == 0 && (p[len] == 'C' || p[len] == 'D');
+    *methodptr = str + len + 2;
+    *classptr = str;
+    str = NULL; // prevent free
+    retval = true;
+out:;
+    if(str)  free(str);
+    if(copy) free(copy);
+    return retval;
+}
+
+#else
+
+// Ghetto homebrew parsing
 
 bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr, bool *structorptr)
 {
@@ -97,3 +150,5 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
     *structorptr = structor;
     return true;
 }
+
+#endif
