@@ -324,7 +324,7 @@ static int compare_addrs(const void *a, const void *b)
     return adda < addb ? -1 : 1;
 }
 
-static bool is_part_of_vtab(void *kernel, bool x1469, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, size_t exreloc_min, size_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+static bool is_part_of_vtab(void *kernel, bool x1469, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, kptr_t exreloc_min, kptr_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
 {
     if(idx == 0)
     {
@@ -336,12 +336,11 @@ static bool is_part_of_vtab(void *kernel, bool x1469, relocrange_t *locreloc, si
     }
     else
     {
-        kptr_t off = (uintptr_t)(&vtab[idx]) - (uintptr_t)kernel;
-        if(off >= exreloc_min && off < exreloc_max && exreloc[(off - exreloc_min) / sizeof(kptr_t)] != NULL)
+        kptr_t val = vtabaddr + sizeof(kptr_t) * idx;
+        if(val >= exreloc_min && val < exreloc_max && exreloc[(val - exreloc_min) / sizeof(kptr_t)] != NULL)
         {
             return true;
         }
-        kptr_t val = vtabaddr + sizeof(kptr_t) * idx;
         return bsearch(&val, locreloc, nlocreloc, sizeof(*locreloc), &compare_range) != NULL;
     }
 }
@@ -1792,7 +1791,7 @@ int main(int argc, const char **argv)
     sym_t *asyms         = NULL,
           *bsyms         = NULL;
     char **exreloc      = NULL;
-    size_t exreloc_min = ~0, exreloc_max = 0;
+    kptr_t exreloc_min = ~0, exreloc_max = 0;
     FOREACH_CMD(hdr, cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
@@ -1905,28 +1904,30 @@ int main(int argc, const char **argv)
                 mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->extreloff);
                 for(size_t i = 0; i < dstab->nextrel; ++i)
                 {
+                    kptr_t addr = kbase + reloc[i].r_address;
                     if(!reloc[i].r_extern)
                     {
-                        ERR("External relocation entry %lu at 0x%x does not have external bit set.", i, reloc[i].r_address);
+                        ERR("External relocation entry %lu at " ADDR " does not have external bit set.", i, addr);
                         return -1;
                     }
                     if(reloc[i].r_length != 0x3)
                     {
-                        ERR("External relocation entry %lu at 0x%x is not 8 bytes.", i, reloc[i].r_address);
+                        ERR("External relocation entry %lu at " ADDR " is not 8 bytes.", i, addr);
                         return -1;
                     }
-                    DBG("Exreloc 0x%x: %s", reloc[i].r_address, &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx]);
-                    if(reloc[i].r_address < exreloc_min)
+                    DBG("Exreloc " ADDR ": %s", addr, &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx]);
+                    if(addr < exreloc_min)
                     {
-                        exreloc_min = reloc[i].r_address;
+                        exreloc_min = addr;
                     }
-                    if(reloc[i].r_address > exreloc_max)
+                    if(addr > exreloc_max)
                     {
-                        exreloc_max = reloc[i].r_address;
+                        exreloc_max = addr;
                     }
                 }
                 if(exreloc_min < exreloc_max)
                 {
+                    DBG("exreloc range: " ADDR "-" ADDR, exreloc_min, exreloc_max);
                     exreloc_max += sizeof(kptr_t);
                     nexreloc = (exreloc_max - exreloc_min) / sizeof(kptr_t);
                     size_t relocsize = sizeof(char*) * nexreloc;
@@ -1939,7 +1940,7 @@ int main(int argc, const char **argv)
                     bzero(exreloc, relocsize);
                     for(size_t i = 0; i < dstab->nextrel; ++i)
                     {
-                        exreloc[(reloc[i].r_address - exreloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx];
+                        exreloc[(kbase + reloc[i].r_address - exreloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx];
                     }
                 }
             }
@@ -3420,7 +3421,7 @@ int main(int argc, const char **argv)
                          authoritative = false,
                          overrides     = false;
 
-                    uintptr_t koff = (uintptr_t)&mvtab[idx];
+                    kptr_t koff = meta->vtab + sizeof(kptr_t) * idx;
                     bool is_in_exreloc = koff >= exreloc_min && koff < exreloc_max && exreloc[(koff - exreloc_min) / sizeof(kptr_t)] != NULL;
                     if(is_in_exreloc)
                     {
