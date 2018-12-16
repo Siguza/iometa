@@ -3370,6 +3370,13 @@ int main(int argc, const char **argv)
                 {
                     ++nmeth;
                 }
+                size_t pnmeth = parent ? parent->nmethods : 0;
+                if(nmeth < pnmeth)
+                {
+                    WRN("%s has fewer methods than its parent.", meta->name);
+                    meta->methods_err = 1;
+                    goto done;
+                }
                 meta->methods = malloc(nmeth * sizeof(*meta->methods));
                 if(!meta->methods)
                 {
@@ -3377,7 +3384,6 @@ int main(int argc, const char **argv)
                     return -1;
                 }
                 meta->nmethods = nmeth;
-                size_t pnmeth = parent ? parent->nmethods : 0;
                 bool ignore_symmap = false;
                 if(meta->symclass)
                 {
@@ -3974,7 +3980,7 @@ int main(int argc, const char **argv)
             size_t num = 0;
             for(size_t i = 0; i < metas.idx; ++i)
             {
-                if(strstr(metas.val[i].name, filt_class) == 0)
+                if(strstr(metas.val[i].name, filt_class))
                 {
                     ++num;
                 }
@@ -3991,7 +3997,7 @@ int main(int argc, const char **argv)
                 num = 0;
                 for(size_t i = 0; i < metas.idx; ++i)
                 {
-                    if(strstr(metas.val[i].name, filt_class) == 0)
+                    if(strstr(metas.val[i].name, filt_class))
                     {
                         target[num++] = &metas.val[i];
                     }
@@ -4113,7 +4119,7 @@ int main(int argc, const char **argv)
                 const char *bundle = list[i]->bundle;
                 for(const char **ptr = filter; *ptr; ++ptr)
                 {
-                    if(bundle == *ptr)
+                    if(strcmp(bundle, *ptr) == 0)
                     {
                         list[nsize++] = list[i];
                     }
