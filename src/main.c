@@ -115,6 +115,20 @@ for( \
 #define STEP_MEM(_type, _mem, _addr, _size, _min) \
 for(_type *_mem = (_type*)(_addr), *_end = (_type*)((uintptr_t)(_mem) + (_size)) - (_min); _mem <= _end; ++_mem)
 
+#define ARRDECLEMPTY(type, name) \
+struct \
+{ \
+    size_t size; \
+    size_t idx; \
+    type *val; \
+} name; \
+do \
+{ \
+    (name).size = 0; \
+    (name).idx = 0; \
+    (name).val = NULL; \
+} while(0)
+
 #define ARRDECL(type, name, sz) \
 struct \
 { \
@@ -186,6 +200,19 @@ typedef struct
     kptr_t      stop;
 } kmod_info_t;
 #pragma pack()
+
+typedef struct
+{
+    uint32_t count;
+    uint32_t offsetsArray[];
+} kaslrPackedOffsets_t;
+
+typedef struct
+{
+    // Both values inclusive
+    kptr_t from;
+    kptr_t to;
+} relocrange_t;
 
 typedef struct
 {
@@ -277,6 +304,47 @@ typedef struct
              vtab      :  1,
              _reserved : 18;
 } opt_t;
+
+static int compare_range(const void *a, const void *b)
+{
+    const relocrange_t *range = b;
+    kptr_t ptr  = *(const kptr_t*)a,
+           from = range->from,
+           to   = range->to;
+    if(ptr < from) return -1;
+    if(ptr > to)   return  1;
+    return 0;
+}
+
+static int compare_addrs(const void *a, const void *b)
+{
+    kptr_t adda = *(const kptr_t*)a,
+           addb = *(const kptr_t*)b;
+    if(adda == addb) return 0;
+    return adda < addb ? -1 : 1;
+}
+
+static bool is_part_of_vtab(void *kernel, bool x1469, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, size_t exreloc_min, size_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+{
+    if(idx == 0)
+    {
+        return true;
+    }
+    if(x1469)
+    {
+        return ((pacptr_t*)vtab)[idx - 1].nxt * sizeof(uint32_t) == sizeof(kptr_t);
+    }
+    else
+    {
+        kptr_t off = (uintptr_t)(&vtab[idx]) - (uintptr_t)kernel;
+        if(off >= exreloc_min && off < exreloc_max && exreloc[(off - exreloc_min) / sizeof(kptr_t)] != NULL)
+        {
+            return true;
+        }
+        kptr_t val = vtabaddr + sizeof(kptr_t) * idx;
+        return bsearch(&val, locreloc, nlocreloc, sizeof(*locreloc), &compare_range) != NULL;
+    }
+}
 
 static kptr_t kuntag(kptr_t kbase, bool x1469, kptr_t ptr, uint16_t *pac)
 {
@@ -1020,6 +1088,46 @@ static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdr
     return 0;
 }
 
+static CFTypeRef get_prelink_info(mach_hdr_t *hdr)
+{
+    CFTypeRef info = NULL;
+    CFStringRef err = NULL;
+    FOREACH_CMD(hdr, cmd)
+    {
+        if(cmd->cmd == MACH_SEGMENT)
+        {
+            mach_seg_t *seg = (mach_seg_t*)cmd;
+            if(strcmp("__PRELINK_INFO", seg->segname) == 0 && seg->filesize > 0)
+            {
+                mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+                for(size_t h = 0; h < seg->nsects; ++h)
+                {
+                    if(strcmp("__info", secs[h].sectname) == 0)
+                    {
+                        const char *xml = (const char*)((uintptr_t)hdr + secs[h].offset);
+                        info = IOCFUnserialize(xml, NULL, 0, &err);
+                        if(!info)
+                        {
+                            ERR("IOCFUnserialize: %s", CFStringGetCStringPtr(err, kCFStringEncodingUTF8));
+                            goto out;
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    if(!info)
+    {
+        ERR("Failed to find PrelinkInfo");
+        goto out;
+    }
+out:;
+    if(err) CFRelease(err);
+    return info;
+}
+
 static inline bool isws(char ch)
 {
     return ch == ' ' || ch == '\t' || ch == '\r'; // disregard newline by design
@@ -1128,9 +1236,8 @@ do \
             {
                 ++mem;
             }
-            if(mem >= end) break;
             // Empty lines are permitted as "no name assigned"
-            if(*mem == '\n')
+            if(mem >= end || *mem == '\n')
             {
                 symmap_method_t *ent;
                 ARRNEXT(current.arr, ent);
@@ -1138,6 +1245,7 @@ do \
                 ent->method = NULL;
                 ent->structor = 0;
                 ent->reserved = 0;
+                if(mem >= end) break;
                 goto next;
             }
 
@@ -1671,15 +1779,20 @@ int main(int argc, const char **argv)
            OSObjectVtab = 0,
            OSObjectGetMetaClass = 0,
            kbase = 0,
+           plk_base = 0,
            initcode = 0;
     bool x1469 = false,
          have_plk_text_exec = false;
 #define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!x1469 && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
     mach_nlist_t *symtab = NULL;
-    char *strtab = NULL;
-    size_t nsyms = 0;
-    sym_t *asyms = NULL,
-          *bsyms = NULL;
+    mach_dstab_t *dstab  = NULL;
+    char *strtab         = NULL;
+    size_t nsyms         = 0,
+           nexreloc      = 0;
+    sym_t *asyms         = NULL,
+          *bsyms         = NULL;
+    char **exreloc      = NULL;
+    size_t exreloc_min = ~0, exreloc_max = 0;
     FOREACH_CMD(hdr, cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
@@ -1697,12 +1810,15 @@ int main(int argc, const char **argv)
                     if(strcmp("initcode", secs[i].sectname) == 0)
                     {
                         initcode = secs[i].addr;
-                        x1469 = true;
                         break;
                     }
                 }
             }
-            if(strcmp("__PLK_TEXT_EXEC", seg->segname) == 0)
+            if(strcmp("__PRELINK_TEXT", seg->segname) == 0)
+            {
+                plk_base = seg->vmaddr;
+            }
+            else if(strcmp("__PLK_TEXT_EXEC", seg->segname) == 0)
             {
                 have_plk_text_exec = true;
             }
@@ -1780,176 +1896,280 @@ int main(int argc, const char **argv)
                 }
             }
         }
+        else if(cmd->cmd == LC_DYSYMTAB)
+        {
+            dstab = (mach_dstab_t*)cmd;
+            // Imports for kexts
+            if(hdr->filetype == MH_KEXT_BUNDLE)
+            {
+                mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->extreloff);
+                for(size_t i = 0; i < dstab->nextrel; ++i)
+                {
+                    if(!reloc[i].r_extern)
+                    {
+                        ERR("External relocation entry %lu at 0x%x does not have external bit set.", i, reloc[i].r_address);
+                        return -1;
+                    }
+                    if(reloc[i].r_length != 0x3)
+                    {
+                        ERR("External relocation entry %lu at 0x%x is not 8 bytes.", i, reloc[i].r_address);
+                        return -1;
+                    }
+                    DBG("Exreloc 0x%x: %s", reloc[i].r_address, &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx]);
+                    if(reloc[i].r_address < exreloc_min)
+                    {
+                        exreloc_min = reloc[i].r_address;
+                    }
+                    if(reloc[i].r_address > exreloc_max)
+                    {
+                        exreloc_max = reloc[i].r_address;
+                    }
+                }
+                if(exreloc_min < exreloc_max)
+                {
+                    exreloc_max += sizeof(kptr_t);
+                    nexreloc = (exreloc_max - exreloc_min) / sizeof(kptr_t);
+                    size_t relocsize = sizeof(char*) * nexreloc;
+                    exreloc = malloc(relocsize);
+                    if(!exreloc)
+                    {
+                        ERRNO("malloc(exreloc)");
+                        return -1;
+                    }
+                    bzero(exreloc, relocsize);
+                    for(size_t i = 0; i < dstab->nextrel; ++i)
+                    {
+                        exreloc[(reloc[i].r_address - exreloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx];
+                    }
+                }
+            }
+            // This is the one defining difference
+            if(dstab->locreloff == 0 && dstab->nlocrel == 0)
+            {
+                x1469 = true;
+            }
+        }
     }
     if(!OSMetaClassConstructor)
     {
+        DBG("Failed to find OSMetaClass::OSMetaClass symbol, falling back to binary matching.");
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
-            ERR("Failed to find OSMetaClass::OSMetaClass.");
-            return -1;
-        }
-        DBG("Failed to find OSMetaClass::OSMetaClass symbol, falling back to binary matching.");
-
-#define NSTRREF 3
-        const char *strs[NSTRREF] = { "IORegistryEntry", "IOService", "IOUserClient" };
-        struct
-        {
-            size_t size;
-            size_t idx;
-            kptr_t *val;
-        } strrefs[NSTRREF];
-        for(size_t i = 0; i < NSTRREF; ++i)
-        {
-            ARRINIT(strrefs[i], 4);
-            find_str(kernel, kernelsize, &strrefs[i], strs[i]);
-            if(strrefs[i].idx == 0)
+            kptr_t relocAddr = 0;
+            for(size_t i = 0; i < nexreloc; ++i)
             {
-                ERR("Failed to find string: %s", strs[i]);
-                return -1;
+                const char *name = exreloc[i];
+                if(name && strcmp(name, "__ZN11OSMetaClassC2EPKcPKS_j") == 0)
+                {
+                    relocAddr = i * sizeof(kptr_t) + exreloc_min;
+                    DBG("Found reloc for __ZN11OSMetaClassC2EPKcPKS_j at " ADDR, relocAddr);
+                    break;
+                }
+            }
+            if(relocAddr)
+            {
+                FOREACH_CMD(hdr, cmd)
+                {
+                    if(cmd->cmd == MACH_SEGMENT)
+                    {
+                        mach_seg_t *seg = (mach_seg_t*)cmd;
+                        if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                        {
+                            STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
+                            {
+                                adr_t *adrp = (adr_t*)mem;
+                                ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
+                                br_t *br = (br_t*)(mem + 2);
+                                if
+                                (
+                                    is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
+                                    adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
+                                )
+                                {
+                                    kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
+                                    kptr_t addr = alias & ~0xfff;
+                                    addr += get_adr_off(adrp);
+                                    addr += get_ldr_imm_uoff(ldr);
+                                    if(addr == relocAddr)
+                                    {
+                                        OSMetaClassConstructor = alias;
+                                        goto gotit;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            gotit:;
             }
         }
-        struct
+        else
         {
-            size_t size;
-            size_t idx;
-            kptr_t *val;
-        } constrCand[2];
-        ARRINIT(constrCand[0], 4);
-        ARRINIT(constrCand[1], 4);
-        size_t constrIdx = 0;
+#define NSTRREF 3
+            const char *strs[NSTRREF] = { "IORegistryEntry", "IOService", "IOUserClient" };
+            struct
+            {
+                size_t size;
+                size_t idx;
+                kptr_t *val;
+            } strrefs[NSTRREF];
+            for(size_t i = 0; i < NSTRREF; ++i)
+            {
+                ARRINIT(strrefs[i], 4);
+                find_str(kernel, kernelsize, &strrefs[i], strs[i]);
+                if(strrefs[i].idx == 0)
+                {
+                    ERR("Failed to find string: %s", strs[i]);
+                    return -1;
+                }
+            }
+            struct
+            {
+                size_t size;
+                size_t idx;
+                kptr_t *val;
+            } constrCand[2];
+            ARRINIT(constrCand[0], 4);
+            ARRINIT(constrCand[1], 4);
+            size_t constrIdx = 0;
 #define constrCandPrev (constrCand[(constrIdx - 1) % 2])
 #define constrCandCurr (constrCand[constrIdx % 2])
-        for(size_t j = 0; j < NSTRREF; ++j)
-        {
-            ++constrIdx;
-            constrCandCurr.idx = 0;
-            FOREACH_CMD(hdr, cmd)
+            for(size_t j = 0; j < NSTRREF; ++j)
             {
-                if(cmd->cmd == MACH_SEGMENT)
+                ++constrIdx;
+                constrCandCurr.idx = 0;
+                FOREACH_CMD(hdr, cmd)
                 {
-                    mach_seg_t *seg = (mach_seg_t*)cmd;
-                    if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                    if(cmd->cmd == MACH_SEGMENT)
                     {
-                        uintptr_t start = (uintptr_t)kernel + seg->fileoff;
-                        STEP_MEM(uint32_t, mem, start, seg->filesize, 2)
+                        mach_seg_t *seg = (mach_seg_t*)cmd;
+                        if(seg->filesize > 0 && SEG_IS_EXEC(seg))
                         {
-                            adr_t     *adr = (adr_t*    )(mem + 0);
-                            add_imm_t *add = (add_imm_t*)(mem + 1);
-                            if
-                            (
-                                (is_adr(adr)  && is_nop(mem + 1) && adr->Rd == 1) ||
-                                (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 1)
-                            )
+                            uintptr_t start = (uintptr_t)kernel + seg->fileoff;
+                            STEP_MEM(uint32_t, mem, start, seg->filesize, 2)
                             {
-                                kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
-                                       ref    = refloc;
-                                if(is_adrp(adr))
+                                adr_t     *adr = (adr_t*    )(mem + 0);
+                                add_imm_t *add = (add_imm_t*)(mem + 1);
+                                if
+                                (
+                                    (is_adr(adr)  && is_nop(mem + 1) && adr->Rd == 1) ||
+                                    (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 1)
+                                )
                                 {
-                                    ref &= ~0xfff;
-                                    ref += get_add_sub_imm(add);
-                                }
-                                ref += get_adr_off(adr);
-                                for(size_t i = 0; i < strrefs[j].idx; ++i)
-                                {
-                                    if(ref == strrefs[j].val[i])
+                                    kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
+                                           ref    = refloc;
+                                    if(is_adrp(adr))
                                     {
-                                        DBG("Found ref to \"%s\" at " ADDR, strs[j], refloc);
-                                        goto look_for_bl;
+                                        ref &= ~0xfff;
+                                        ref += get_add_sub_imm(add);
                                     }
-                                }
-                                continue;
-                                look_for_bl:;
-                                STEP_MEM(uint32_t, m, mem + 2, seg->filesize - ((uintptr_t)(mem + 2) - start), 1)
-                                {
-                                    kptr_t bladdr = off2addr(kernel, (uintptr_t)m - (uintptr_t)kernel),
-                                           blref  = bladdr;
-                                    bl_t *bl = (bl_t*)m;
-                                    if(is_bl(bl))
+                                    ref += get_adr_off(adr);
+                                    for(size_t i = 0; i < strrefs[j].idx; ++i)
                                     {
-                                        a64_state_t state;
-                                        if(a64_emulate(kernel, &state, mem, m, true, false) != kEmuEnd)
+                                        if(ref == strrefs[j].val[i])
                                         {
-                                            // a64_emulate should've printed error already
-                                            goto skip;
+                                            DBG("Found ref to \"%s\" at " ADDR, strs[j], refloc);
+                                            goto look_for_bl;
                                         }
-                                        if(!(state.valid & (1 << 1)) || !(state.wide & (1 << 1)) || state.x[1] != ref)
+                                    }
+                                    continue;
+                                    look_for_bl:;
+                                    STEP_MEM(uint32_t, m, mem + 2, seg->filesize - ((uintptr_t)(mem + 2) - start), 1)
+                                    {
+                                        kptr_t bladdr = off2addr(kernel, (uintptr_t)m - (uintptr_t)kernel),
+                                               blref  = bladdr;
+                                        bl_t *bl = (bl_t*)m;
+                                        if(is_bl(bl))
                                         {
-                                            DBG("Value of x1 changed, skipping...");
-                                            goto skip;
-                                        }
-                                        blref += get_bl_off(bl);
-                                        DBG("Considering constructor " ADDR, blref);
-                                        size_t idx = -1;
-                                        for(size_t i = 0; i < constrCandCurr.idx; ++i)
-                                        {
-                                            if(constrCandCurr.val[i] == blref)
+                                            a64_state_t state;
+                                            if(a64_emulate(kernel, &state, mem, m, true, false) != kEmuEnd)
                                             {
-                                                idx = i;
-                                                break;
+                                                // a64_emulate should've printed error already
+                                                goto skip;
                                             }
-                                        }
-                                        // If we have this already, just skip
-                                        if(idx == -1)
-                                        {
-                                            // first iteration: collect
-                                            // subsequent iterations: eliminate
-                                            if(j != 0)
+                                            if(!(state.valid & (1 << 1)) || !(state.wide & (1 << 1)) || state.x[1] != ref)
                                             {
-                                                idx = -1;
-                                                for(size_t i = 0; i < constrCandPrev.idx; ++i)
+                                                DBG("Value of x1 changed, skipping...");
+                                                goto skip;
+                                            }
+                                            blref += get_bl_off(bl);
+                                            DBG("Considering constructor " ADDR, blref);
+                                            size_t idx = -1;
+                                            for(size_t i = 0; i < constrCandCurr.idx; ++i)
+                                            {
+                                                if(constrCandCurr.val[i] == blref)
                                                 {
-                                                    if(constrCandPrev.val[i] == blref)
+                                                    idx = i;
+                                                    break;
+                                                }
+                                            }
+                                            // If we have this already, just skip
+                                            if(idx == -1)
+                                            {
+                                                // first iteration: collect
+                                                // subsequent iterations: eliminate
+                                                if(j != 0)
+                                                {
+                                                    idx = -1;
+                                                    for(size_t i = 0; i < constrCandPrev.idx; ++i)
                                                     {
-                                                        idx = i;
-                                                        break;
+                                                        if(constrCandPrev.val[i] == blref)
+                                                        {
+                                                            idx = i;
+                                                            break;
+                                                        }
+                                                    }
+                                                    if(idx == -1)
+                                                    {
+                                                        DBG("Candidate " ADDR " not in prev list.", bladdr);
+                                                        goto skip;
                                                     }
                                                 }
-                                                if(idx == -1)
-                                                {
-                                                    DBG("Candidate " ADDR " not in prev list.", bladdr);
-                                                    goto skip;
-                                                }
+                                                ARRPUSH(constrCandCurr, blref);
                                             }
-                                            ARRPUSH(constrCandCurr, blref);
+                                            goto skip;
                                         }
-                                        goto skip;
+                                        else if(!is_linear_inst(m))
+                                        {
+                                            WRN("Unexpected instruction at " ADDR, bladdr);
+                                            goto skip;
+                                        }
                                     }
-                                    else if(!is_linear_inst(m))
-                                    {
-                                        WRN("Unexpected instruction at " ADDR, bladdr);
-                                        goto skip;
-                                    }
+                                    ERR("Reached end of kernel without finding bl from " ADDR, refloc);
+                                    return -1;
                                 }
-                                ERR("Reached end of kernel without finding bl from " ADDR, refloc);
-                                return -1;
+                                skip:;
                             }
-                            skip:;
                         }
                     }
                 }
             }
+            if(constrCandCurr.idx > 1)
+            {
+                ERR("Found more than one possible OSMetaClass::OSMetaClass.");
+                return -1;
+            }
+            else if(constrCandCurr.idx == 1)
+            {
+                OSMetaClassConstructor = constrCandCurr.val[0];
+                free(constrCand[0].val);
+                free(constrCand[1].val);
+                for(size_t i = 0; i < NSTRREF; ++i)
+                {
+                    free(strrefs[i].val);
+                }
+            }
+            // else fall through to below
+#undef constrCandPrev
+#undef constrCandCurr
+#undef NSTRREF
         }
-        if(constrCandCurr.idx == 0)
+        if(!OSMetaClassConstructor)
         {
             ERR("Failed to find OSMetaClass::OSMetaClass.");
             return -1;
         }
-        else if(constrCandCurr.idx > 1)
-        {
-            ERR("Found more than one possible OSMetaClass::OSMetaClass.");
-            return -1;
-        }
-        OSMetaClassConstructor = constrCandCurr.val[0];
         DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
-        free(constrCand[0].val);
-        free(constrCand[1].val);
-        for(size_t i = 0; i < NSTRREF; ++i)
-        {
-            free(strrefs[i].val);
-        }
-#undef constrCandPrev
-#undef constrCandCurr
-#undef NSTRREF
     }
     ARRPUSH(aliases, OSMetaClassConstructor);
 
@@ -2203,8 +2423,239 @@ int main(int argc, const char **argv)
     namelist.val = NULL;
     namelist.size = namelist.idx = 0;
 
+    CFTypeRef prelink_info = NULL;
     if(want_vtabs)
     {
+        ARRDECLEMPTY(relocrange_t, locreloc);
+        if(!x1469)
+        {
+            size_t nlocrel = 0,
+                   relidx  = 0;
+            mach_reloc_t *reloc = NULL;
+            const kaslrPackedOffsets_t *kaslr = NULL;
+
+            // First pass: learn size
+            if(dstab)
+            {
+                reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->locreloff);
+                nlocrel += dstab->nlocrel;
+            }
+            if(hdr->filetype != MH_KEXT_BUNDLE)
+            {
+                if(!plk_base)
+                {
+                    ERR("Failed to find PrelinkBase");
+                    return -1;
+                }
+
+                if(!prelink_info) prelink_info = get_prelink_info(hdr);
+                if(!prelink_info) return -1;
+
+                CFDataRef data = CFDictionaryGetValue(prelink_info, CFSTR("_PrelinkLinkKASLROffsets"));
+                if(!data || CFGetTypeID(data) != CFDataGetTypeID())
+                {
+                    ERR("PrelinkLinkKASLROffsets missing or wrong type");
+                    return -1;
+                }
+                kaslr = (const kaslrPackedOffsets_t*)CFDataGetBytePtr(data);
+                if(!kaslr)
+                {
+                    ERR("Failed to get PrelinkLinkKASLROffsets byte pointer");
+                    return -1;
+                }
+                nlocrel += kaslr->count;
+#if 0
+                CFArrayRef arr = CFDictionaryGetValue(prelink_info, CFSTR("_PrelinkInfoDictionary"));
+                if(!arr || CFGetTypeID(arr) != CFArrayGetTypeID())
+                {
+                    ERR("PrelinkInfoDictionary missing or wrong type");
+                    return -1;
+                }
+                CFIndex arrlen = CFArrayGetCount(arr);
+                for(size_t i = 0; i < arrlen; ++i)
+                {
+                    CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
+                    if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
+                    {
+                        WRN("Array entry %lu is not a dict.", i);
+                        continue;
+                    }
+                    CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
+                    if(!cfnum)
+                    {
+                        DBG("Kext %lu has no PrelinkExecutableLoadAddr, skipping...", i);
+                        continue;
+                    }
+                    if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
+                    {
+                        WRN("PrelinkExecutableLoadAddr missing or wrong type for kext %lu", i);
+                        continue;
+                    }
+                    kptr_t kext_base = 0;
+                    if(!CFNumberGetValue(cfnum, kCFNumberLongLongType, &kext_base))
+                    {
+                        WRN("Failed to get CFNumber contents for kext %lu", i);
+                        continue;
+                    }
+                    mach_hdr_t *hdr2 = addr2ptr(kernel, kext_base);
+                    if(!hdr2)
+                    {
+                        WRN("Failed to translate kext header address " ADDR, kext_base);
+                        continue;
+                    }
+                    FOREACH_CMD(hdr2, cmd2)
+                    {
+                        if(cmd2->cmd == LC_DYSYMTAB)
+                        {
+                            nlocrel += ((mach_dstab_t*)cmd2)->nlocrel;
+                            break;
+                        }
+                    }
+                }
+#endif
+            }
+            DBG("Got %lu local relocations", nlocrel);
+
+            // Alloc mem
+            kptr_t *tmp = malloc(nlocrel * sizeof(kptr_t));
+            if(!tmp)
+            {
+                ERRNO("malloc(tmp/locreloc)");
+            }
+
+            // Second pass: copy out
+            if(dstab)
+            {
+                for(size_t i = 0; i < dstab->nlocrel; ++i)
+                {
+                    int32_t off = reloc[i].r_address;
+                    if(reloc[i].r_extern)
+                    {
+                        ERR("Local relocation entry %lu at 0x%x has external bit set.", i, off);
+                        return -1;
+                    }
+                    if(reloc[i].r_length != 0x3)
+                    {
+                        ERR("Local relocation entry %lu at 0x%x is not 8 bytes.", i, off);
+                        return -1;
+                    }
+                    kptr_t addr = kbase + off;
+                    DBG("Locreloc 0x%x: " ADDR, off, addr);
+                    tmp[relidx++] = addr;
+                }
+            }
+            if(kaslr)
+            {
+                for(size_t i = 0; i < kaslr->count; ++i)
+                {
+                    kptr_t addr = plk_base + kaslr->offsetsArray[i];
+                    DBG("KASLR reloc %lu: " ADDR, i, addr);
+                    tmp[relidx++] = addr;
+                }
+            }
+#if 0
+            if(prelink_info)
+            {
+                CFArrayRef arr = CFDictionaryGetValue(prelink_info, CFSTR("_PrelinkInfoDictionary"));
+                CFIndex arrlen = CFArrayGetCount(arr);
+                for(size_t j = 0; j < arrlen; ++j)
+                {
+                    CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, j);
+                    if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
+                    {
+                        continue;
+                    }
+                    CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
+                    if(!cfnum)
+                    {
+                        continue;
+                    }
+                    if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
+                    {
+                        continue;
+                    }
+                    kptr_t kext_base = 0;
+                    if(!CFNumberGetValue(cfnum, kCFNumberLongLongType, &kext_base))
+                    {
+                        continue;
+                    }
+                    mach_hdr_t *hdr2 = addr2ptr(kernel, kext_base);
+                    if(!hdr2)
+                    {
+                        continue;
+                    }
+                    void *kext_linkedit = NULL;
+                    FOREACH_CMD(hdr2, cmd2)
+                    {
+                        if(cmd2->cmd == MACH_SEGMENT)
+                        {
+                            mach_seg_t *seg = (mach_seg_t*)cmd2;
+                            if(strcmp("__LINKEDIT", seg->segname) == 0)
+                            {
+                                // Don't ask why, this is just how it's done in XNU src
+                                kext_linkedit = addr2ptr(kernel, seg->vmaddr - seg->fileoff);
+                                //kext_linkedit = addr2ptr(kernel, seg->vmaddr);
+                                break;
+                            }
+                        }
+                    }
+                    if(!kext_linkedit)
+                    {
+                        continue;
+                    }
+                    FOREACH_CMD(hdr2, cmd2)
+                    {
+                        if(cmd2->cmd == LC_DYSYMTAB)
+                        {
+                            mach_dstab_t *kext_dstab = (mach_dstab_t*)cmd2;
+                            mach_reloc_t *kext_reloc = (mach_reloc_t*)((uintptr_t)kext_linkedit + kext_dstab->locreloff);
+                            for(size_t i = 0; i < kext_dstab->nlocrel; ++i)
+                            {
+                                int32_t off = kext_reloc[i].r_address;
+                                if(kext_reloc[i].r_extern)
+                                {
+                                    ERR("Kext %lu Local relocation entry %lu at 0x%x has external bit set.", j, i, off);
+                                    return -1;
+                                }
+                                if(kext_reloc[i].r_length != 0x3)
+                                {
+                                    ERR("Kext %lu Local relocation entry %lu at 0x%x is not 8 bytes.", j, i, off);
+                                    return -1;
+                                }
+                                kptr_t addr = kext_base + off;
+                                DBG("Kext %lu locreloc 0x%x: " ADDR, j, off, addr);
+                                tmp[relidx++] = addr;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+#endif
+
+            // Squash and merge
+            qsort(tmp, nlocrel, sizeof(*tmp), &compare_addrs);
+            ARRINIT(locreloc, 0x1000);
+            relocrange_t *range = NULL;
+            ARRNEXT(locreloc, range);
+            range->from = range->to = tmp[0];
+            for(size_t i = 1; i < nlocrel; ++i)
+            {
+                kptr_t val = tmp[i];
+                if(val == range->to + sizeof(kptr_t))
+                {
+                    range->to = val;
+                }
+                else
+                {
+                    ARRNEXT(locreloc, range);
+                    range->from = range->to = val;
+                }
+            }
+            free(tmp);
+            DBG("Got %lu locreloc ranges", locreloc.idx);
+        }
+
         metaclass_t *metaclassHandle = NULL;
         kptr_t OSMetaClassMetaClass = 0;
         for(size_t i = 0; i < metas.idx; ++i)
@@ -2842,53 +3293,6 @@ int main(int argc, const char **argv)
 
         if(opt.overrides || opt.ofilt)
         {
-            char **relocs = NULL;
-            size_t reloc_min = ~0, reloc_max = 0;
-            if(hdr->filetype == MH_KEXT_BUNDLE)
-            {
-                FOREACH_CMD(hdr, cmd)
-                {
-                    if(cmd->cmd == LC_DYSYMTAB)
-                    {
-                        mach_dstab_t *dstab = (mach_dstab_t*)cmd;
-                        mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->extreloff);
-                        for(size_t i = 0; i < dstab->nextrel; ++i)
-                        {
-                            if(!reloc[i].r_extern)
-                            {
-                                ERR("External relocation entry %lu at 0x%x does not have external bit set.", i, reloc[i].r_address);
-                                return -1;
-                            }
-                            DBG("Reloc %x: %s", reloc[i].r_address, &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx]);
-                            if(reloc[i].r_address < reloc_min)
-                            {
-                                reloc_min = reloc[i].r_address;
-                            }
-                            if(reloc[i].r_address > reloc_max)
-                            {
-                                reloc_max = reloc[i].r_address;
-                            }
-                        }
-                        if(reloc_min < reloc_max)
-                        {
-                            reloc_max += sizeof(kptr_t);
-                            size_t relocsize = sizeof(char*) * (reloc_max - reloc_min) / sizeof(kptr_t);
-                            relocs = malloc(relocsize);
-                            if(!relocs)
-                            {
-                                ERRNO("malloc(relocs)");
-                                return -1;
-                            }
-                            bzero(relocs, relocsize);
-                            for(size_t i = 0; i < dstab->nextrel; ++i)
-                            {
-                                relocs[(reloc[i].r_address - reloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx];
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
             for(size_t i = 0; i < metas.idx; ++i)
             {
                 again:;
@@ -2961,13 +3365,8 @@ int main(int argc, const char **argv)
                     meta->methods_err = 1;
                     goto done;
                 }
-#define KOFF(x) ((uintptr_t)&(x) - (uintptr_t)kernel)
                 size_t nmeth = 0;
-                while
-                (
-                    (KOFF(mvtab[nmeth]) >= reloc_min && KOFF(mvtab[nmeth]) < reloc_max && relocs[(KOFF(mvtab[nmeth]) - reloc_min) / sizeof(kptr_t)] != NULL) ||
-                    (x1469 && nmeth > 0 ? ((pacptr_t*)mvtab)[nmeth - 1].nxt * sizeof(uint32_t) == sizeof(kptr_t) : mvtab[nmeth] != 0)
-                )
+                while(is_part_of_vtab(kernel, x1469, locreloc.val, locreloc.idx, exreloc, exreloc_min, exreloc_max, mvtab, meta->vtab, nmeth))
                 {
                     ++nmeth;
                 }
@@ -3015,10 +3414,11 @@ int main(int argc, const char **argv)
                          authoritative = false,
                          overrides     = false;
 
-                    bool is_in_reloc = KOFF(mvtab[idx]) >= reloc_min && KOFF(mvtab[idx]) < reloc_max && relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)] != NULL;
-                    if(is_in_reloc)
+                    uintptr_t koff = (uintptr_t)&mvtab[idx];
+                    bool is_in_exreloc = koff >= exreloc_min && koff < exreloc_max && exreloc[(koff - exreloc_min) / sizeof(kptr_t)] != NULL;
+                    if(is_in_exreloc)
                     {
-                        cxx_sym = relocs[(KOFF(mvtab[idx]) - reloc_min) / sizeof(kptr_t)];
+                        cxx_sym = exreloc[(koff - exreloc_min) / sizeof(kptr_t)];
                     }
                     else
                     {
@@ -3045,7 +3445,7 @@ int main(int argc, const char **argv)
                             DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
                             if(!cxx_demangle(cxx_sym, &class, &method, &structor))
                             {
-                                if(is_in_reloc)
+                                if(is_in_exreloc)
                                 {
                                     WRN("Failed to demangle symbol: %s (from reloc)", cxx_sym);
                                 }
@@ -3064,7 +3464,7 @@ int main(int argc, const char **argv)
                             DBG("Found no symbol for virtual function " ADDR, func);
                         }
                     }
-                    if(!is_in_reloc) // TODO: reloc parent?
+                    if(!is_in_exreloc) // TODO: reloc parent?
                     {
                         if(pent && pac != pent->pac && func != -1 && pent->addr != -1) // ignore pure_virtual
                         {
@@ -3173,17 +3573,12 @@ int main(int argc, const char **argv)
                         }
                     }
                 }
-#undef KOFF
                 meta->methods_done = 1;
                 done:;
                 if(do_again)
                 {
                     goto again;
                 }
-            }
-            if(relocs)
-            {
-                free(relocs);
             }
         }
     }
@@ -3369,118 +3764,107 @@ int main(int argc, const char **argv)
                                 meta->bundle = __kernel__;
                             }
                         }
+                        break;
                     }
-                    else if(strcmp("__PRELINK_INFO", seg->segname) == 0)
+                }
+            }
+            if(hdr->filetype != MH_KEXT_BUNDLE)
+            {
+                if(!prelink_info) prelink_info = get_prelink_info(hdr);
+                if(!prelink_info) return -1;
+
+                CFArrayRef arr = CFDictionaryGetValue(prelink_info, CFSTR("_PrelinkInfoDictionary"));
+                if(!arr || CFGetTypeID(arr) != CFArrayGetTypeID())
+                {
+                    ERR("PrelinkInfoDictionary missing or wrong type");
+                    return -1;
+                }
+                CFIndex arrlen = CFArrayGetCount(arr);
+                if(filt_bundle && !bundleList)
+                {
+                    bundleList = malloc((arrlen + 1) * sizeof(*bundleList));
+                    if(!bundleList)
                     {
-                        if(seg->filesize == 0)
+                        ERRNO("malloc(bundleList)");
+                        return -1;
+                    }
+                }
+                for(size_t i = 0; i < arrlen; ++i)
+                {
+                    CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
+                    if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
+                    {
+                        WRN("Array entry %lu is not a dict.", i);
+                        continue;
+                    }
+                    CFStringRef cfstr = CFDictionaryGetValue(dict, CFSTR("CFBundleIdentifier"));
+                    if(!cfstr || CFGetTypeID(cfstr) != CFStringGetTypeID())
+                    {
+                        WRN("CFBundleIdentifier missing or wrong type at entry %lu.", i);
+                        if(debug)
                         {
-                            continue;
+                            CFShow(dict);
                         }
-                        mach_sec_t *secs = (mach_sec_t*)(seg + 1);
-                        for(size_t h = 0; h < seg->nsects; ++h)
+                        continue;
+                    }
+                    const char *str = CFStringGetCStringPtr(cfstr, kCFStringEncodingUTF8);
+                    if(!str)
+                    {
+                        WRN("Failed to get CFString contents at entry %lu.", i);
+                        if(debug)
                         {
-                            if(strcmp("__info", secs[h].sectname) == 0)
+                            CFShow(cfstr);
+                        }
+                        continue;
+                    }
+                    if(bundleList)
+                    {
+                        bundleList[bundleIdx++] = str;
+                    }
+                    CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
+                    if(!cfnum)
+                    {
+                        DBG("Kext %s has no PrelinkExecutableLoadAddr, skipping...", str);
+                        continue;
+                    }
+                    if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
+                    {
+                        WRN("PrelinkExecutableLoadAddr missing or wrong type for kext %s", str);
+                        if(debug)
+                        {
+                            CFShow(cfnum);
+                        }
+                        continue;
+                    }
+                    kptr_t kext_base = 0;
+                    if(!CFNumberGetValue(cfnum, kCFNumberLongLongType, &kext_base))
+                    {
+                        WRN("Failed to get CFNumber contents for kext %s", str);
+                        continue;
+                    }
+                    DBG("Kext %s at " ADDR, str, kext_base);
+                    mach_hdr_t *hdr2 = addr2ptr(kernel, kext_base);
+                    if(!hdr2)
+                    {
+                        WRN("Failed to translate kext header address " ADDR, kext_base);
+                        continue;
+                    }
+                    FOREACH_CMD(hdr2, cmd2)
+                    {
+                        if(cmd2->cmd == MACH_SEGMENT)
+                        {
+                            mach_seg_t *seg2 = (mach_seg_t*)cmd2;
+                            if(strcmp("__DATA", seg2->segname) == 0)
                             {
-                                const char *xml = (const char*)((uintptr_t)kernel + secs[h].offset);
-                                CFStringRef err = NULL;
-                                CFTypeRef plist = IOCFUnserialize(xml, NULL, 0, &err);
-                                if(!plist)
+                                DBG("%s __DATA at " ADDR, str, seg2->vmaddr);
+                                for(size_t j = 0; j < metas.idx; ++j)
                                 {
-                                    ERR("IOCFUnserialize: %s", CFStringGetCStringPtr(err, kCFStringEncodingUTF8));
-                                    return -1;
-                                }
-                                CFArrayRef arr = CFDictionaryGetValue(plist, CFSTR("_PrelinkInfoDictionary"));
-                                CFIndex arrlen = CFArrayGetCount(arr);
-                                if(filt_bundle && !bundleList)
-                                {
-                                    bundleList = malloc((arrlen + 1) * sizeof(*bundleList));
-                                    if(!bundleList)
+                                    metaclass_t *meta = &metas.val[j];
+                                    if(meta->addr >= seg2->vmaddr && meta->addr < seg2->vmaddr + seg2->vmsize)
                                     {
-                                        ERRNO("malloc(bundleList)");
-                                        return -1;
+                                        meta->bundle = str;
                                     }
                                 }
-                                for(size_t i = 0; i < arrlen; ++i)
-                                {
-                                    CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
-                                    if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
-                                    {
-                                        WRN("Array entry %lu is not a dict.", i);
-                                        continue;
-                                    }
-                                    CFStringRef cfstr = CFDictionaryGetValue(dict, CFSTR("CFBundleIdentifier"));
-                                    if(!cfstr || CFGetTypeID(cfstr) != CFStringGetTypeID())
-                                    {
-                                        WRN("CFBundleIdentifier missing or wrong type at entry %lu.", i);
-                                        if(debug)
-                                        {
-                                            CFShow(dict);
-                                        }
-                                        continue;
-                                    }
-                                    const char *str = CFStringGetCStringPtr(cfstr, kCFStringEncodingUTF8);
-                                    if(!str)
-                                    {
-                                        WRN("Failed to get CFString contents at entry %lu.", i);
-                                        if(debug)
-                                        {
-                                            CFShow(cfstr);
-                                        }
-                                        continue;
-                                    }
-                                    if(bundleList)
-                                    {
-                                        bundleList[bundleIdx++] = str;
-                                    }
-                                    CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
-                                    if(!cfnum)
-                                    {
-                                        DBG("Kext %s has no PrelinkExecutableLoadAddr, skipping...", str);
-                                        continue;
-                                    }
-                                    if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
-                                    {
-                                        WRN("PrelinkExecutableLoadAddr missing or wrong type for kext %s", str);
-                                        if(debug)
-                                        {
-                                            CFShow(cfnum);
-                                        }
-                                        continue;
-                                    }
-                                    kptr_t addr = 0;
-                                    if(!CFNumberGetValue(cfnum, kCFNumberLongLongType, &addr))
-                                    {
-                                        WRN("Failed to get CFNumber contents for kext %s", str);
-                                        continue;
-                                    }
-                                    DBG("Kext %s at " ADDR, str, addr);
-                                    mach_hdr_t *hdr2 = addr2ptr(kernel, addr);
-                                    if(!hdr2)
-                                    {
-                                        WRN("Failed to translate kext header address " ADDR, addr);
-                                        continue;
-                                    }
-                                    FOREACH_CMD(hdr2, cmd2)
-                                    {
-                                        if(cmd2->cmd == MACH_SEGMENT)
-                                        {
-                                            mach_seg_t *seg2 = (mach_seg_t*)cmd2;
-                                            if(strcmp("__DATA", seg2->segname) == 0)
-                                            {
-                                                DBG("%s __DATA at " ADDR, str, seg2->vmaddr);
-                                                for(size_t j = 0; j < metas.idx; ++j)
-                                                {
-                                                    metaclass_t *meta = &metas.val[j];
-                                                    if(meta->addr >= seg2->vmaddr && meta->addr < seg2->vmaddr + seg2->vmsize)
-                                                    {
-                                                        meta->bundle = str;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                break;
                             }
                         }
                     }
