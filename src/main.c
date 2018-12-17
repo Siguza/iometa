@@ -295,6 +295,7 @@ typedef struct
              extend    :  1,
              inherit   :  1,
              meta      :  1,
+             maxmap    :  1,
              overrides :  1,
              ofilt     :  1,
              parent    :  1,
@@ -302,7 +303,7 @@ typedef struct
              size      :  1,
              symmap    :  1,
              vtab      :  1,
-             _reserved : 18;
+             _reserved : 16;
 } opt_t;
 
 static int compare_range(const void *a, const void *b)
@@ -1498,6 +1499,7 @@ static void print_help(const char *self)
                     "    -i  Print inherited virtual methods (implies -o)\n"
                     "    -m  Print MetaClass addresses\n"
                     "    -M  Print symbol map (implies -o, takes precedence)\n"
+                    "    -MM Same as above, and copy input map for missing classes\n"
                     "    -o  Print overridden/new virtual methods\n"
                     "    -R  Print symbols for radare2 (implies -iov, takes precedence)\n"
                     "    -s  Print object sizes\n"
@@ -1531,6 +1533,7 @@ int main(int argc, const char **argv)
         .extend    = 0,
         .inherit   = 0,
         .meta      = 0,
+        .maxmap    = 0,
         .overrides = 0,
         .ofilt     = 0,
         .parent    = 0,
@@ -1617,6 +1620,10 @@ int main(int argc, const char **argv)
                 }
                 case 'M':
                 {
+                    if(opt.symmap)
+                    {
+                        opt.maxmap = 1;
+                    }
                     opt.overrides = 1;
                     opt.symmap    = 1;
                     break;
@@ -4024,35 +4031,46 @@ int main(int argc, const char **argv)
         {
             list[lsize++] = &metas.val[i];
         }
-        qsort(list, lsize, sizeof(*list), opt.bsort ? &compare_bundles : &compare_names);
+        qsort(list, lsize, sizeof(*list), &compare_names);
 
-        // Merge two sorted lists, ugh
-        for(size_t i = 0, j = 0; i < symmap.num || j < lsize; )
+        if(opt.maxmap)
         {
-            if(j >= lsize || (i < symmap.num && strcmp(symmap.map[i].name, list[j]->name) <= 0))
+            // Merge two sorted lists, ugh
+            for(size_t i = 0, j = 0; i < symmap.num || j < lsize; )
             {
-                symmap_class_t *class = &symmap.map[i++];
-                if(class->metaclass)
+                if(j >= lsize || (i < symmap.num && strcmp(symmap.map[i].name, list[j]->name) <= 0))
                 {
-                    print_symmap(class->metaclass);
+                    symmap_class_t *class = &symmap.map[i++];
+                    if(class->metaclass)
+                    {
+                        print_symmap(class->metaclass);
+                    }
+                    else
+                    {
+                        printf("%s\n", class->name);
+                        for(size_t k = 0; k < class->num; ++k)
+                        {
+                            symmap_method_t *ent = &class->methods[k];
+                            print_syment(class->name, ent->class, ent->method);
+                        }
+                    }
                 }
                 else
                 {
-                    printf("%s\n", class->name);
-                    for(size_t k = 0; k < class->num; ++k)
+                    metaclass_t *meta = list[j++];
+                    if(!meta->symclass) // Only print if novelty
                     {
-                        symmap_method_t *ent = &class->methods[k];
-                        print_syment(class->name, ent->class, ent->method);
+                        print_symmap(meta);
                     }
                 }
             }
-            else
+        }
+        else
+        {
+            // Only print existing classes
+            for(size_t i = 0; i < lsize; ++i)
             {
-                metaclass_t *meta = list[j++];
-                if(!meta->symclass) // Only print if novelty
-                {
-                    print_symmap(meta);
-                }
+                print_symmap(list[i]);
             }
         }
     }
