@@ -266,7 +266,8 @@ typedef struct metaclass
     uint32_t methods_done :  1,
              methods_err  :  1,
              visited      :  1,
-             reserved     : 29;
+             duplicate    :  1,
+             reserved     : 28;
 } metaclass_t;
 
 typedef union
@@ -1393,6 +1394,12 @@ out:;
 
 static void print_syment(const char *owner, const char *class, const char *method)
 {
+    if(!method)
+    {
+        // Quick exit - preserve empty placeholder
+        printf("-\n");
+        return;
+    }
     printf("- ");
     if(strcmp(class, owner) != 0)
     {
@@ -2334,6 +2341,7 @@ int main(int argc, const char **argv)
                                         meta->methods_done = 0;
                                         meta->methods_err = 0;
                                         meta->visited = 0;
+                                        meta->duplicate = 0;
                                         meta->reserved = 0;
                                         if(want_vtabs)
                                         {
@@ -4033,6 +4041,34 @@ int main(int argc, const char **argv)
         }
         qsort(list, lsize, sizeof(*list), &compare_names);
 
+        // Mark duplicates and warn if methods don't match
+        for(size_t i = 1; i < lsize; ++i)
+        {
+            metaclass_t *prev = list[i-1],
+                        *cur  = list[i];
+            if(strcmp(prev->name, cur->name) == 0)
+            {
+                DBG("Duplicate class: %s", cur->name);
+                cur->duplicate = 1;
+                if(prev->nmethods != cur->nmethods)
+                {
+                    WRN("Duplicate classes %s have different number of methods (%lu vs %lu)", cur->name, prev->nmethods, cur->nmethods);
+                }
+                else
+                {
+                    for(size_t i = 0; i < cur->nmethods; ++i)
+                    {
+                        vtab_entry_t *one = &prev->methods[i],
+                                     *two = &cur ->methods[i];
+                        if(strcmp(one->class, two->class) != 0 || strcmp(one->method, two->method) != 0)
+                        {
+                            WRN("Mismatching method names of duplicate class %s: %s::%s vs %s::%s", cur->name, one->class, one->method, two->class, two->method);
+                        }
+                    }
+                }
+            }
+        }
+
         if(opt.maxmap)
         {
             // Merge two sorted lists, ugh
@@ -4041,9 +4077,13 @@ int main(int argc, const char **argv)
                 if(j >= lsize || (i < symmap.num && strcmp(symmap.map[i].name, list[j]->name) <= 0))
                 {
                     symmap_class_t *class = &symmap.map[i++];
-                    if(class->metaclass)
+                    metaclass_t *meta = class->metaclass;
+                    if(meta)
                     {
-                        print_symmap(class->metaclass);
+                        if(!meta->duplicate)
+                        {
+                            print_symmap(meta);
+                        }
                     }
                     else
                     {
@@ -4058,7 +4098,7 @@ int main(int argc, const char **argv)
                 else
                 {
                     metaclass_t *meta = list[j++];
-                    if(!meta->symclass) // Only print if novelty
+                    if(!meta->duplicate && !meta->symclass) // Only print what we haven't printed above already
                     {
                         print_symmap(meta);
                     }
