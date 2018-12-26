@@ -234,6 +234,8 @@ typedef struct
     const char *name;
     symmap_method_t *methods;
     size_t num;
+    uint32_t duplicate :  1,
+             reserved  : 31;
 } symmap_class_t;
 
 typedef struct vtab_entry
@@ -245,8 +247,9 @@ typedef struct vtab_entry
     uint16_t pac;
     uint16_t structor      :  1,
              authoritative :  1,
+             placeholder   :  1,
              overrides     :  1,
-             reserved      : 12;
+             reserved      : 11;
 } vtab_entry_t;
 
 typedef struct metaclass
@@ -1183,6 +1186,7 @@ do \
     ent->name = current.class; \
     ent->num = current.arr.idx; \
     ent->methods = methods; \
+    ent->duplicate = 0; \
 } while(0)
     for(char *end = mem + len; mem < end;)
     {
@@ -1365,6 +1369,39 @@ do \
     }
     memcpy(ptr, map.val, sz);
     qsort(ptr, map.idx, sizeof(*map.val), &compare_symclass);
+
+    // Mark duplicates and warn if methods don't match
+    for(size_t i = 1; i < map.idx; ++i)
+    {
+        symmap_class_t *prev = &ptr[i-1],
+                       *cur  = &ptr[i];
+        if(strcmp(prev->name, cur->name) == 0)
+        {
+            DBG("Duplicate symmap class: %s", cur->name);
+            cur->duplicate = 1;
+            if(prev->num != cur->num)
+            {
+                WRN("Duplicate symmap classes %s have different number of methods (%lu vs %lu)", cur->name, prev->num, cur->num);
+            }
+            else
+            {
+                for(size_t j = 0; j < cur->num; ++j)
+                {
+                    symmap_method_t *one = &prev->methods[j],
+                                    *two = &cur ->methods[j];
+                    if(!one->method && !two->method) // note the AND
+                    {
+                        continue;
+                    }
+                    if(!one->method || !two->method || strcmp(one->class, two->class) != 0 || strcmp(one->method, two->method) != 0)
+                    {
+                        WRN("Mismatching method names of duplicate symmap class %s: %s::%s vs %s::%s", cur->name, one->class, one->method, two->class, two->method);
+                    }
+                }
+            }
+        }
+    }
+
     *entries = ptr;
     *num = map.idx;
 
@@ -1419,7 +1456,7 @@ static void print_symmap(metaclass_t *meta)
     for(size_t i = parent ? parent->nmethods : 0; i < meta->nmethods; ++i)
     {
         vtab_entry_t *ent = &meta->methods[i];
-        print_syment(meta->name, ent->class, ent->method);
+        print_syment(meta->name, ent->class, ent->placeholder ? NULL : ent->method);
     }
 }
 
@@ -3347,6 +3384,10 @@ int main(int argc, const char **argv)
                     symmap_class_t *symcls = bsearch(meta->name, symmap.map, symmap.num, sizeof(*symmap.map), &compare_symclass_name);
                     if(symcls)
                     {
+                        while(symcls->duplicate)
+                        {
+                            --symcls;
+                        }
                         if(symcls->metaclass)
                         {
                             DBG("Symmap entry for %s has metaclass set already (%s).", meta->name, symcls->metaclass->name);
@@ -3434,6 +3475,7 @@ int main(int argc, const char **argv)
                     uint16_t pac;
                     bool structor      = false,
                          authoritative = false,
+                         placeholder   = false,
                          overrides     = false;
 
                     kptr_t koff = meta->vtab + sizeof(kptr_t) * idx;
@@ -3452,15 +3494,22 @@ int main(int argc, const char **argv)
                     {
                         func = -1;
                     }
-                    if(!ignore_symmap && idx >= pnmeth && meta->symclass && meta->symclass->methods[idx - pnmeth].method)
+                    if(!ignore_symmap && idx >= pnmeth && meta->symclass)
                     {
                         symmap_method_t *smeth = &meta->symclass->methods[idx - pnmeth];
                         class = smeth->class;
                         method = smeth->method;
                         structor = smeth->structor;
-                        authoritative = true;
+                        if(method)
+                        {
+                            authoritative = true;
+                        }
+                        else
+                        {
+                            placeholder = true;
+                        }
                     }
-                    else if(func != -1)
+                    if(!method && func != -1)
                     {
                         if(cxx_sym)
                         {
@@ -3561,6 +3610,7 @@ int main(int argc, const char **argv)
                     ent->pac = pac;
                     ent->structor = !!structor;
                     ent->authoritative = !!authoritative;
+                    ent->placeholder = !!placeholder;
                     ent->overrides = !!overrides;
                     ent->reserved = 0;
 
@@ -4056,10 +4106,10 @@ int main(int argc, const char **argv)
                 }
                 else
                 {
-                    for(size_t i = 0; i < cur->nmethods; ++i)
+                    for(size_t j = 0; j < cur->nmethods; ++j)
                     {
-                        vtab_entry_t *one = &prev->methods[i],
-                                     *two = &cur ->methods[i];
+                        vtab_entry_t *one = &prev->methods[j],
+                                     *two = &cur ->methods[j];
                         if(strcmp(one->class, two->class) != 0 || strcmp(one->method, two->method) != 0)
                         {
                             WRN("Mismatching method names of duplicate class %s: %s::%s vs %s::%s", cur->name, one->class, one->method, two->class, two->method);
@@ -4078,9 +4128,17 @@ int main(int argc, const char **argv)
                 {
                     symmap_class_t *class = &symmap.map[i++];
                     metaclass_t *meta = class->metaclass;
+                    if(class->duplicate)
+                    {
+                        if(meta)
+                        {
+                            WRN("Implementation fault: duplicate symclass has metaclass!");
+                        }
+                        continue;
+                    }
                     if(meta)
                     {
-                        if(!meta->duplicate)
+                        //if(!meta->duplicate)
                         {
                             print_symmap(meta);
                         }
@@ -4110,7 +4168,11 @@ int main(int argc, const char **argv)
             // Only print existing classes
             for(size_t i = 0; i < lsize; ++i)
             {
-                print_symmap(list[i]);
+                metaclass_t *meta = list[i];
+                if(!meta->duplicate)
+                {
+                    print_symmap(meta);
+                }
             }
         }
     }
