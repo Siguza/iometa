@@ -4,7 +4,7 @@ AAPDriver
 - turnOn(bool)
 - setStrength(int)
 AAPDriverH8
-AAPDriverPreH8
+AAPDriverH8G
 AAPDriver_Impl
 - updateAAPWrapDefaults_gated()
 - triggerWrapRegUpdate_gated(AAPDriver::_updateSync, AAPDriver::_waitForAck)
@@ -62,8 +62,8 @@ ADBE0Driver_Impl
 - initBlockStates()
 - enableVFTG(bool)
 - init_supported_block(IOMFBSoCProfile*)
-ADBE0H7Driver
 ADBE0H8Driver
+ADBE0H8GDriver
 ADBEParamFIFO
 - init(unsigned long, IOMFBParamFIFODriver*)
 ADBEParamFIFODriver
@@ -73,40 +73,7 @@ ADPParamFIFO
 ADPParamFIFODriver
 - init(IOService*, IOMFBSoCProfile*, IOMemoryMap*, IOMFB::TraceBuffer*)
 AGX3DChannel
-AGX3DChannelG4G_A0
-- AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
-- encodeSetContext(int, unsigned int)
-- encodeInvalidateUSCInstCache()
-- encodeInvalidateDynamicConstantCache()
-- encodeInvalidatePDSCache(AGFIDataMasterType)
-- encodeFlushInvalidatePM(bool)
-- init(AGXAccelerator*, unsigned int, int, int, int, int, unsigned long long)
-- AGXChannel::forceRestart()
-- AGXChannel::prepare()
-- AGXChannel::complete()
-- AGX3DChannel::updateChannelStampIndex()
-- AGXChannel::setPriority(AGFIContextPriorityType)
-- AGXChannel::resetChannelState()
-- AGX3DChannel::describeAllocationsForPID(IOAccelAllocationInfo*, int)
-- AGX3DChannel::getGuiltyDMType() const
-- encode3DCommandSKUStream(AGFIChannelCommand3D*, AGX3DCommandDescriptor*, unsigned long long, IOAccelEvent*)
-- encodeFastBlitSKUStream(AGFIChannelCommandFastBlit*, AGX3DCommandDescriptor*, unsigned long long, IOAccelEvent*)
-- generateRegisterListFor3D(AGFIChannelCommand3D*, AGX3DCommandDescriptor*)
-- generateRegisterListForFastBlit(AGFIChannelCommandFastBlit*, AGX3DCommandDescriptor*)
-- AGX3DChannel::generateFrgBarrierRegister(bool)
-- encode3DPMSceneLoad(unsigned int, unsigned long long, unsigned long long)
-- encode3DCommandSetup(AGX3DCommandDescriptor*)
-- AGX3DChannel::encodePartialRenderSetup(unsigned int)
-- encodeKickStart()
-- encodeDummyStart()
-- encodePixelEndRenderWFI(unsigned int)
-- encodeHasRenderFinished()
-- encode3DMemFreeWFI()
-- encodeIsPBDifferentTest()
-- encodePDMFlushInvalidate(int)
-- encodeFastBlitCommandFinished()
-- AGX3DChannel::encode3DDebugInfo(unsigned int, unsigned int)
-AGX3DChannelG4P_B0
+AGX3DChannelG5G
 - AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
 - encodeSetContext(int, unsigned int)
 - encodeInvalidateUSCInstCache()
@@ -174,259 +141,133 @@ AGX3DChannelG5P
 - AGX3DChannel::encode3DDebugInfo(unsigned int, unsigned int)
 AGX3DChannelGen1
 AGXAccelerator
-AGXAcceleratorG4G_A0
-- AGXAccelerator::encodeDisablePMDeallocate(AGXSKUEncoder*)
-- AGXAccelerator::encodeDoDeferFree(AGXSKUEncoder*)
-- AGXAccelerator::brn40480Init()
-- AGXAccelerator::brn40480Free()
-- AGXAccelerator::brn40480EncodeDummyOneTileRender(AGXSKUEncoder*)
-- AGXAccelerator::brn40719Init()
-- AGXAccelerator::brn40719Free()
-- AGXAccelerator::brn40719EncodeSetupEco(AGXSKUEncoder*, AGFIDataMasterType, bool)
-- AGXAccelerator::brn40719EncodeResetEco(AGXSKUEncoder*, AGFIDataMasterType, bool)
-- brn42920EncodeSetupTAMaster(AGXSKUEncoder*)
-- brn42920EncodeSetupCLMaster(AGXSKUEncoder*)
-- brn42920EncodeFinishTAMaster(AGXSKUEncoder*)
-- brn42920EncodeFinish3DMaster(AGXSKUEncoder*)
-- brn42920EncodeFinishCLMaster(AGXSKUEncoder*)
-- AGXAccelerator::brn44352EncodeSetupEco(AGXSKUEncoder*, unsigned int, unsigned int, unsigned int)
-- brn47106EncodeEnsureNoComputeOverlap(AGXSKUEncoder*, AGFIDataMasterType)
-- brn47106EncodeDMComplete(AGXSKUEncoder*, AGFIDataMasterType)
-- AGXAccelerator::brn49421EncodeDeferFreeSwitchToPBContextID(AGXSKUEncoder*, unsigned int)
-- AGXAccelerator::brn49421EncodeDeferFreeSwitchToContextID(AGXSKUEncoder*, int)
-- AGXAccelerator::brn52402EncodeSetupPMFastBlit(AGXSKUEncoder*, int, unsigned long long)
-- AGXAccelerator::brn52402EncodeResetPMFastBlit(AGXSKUEncoder*)
-- AGXAccelerator::brn54141EncodeCheckTEVCEPipesValid(AGXSKUEncoder*)
-- AGXAccelerator::brn54141EncodePatchTEVCEPipesValidJump(AGXSKUEncoder*)
-- AGXAccelerator::brn54141EncodeInvalidateTEVCEPipes(AGXSKUEncoder*)
-- AGXAccelerator::brn47985MCUGlbFence(AGXSKUEncoder*, int, unsigned int)
-- brn54441EncodeCheckStreamTerminate(AGXSKUEncoder*, unsigned long long, unsigned long long, int)
-- brn54441EncodePatchStreamTerminateJump(AGXSKUEncoder*)
-- brn55237EncodePollTPFIdle(AGXSKUEncoder*)
-- brn54655EncodeComputeToggleAndPatchSharedRegisterCount(AGXSKUEncoder*, unsigned int, unsigned long long, unsigned long long, unsigned long long*, int)
-- AGXAccelerator::brn55322EncodeISPClockOn(AGXSKUEncoder*)
-- AGXAccelerator::brn55322EncodeISPClockAuto(AGXSKUEncoder*)
-- brn55264EncodeResetCDMModule(AGXSKUEncoder*)
-- AGXAccelerator::brn58107EnableSWWA(AGXSKUEncoder*, AGX3DCommandDescriptor*)
-- AGXAccelerator::brn58107DisableSWWA(AGXSKUEncoder*, AGX3DCommandDescriptor*)
-- AGXAccelerator::brn58521Init()
-- AGXAccelerator::brn58521Free()
-- AGXAccelerator::brn58521ComputeClockOn(AGXSKUEncoder*, AGFIDataMasterType, unsigned int)
-- AGXAccelerator::brn58521ComputeClockAuto(AGXSKUEncoder*, AGFIDataMasterType, unsigned int)
-- AGXAccelerator::mapGPTBATContextId(unsigned int, AGXGart*)
-- AGXAccelerator::unmapGPTBATContextId(unsigned int)
-- AGXAccelerator::getGPTBATDesc()
-- AGXAccelerator::getGPTBATPtr()
-- getFWKextName() const
-- AGXAccelerator::getFWKextMatchingDictionary() const
-- getAccelShortName() const
-- configureMMUForBoot(int, unsigned long long, unsigned char)
-- populateInitSequenceFirmware(unsigned char)
-- waitForIdle()
-- getNumContextIDs()
-- getNumReservedContextIDs()
-- AGXAccelerator::requiresPerDMContextID()
-- printAGXInfo()
-- printBIFFaultSideband(unsigned int, unsigned int)
-- AGXFamilyAccelerator::printMMURegisterStateCommon()
-- getMMUFaultInfo(unsigned int, AGXAccelerator::MMUFaultInfo&, bool)
-- getMMUEntryPendingInfo(AGXAccelerator::MMUEntryPendingInfo&)
-- AGXFamilyAccelerator::getReservedContextIDDescription(int)
-- printUSCSlotUsage()
-- AGXAccelerator::getUSCExceptionInfo(AGFIDataMasterType&)
-- AGXAccelerator::isPIOSupported()
-- AGXAccelerator::isPowerManagedInAGX()
-- AGXAccelerator::getFenderPhysicalAddress()
-- AGXAccelerator::getUVWarnPhysicalAddress()
-- AGXAccelerator::getChecksumRegisters(_AGXSChecksumRegisters&) const
-- AGXAccelerator::postBootFirmware()
-- newTAChannel()
-- new3DChannel()
-- newCLChannel()
-- halNewGart()
-- halNewSharedGart()
-- halNewFastRenderTarget()
-- halNewRenderTargetMemory()
-- halNewParameterManager()
-- halPopulateAccelConfig(IOAccelConfig*)
-- halGetPMConfig() const
-- halNewFirmware()
-- halNewFenderController()
-- requestFirmwareBinary(IOService*, unsigned char const**, unsigned long*)
-- use16kPageSizeDefault()
-- AGXAccelerator::updateG9GConfig(unsigned int)
-- AGXAccelerator::filterInterrupt(IOFilterInterruptEventSource*)
-- AGXAccelerator::handleInterrupt(IOInterruptEventSource*, int)
-- handleGPUInterrupt()
-- AGXAccelerator::enableSleepInterrupt(bool)
-- AGXAccelerator::enableInterrupts(bool)
-- AGXAccelerator::idleParameterEvent(IOInterruptEventSource*, int)
-- AGXAccelerator::getIndirectMaxVal(AGXIndirectRegisterType) const
-- AGXAccelerator::getGPUMemoryThreshold()
-- AGXAccelerator::populatePowerEstimationConfigData(unsigned int)
-- AGXAccelerator::populatePowerEstimationConfigDataPreG5()
-- AGXAccelerator::populatePowerEstimationConfigDataPostG5(float, float, unsigned int)
-- AGXAccelerator::populateDPEConfigData(float, float, unsigned int)
-- AGXAccelerator::populateStaticPowerData()
-- AGXAccelerator::populateDPEAdjustmentCoEffData()
-- AGXAccelerator::populateSRAMPowerScaleData()
-- AGXAccelerator::populateDefaultSRAMVoltageData()
-- AGXAccelerator::getPMGRServiceDictionary()
-- AGXAccelerator::getGPTBATBasePhys()
-- AGXAccelerator::submitContextIDBaseAddress(int, AGXGart*, unsigned int)
-- getBorderColorTableGPUAddress()
-- getFenceBufferGPUAddress()
-- AGXAccelerator::getPBDescriptorTableGPUAddress()
-- AGXAccelerator::halGetMappingAlignment()
-- createHardwareMappings()
-- releaseHardwareMappings()
-- prepareHardwareMappings()
-- AGXAccelerator::updateHardwareMappings()
-- completeHardwareMappings()
-- enumerateHardwareMappings(void (*)(AGXAccelerator*, AGXMemoryMap*, char const*, void*), void*)
-- AGXAccelerator::getSamplePeriod()
-- initBRNWorkarounds()
-- freeBRNWorkarounds()
-- getSizeOfFWBRNTable() const
-- populateFWBRNTable(void*)
-- populateBootTimeFWBRNTable(void*, unsigned long long, unsigned int)
-- generateCSCCoefficients()
-- populateCSCAllocation()
-- halGetDefaultParameterBufferSizeMin() const
-- AGXAccelerator::halGetDefaultParameterBufferSizeMax() const
-- AGXAccelerator::halGetDefaultParameterBufferSizeMinOverride() const
-- AGXAccelerator::halGetDefaultParameterBufferSizeMaxOverride() const
-- AGXFamilyAccelerator::probePowerUpGPU() const
-- AGXFamilyAccelerator::getProbeScore()
-- getSupportedRevisions() const
-- readChipInfo(AGXGPUCoreConfig*) const
-AGXAcceleratorG4P_B0
-- AGXAccelerator::encodeDisablePMDeallocate(AGXSKUEncoder*)
-- AGXAccelerator::encodeDoDeferFree(AGXSKUEncoder*)
-- AGXAccelerator::brn40480Init()
-- AGXAccelerator::brn40480Free()
-- AGXAccelerator::brn40480EncodeDummyOneTileRender(AGXSKUEncoder*)
-- AGXAccelerator::brn40719Init()
-- AGXAccelerator::brn40719Free()
-- AGXAccelerator::brn40719EncodeSetupEco(AGXSKUEncoder*, AGFIDataMasterType, bool)
-- AGXAccelerator::brn40719EncodeResetEco(AGXSKUEncoder*, AGFIDataMasterType, bool)
-- brn42920EncodeSetupTAMaster(AGXSKUEncoder*)
-- brn42920EncodeSetupCLMaster(AGXSKUEncoder*)
-- brn42920EncodeFinishTAMaster(AGXSKUEncoder*)
-- brn42920EncodeFinish3DMaster(AGXSKUEncoder*)
-- brn42920EncodeFinishCLMaster(AGXSKUEncoder*)
-- AGXAccelerator::brn44352EncodeSetupEco(AGXSKUEncoder*, unsigned int, unsigned int, unsigned int)
-- brn47106EncodeEnsureNoComputeOverlap(AGXSKUEncoder*, AGFIDataMasterType)
-- brn47106EncodeDMComplete(AGXSKUEncoder*, AGFIDataMasterType)
-- AGXAccelerator::brn49421EncodeDeferFreeSwitchToPBContextID(AGXSKUEncoder*, unsigned int)
-- AGXAccelerator::brn49421EncodeDeferFreeSwitchToContextID(AGXSKUEncoder*, int)
-- AGXAccelerator::brn52402EncodeSetupPMFastBlit(AGXSKUEncoder*, int, unsigned long long)
-- AGXAccelerator::brn52402EncodeResetPMFastBlit(AGXSKUEncoder*)
-- AGXAccelerator::brn54141EncodeCheckTEVCEPipesValid(AGXSKUEncoder*)
-- AGXAccelerator::brn54141EncodePatchTEVCEPipesValidJump(AGXSKUEncoder*)
-- AGXAccelerator::brn54141EncodeInvalidateTEVCEPipes(AGXSKUEncoder*)
-- AGXAccelerator::brn47985MCUGlbFence(AGXSKUEncoder*, int, unsigned int)
-- brn54441EncodeCheckStreamTerminate(AGXSKUEncoder*, unsigned long long, unsigned long long, int)
-- brn54441EncodePatchStreamTerminateJump(AGXSKUEncoder*)
-- brn55237EncodePollTPFIdle(AGXSKUEncoder*)
-- brn54655EncodeComputeToggleAndPatchSharedRegisterCount(AGXSKUEncoder*, unsigned int, unsigned long long, unsigned long long, unsigned long long*, int)
-- AGXAccelerator::brn55322EncodeISPClockOn(AGXSKUEncoder*)
-- AGXAccelerator::brn55322EncodeISPClockAuto(AGXSKUEncoder*)
-- brn55264EncodeResetCDMModule(AGXSKUEncoder*)
-- AGXAccelerator::brn58107EnableSWWA(AGXSKUEncoder*, AGX3DCommandDescriptor*)
-- AGXAccelerator::brn58107DisableSWWA(AGXSKUEncoder*, AGX3DCommandDescriptor*)
-- AGXAccelerator::brn58521Init()
-- AGXAccelerator::brn58521Free()
-- AGXAccelerator::brn58521ComputeClockOn(AGXSKUEncoder*, AGFIDataMasterType, unsigned int)
-- AGXAccelerator::brn58521ComputeClockAuto(AGXSKUEncoder*, AGFIDataMasterType, unsigned int)
-- AGXAccelerator::mapGPTBATContextId(unsigned int, AGXGart*)
-- AGXAccelerator::unmapGPTBATContextId(unsigned int)
-- AGXAccelerator::getGPTBATDesc()
-- AGXAccelerator::getGPTBATPtr()
-- getFWKextName() const
-- AGXAccelerator::getFWKextMatchingDictionary() const
-- getAccelShortName() const
-- configureMMUForBoot(int, unsigned long long, unsigned char)
-- populateInitSequenceFirmware(unsigned char)
-- waitForIdle()
-- getNumContextIDs()
-- getNumReservedContextIDs()
-- AGXAccelerator::requiresPerDMContextID()
-- printAGXInfo()
-- printBIFFaultSideband(unsigned int, unsigned int)
-- AGXFamilyAccelerator::printMMURegisterStateCommon()
-- getMMUFaultInfo(unsigned int, AGXAccelerator::MMUFaultInfo&, bool)
-- getMMUEntryPendingInfo(AGXAccelerator::MMUEntryPendingInfo&)
-- AGXFamilyAccelerator::getReservedContextIDDescription(int)
-- printUSCSlotUsage()
-- AGXAccelerator::getUSCExceptionInfo(AGFIDataMasterType&)
-- AGXAccelerator::isPIOSupported()
-- AGXAccelerator::isPowerManagedInAGX()
-- AGXAccelerator::getFenderPhysicalAddress()
-- AGXAccelerator::getUVWarnPhysicalAddress()
-- AGXAccelerator::getChecksumRegisters(_AGXSChecksumRegisters&) const
-- AGXAccelerator::postBootFirmware()
-- newTAChannel()
-- new3DChannel()
-- newCLChannel()
-- halNewGart()
-- halNewSharedGart()
-- halNewFastRenderTarget()
-- halNewRenderTargetMemory()
-- halNewParameterManager()
-- halPopulateAccelConfig(IOAccelConfig*)
-- halGetPMConfig() const
-- halNewFirmware()
-- halNewFenderController()
-- requestFirmwareBinary(IOService*, unsigned char const**, unsigned long*)
-- use16kPageSizeDefault()
-- AGXAccelerator::updateG9GConfig(unsigned int)
-- AGXAccelerator::filterInterrupt(IOFilterInterruptEventSource*)
-- AGXAccelerator::handleInterrupt(IOInterruptEventSource*, int)
-- handleGPUInterrupt()
-- AGXAccelerator::enableSleepInterrupt(bool)
-- AGXAccelerator::enableInterrupts(bool)
-- AGXAccelerator::idleParameterEvent(IOInterruptEventSource*, int)
-- AGXAccelerator::getIndirectMaxVal(AGXIndirectRegisterType) const
-- AGXAccelerator::getGPUMemoryThreshold()
-- AGXAccelerator::populatePowerEstimationConfigData(unsigned int)
-- AGXAccelerator::populatePowerEstimationConfigDataPreG5()
-- AGXAccelerator::populatePowerEstimationConfigDataPostG5(float, float, unsigned int)
-- AGXAccelerator::populateDPEConfigData(float, float, unsigned int)
-- AGXAccelerator::populateStaticPowerData()
-- AGXAccelerator::populateDPEAdjustmentCoEffData()
-- AGXAccelerator::populateSRAMPowerScaleData()
-- AGXAccelerator::populateDefaultSRAMVoltageData()
-- AGXAccelerator::getPMGRServiceDictionary()
-- AGXAccelerator::getGPTBATBasePhys()
-- AGXAccelerator::submitContextIDBaseAddress(int, AGXGart*, unsigned int)
-- getBorderColorTableGPUAddress()
-- getFenceBufferGPUAddress()
-- AGXAccelerator::getPBDescriptorTableGPUAddress()
-- AGXAccelerator::halGetMappingAlignment()
-- createHardwareMappings()
-- releaseHardwareMappings()
-- prepareHardwareMappings()
-- AGXAccelerator::updateHardwareMappings()
-- completeHardwareMappings()
-- enumerateHardwareMappings(void (*)(AGXAccelerator*, AGXMemoryMap*, char const*, void*), void*)
-- AGXAccelerator::getSamplePeriod()
-- initBRNWorkarounds()
-- freeBRNWorkarounds()
-- getSizeOfFWBRNTable() const
-- populateFWBRNTable(void*)
-- populateBootTimeFWBRNTable(void*, unsigned long long, unsigned int)
-- generateCSCCoefficients()
-- populateCSCAllocation()
-- halGetDefaultParameterBufferSizeMin() const
-- AGXAccelerator::halGetDefaultParameterBufferSizeMax() const
-- AGXAccelerator::halGetDefaultParameterBufferSizeMinOverride() const
-- AGXAccelerator::halGetDefaultParameterBufferSizeMaxOverride() const
-- AGXFamilyAccelerator::probePowerUpGPU() const
-- AGXFamilyAccelerator::getProbeScore()
-- getSupportedRevisions() const
-- readChipInfo(AGXGPUCoreConfig*) const
 AGXAcceleratorG5
+AGXAcceleratorG5G_B0
+- AGXAccelerator::encodeDisablePMDeallocate(AGXSKUEncoder*)
+- AGXAccelerator::encodeDoDeferFree(AGXSKUEncoder*)
+- AGXAccelerator::brn40480Init()
+- AGXAccelerator::brn40480Free()
+- AGXAccelerator::brn40480EncodeDummyOneTileRender(AGXSKUEncoder*)
+- AGXAccelerator::brn40719Init()
+- AGXAccelerator::brn40719Free()
+- AGXAccelerator::brn40719EncodeSetupEco(AGXSKUEncoder*, AGFIDataMasterType, bool)
+- AGXAccelerator::brn40719EncodeResetEco(AGXSKUEncoder*, AGFIDataMasterType, bool)
+- brn42920EncodeSetupTAMaster(AGXSKUEncoder*)
+- brn42920EncodeSetupCLMaster(AGXSKUEncoder*)
+- brn42920EncodeFinishTAMaster(AGXSKUEncoder*)
+- brn42920EncodeFinish3DMaster(AGXSKUEncoder*)
+- brn42920EncodeFinishCLMaster(AGXSKUEncoder*)
+- AGXAccelerator::brn44352EncodeSetupEco(AGXSKUEncoder*, unsigned int, unsigned int, unsigned int)
+- brn47106EncodeEnsureNoComputeOverlap(AGXSKUEncoder*, AGFIDataMasterType)
+- brn47106EncodeDMComplete(AGXSKUEncoder*, AGFIDataMasterType)
+- AGXAccelerator::brn49421EncodeDeferFreeSwitchToPBContextID(AGXSKUEncoder*, unsigned int)
+- AGXAccelerator::brn49421EncodeDeferFreeSwitchToContextID(AGXSKUEncoder*, int)
+- AGXAccelerator::brn52402EncodeSetupPMFastBlit(AGXSKUEncoder*, int, unsigned long long)
+- AGXAccelerator::brn52402EncodeResetPMFastBlit(AGXSKUEncoder*)
+- AGXAccelerator::brn54141EncodeCheckTEVCEPipesValid(AGXSKUEncoder*)
+- AGXAccelerator::brn54141EncodePatchTEVCEPipesValidJump(AGXSKUEncoder*)
+- AGXAccelerator::brn54141EncodeInvalidateTEVCEPipes(AGXSKUEncoder*)
+- AGXAccelerator::brn47985MCUGlbFence(AGXSKUEncoder*, int, unsigned int)
+- brn54441EncodeCheckStreamTerminate(AGXSKUEncoder*, unsigned long long, unsigned long long, int)
+- brn54441EncodePatchStreamTerminateJump(AGXSKUEncoder*)
+- brn55237EncodePollTPFIdle(AGXSKUEncoder*)
+- brn54655EncodeComputeToggleAndPatchSharedRegisterCount(AGXSKUEncoder*, unsigned int, unsigned long long, unsigned long long, unsigned long long*, int)
+- AGXAccelerator::brn55322EncodeISPClockOn(AGXSKUEncoder*)
+- AGXAccelerator::brn55322EncodeISPClockAuto(AGXSKUEncoder*)
+- brn55264EncodeResetCDMModule(AGXSKUEncoder*)
+- AGXAccelerator::brn58107EnableSWWA(AGXSKUEncoder*, AGX3DCommandDescriptor*)
+- AGXAccelerator::brn58107DisableSWWA(AGXSKUEncoder*, AGX3DCommandDescriptor*)
+- AGXAccelerator::brn58521Init()
+- AGXAccelerator::brn58521Free()
+- AGXAccelerator::brn58521ComputeClockOn(AGXSKUEncoder*, AGFIDataMasterType, unsigned int)
+- AGXAccelerator::brn58521ComputeClockAuto(AGXSKUEncoder*, AGFIDataMasterType, unsigned int)
+- AGXAccelerator::mapGPTBATContextId(unsigned int, AGXGart*)
+- AGXAccelerator::unmapGPTBATContextId(unsigned int)
+- AGXAccelerator::getGPTBATDesc()
+- AGXAccelerator::getGPTBATPtr()
+- getFWKextName() const
+- AGXAccelerator::getFWKextMatchingDictionary() const
+- getAccelShortName() const
+- configureMMUForBoot(int, unsigned long long, unsigned char)
+- populateInitSequenceFirmware(unsigned char)
+- waitForIdle()
+- getNumContextIDs()
+- getNumReservedContextIDs()
+- AGXAccelerator::requiresPerDMContextID()
+- printAGXInfo()
+- printBIFFaultSideband(unsigned int, unsigned int)
+- AGXFamilyAccelerator::printMMURegisterStateCommon()
+- getMMUFaultInfo(unsigned int, AGXAccelerator::MMUFaultInfo&, bool)
+- getMMUEntryPendingInfo(AGXAccelerator::MMUEntryPendingInfo&)
+- AGXFamilyAccelerator::getReservedContextIDDescription(int)
+- printUSCSlotUsage()
+- AGXAccelerator::getUSCExceptionInfo(AGFIDataMasterType&)
+- AGXAccelerator::isPIOSupported()
+- AGXAccelerator::isPowerManagedInAGX()
+- AGXAccelerator::getFenderPhysicalAddress()
+- AGXAccelerator::getUVWarnPhysicalAddress()
+- AGXAccelerator::getChecksumRegisters(_AGXSChecksumRegisters&) const
+- AGXAccelerator::postBootFirmware()
+- newTAChannel()
+- new3DChannel()
+- newCLChannel()
+- halNewGart()
+- halNewSharedGart()
+- halNewFastRenderTarget()
+- halNewRenderTargetMemory()
+- halNewParameterManager()
+- halPopulateAccelConfig(IOAccelConfig*)
+- halGetPMConfig() const
+- halNewFirmware()
+- halNewFenderController()
+- requestFirmwareBinary(IOService*, unsigned char const**, unsigned long*)
+- use16kPageSizeDefault()
+- AGXAccelerator::updateG9GConfig(unsigned int)
+- AGXAccelerator::filterInterrupt(IOFilterInterruptEventSource*)
+- AGXAccelerator::handleInterrupt(IOInterruptEventSource*, int)
+- handleGPUInterrupt()
+- AGXAccelerator::enableSleepInterrupt(bool)
+- AGXAccelerator::enableInterrupts(bool)
+- AGXAccelerator::idleParameterEvent(IOInterruptEventSource*, int)
+- AGXAccelerator::getIndirectMaxVal(AGXIndirectRegisterType) const
+- AGXAccelerator::getGPUMemoryThreshold()
+- AGXAccelerator::populatePowerEstimationConfigData(unsigned int)
+- AGXAccelerator::populatePowerEstimationConfigDataPreG5()
+- AGXAccelerator::populatePowerEstimationConfigDataPostG5(float, float, unsigned int)
+- AGXAccelerator::populateDPEConfigData(float, float, unsigned int)
+- AGXAccelerator::populateStaticPowerData()
+- AGXAccelerator::populateDPEAdjustmentCoEffData()
+- AGXAccelerator::populateSRAMPowerScaleData()
+- AGXAccelerator::populateDefaultSRAMVoltageData()
+- AGXAccelerator::getPMGRServiceDictionary()
+- AGXAccelerator::getGPTBATBasePhys()
+- AGXAccelerator::submitContextIDBaseAddress(int, AGXGart*, unsigned int)
+- getBorderColorTableGPUAddress()
+- getFenceBufferGPUAddress()
+- AGXAccelerator::getPBDescriptorTableGPUAddress()
+- AGXAccelerator::halGetMappingAlignment()
+- createHardwareMappings()
+- releaseHardwareMappings()
+- prepareHardwareMappings()
+- AGXAccelerator::updateHardwareMappings()
+- completeHardwareMappings()
+- enumerateHardwareMappings(void (*)(AGXAccelerator*, AGXMemoryMap*, char const*, void*), void*)
+- AGXAccelerator::getSamplePeriod()
+- initBRNWorkarounds()
+- freeBRNWorkarounds()
+- getSizeOfFWBRNTable() const
+- populateFWBRNTable(void*)
+- populateBootTimeFWBRNTable(void*, unsigned long long, unsigned int)
+- generateCSCCoefficients()
+- populateCSCAllocation()
+- halGetDefaultParameterBufferSizeMin() const
+- AGXAccelerator::halGetDefaultParameterBufferSizeMax() const
+- AGXAccelerator::halGetDefaultParameterBufferSizeMinOverride() const
+- AGXAccelerator::halGetDefaultParameterBufferSizeMaxOverride() const
+- AGXFamilyAccelerator::probePowerUpGPU() const
+- AGXFamilyAccelerator::getProbeScore()
+- getSupportedRevisions() const
+- readChipInfo(AGXGPUCoreConfig*) const
 AGXAcceleratorG5P_C0
 - AGXAccelerator::encodeDisablePMDeallocate(AGXSKUEncoder*)
 - AGXAccelerator::encodeDoDeferFree(AGXSKUEncoder*)
@@ -561,34 +402,7 @@ AGXAllocationList
 AGXAllocationList2
 AGXBlockFence
 AGXCLChannel
-AGXCLChannelG4G_A0
-- AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
-- encodeSetContext(int, unsigned int)
-- AGXChannel::encodeInvalidateUSCInstCache()
-- AGXChannel::encodeInvalidateDynamicConstantCache()
-- AGXChannel::encodeInvalidatePDSCache(AGFIDataMasterType)
-- AGXChannel::encodeFlushInvalidatePM(bool)
-- init(AGXAccelerator*, unsigned int, int, int, int, int, unsigned long long)
-- AGXChannel::forceRestart()
-- AGXChannel::prepare()
-- AGXChannel::complete()
-- AGXCLChannel::updateChannelStampIndex()
-- AGXChannel::setPriority(AGFIContextPriorityType)
-- AGXChannel::resetChannelState()
-- AGXCLChannel::describeAllocationsForPID(IOAccelAllocationInfo*, int)
-- AGXCLChannel::getGuiltyDMType() const
-- encodeCLCommandSKUStream(AGFIChannelCommandCL*, AGXCLCommandDescriptor*, unsigned long long, IOAccelEvent*)
-- generateRegisterList(AGFIChannelCommandCL*, AGXCLCommandDescriptor*)
-- encodeCDMResume(AGXCLCommandDescriptor*, unsigned int)
-- encodeCDMKickStart()
-- encodeSetCDMStore(AGXCLCommandDescriptor*)
-- encodeComputeWFI()
-- encodeComputeFinished(AGXCLCommandDescriptor*, int)
-- AGXCLChannel::encodeComputeKillEnd()
-- encodeDidContextSwitchOccur(unsigned int)
-- encodePatchSharedRegisterCount(unsigned int, unsigned long long, unsigned long long, unsigned long long*, int)
-- AGXCLChannel::encodeCLDebugInfo(unsigned int, unsigned int)
-AGXCLChannelG4P_B0
+AGXCLChannelG5G
 - AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
 - encodeSetContext(int, unsigned int)
 - AGXChannel::encodeInvalidateUSCInstCache()
@@ -663,12 +477,6 @@ AGXFamilyAccelerator
 AGXFamilyGart
 AGXFamilySharedGartTableBacking
 AGXFastRenderTarget
-AGXFastRenderTargetG4G_A0
-- halValidateInput(AGXFastRenderTargetInfoRec*)
-- halComputeGeometry()
-AGXFastRenderTargetG4P_B0
-- halValidateInput(AGXFastRenderTargetInfoRec*)
-- halComputeGeometry()
 AGXFastRenderTargetG5
 - halValidateInput(AGXFastRenderTargetInfoRec*)
 - halComputeGeometry()
@@ -746,9 +554,7 @@ AGXFirmware
 - setFastDieKiOverride(float)
 - setFastDieControlEffortOverride(float)
 - setFastDieTransferOverride(unsigned int)
-AGXFirmwareKextG4G
-- requestFirmwareBinary(unsigned char const**, unsigned long*)
-AGXFirmwareKextG4P
+AGXFirmwareKextG5G
 - requestFirmwareBinary(unsigned char const**, unsigned long*)
 AGXFirmwareKextG5P
 - requestFirmwareBinary(unsigned char const**, unsigned long*)
@@ -833,20 +639,6 @@ AGXPerfCtrSamplerPreG10
 - AGXPerfCtrSampler::adjustSamplingPeriod(unsigned int)
 - AGXPerfCtrSampler::adjustSamplingFlag(unsigned int)
 AGXRenderTargetMemory
-AGXRenderTargetMemoryG4G_A0
-- AGXRenderTargetMemory::init(AGXAccelerator*, AGXShared*)
-- AGXRenderTargetMemory::updateRenderTarget(AGXRenderTargetInfoRec*, IOAccelEvent*)
-- AGXRenderTargetMemory::updateTailPointers(unsigned int)
-- AGXRenderTargetMemory::setTileWalkOrder(AGXWalkOrder)
-- halValidateInput(AGXRenderTargetInfoRec*)
-- halComputeGeometry()
-AGXRenderTargetMemoryG4P_B0
-- AGXRenderTargetMemory::init(AGXAccelerator*, AGXShared*)
-- AGXRenderTargetMemory::updateRenderTarget(AGXRenderTargetInfoRec*, IOAccelEvent*)
-- AGXRenderTargetMemory::updateTailPointers(unsigned int)
-- AGXRenderTargetMemory::setTileWalkOrder(AGXWalkOrder)
-- halValidateInput(AGXRenderTargetInfoRec*)
-- halComputeGeometry()
 AGXRenderTargetMemoryG5
 - AGXRenderTargetMemory::init(AGXAccelerator*, AGXShared*)
 - AGXRenderTargetMemory::updateRenderTarget(AGXRenderTargetInfoRec*, IOAccelEvent*)
@@ -870,37 +662,7 @@ AGXSharedGartTableBackingG3ThruG9
 AGXSharedUserClient
 AGXStatistics
 AGXTAChannel
-AGXTAChannelG4G_A0
-- AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
-- encodeSetContext(int, unsigned int)
-- encodeInvalidateUSCInstCache()
-- encodeInvalidateDynamicConstantCache()
-- encodeInvalidatePDSCache(AGFIDataMasterType)
-- encodeFlushInvalidatePM(bool)
-- init(AGXAccelerator*, unsigned int, int, int, int, int, unsigned long long)
-- AGXChannel::forceRestart()
-- AGXChannel::prepare()
-- AGXChannel::complete()
-- AGXTAChannel::updateChannelStampIndex()
-- AGXChannel::setPriority(AGFIContextPriorityType)
-- AGXChannel::resetChannelState()
-- AGXTAChannel::describeAllocationsForPID(IOAccelAllocationInfo*, int)
-- AGXTAChannel::getGuiltyDMType() const
-- encodeTACommandSKUStream(AGFIChannelCommandTA*, AGXTACommandDescriptor*, unsigned long long, IOAccelEvent*)
-- generateSKURegisterList(AGFIChannelCommandTA*, AGXTACommandDescriptor*)
-- encodeTAPMSceneClear(unsigned long long, unsigned long long, unsigned long long)
-- encodeTAPMSceneLoad(unsigned int, unsigned long long, unsigned long long, unsigned long long)
-- encodeCommandSetup()
-- encodeKickStart()
-- encodeDummyStart()
-- encodeTAFinishWFI()
-- encodeContextSwitchOccurredCheck()
-- encodeTAPMSceneSave(unsigned int)
-- encodeTPCFlush()
-- encodeVDMFlushInvalidate(int)
-- encodeParkContextID()
-- AGXTAChannel::encodeTADebugInfo(unsigned int, unsigned int)
-AGXTAChannelG4P_B0
+AGXTAChannelG5G
 - AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
 - encodeSetContext(int, unsigned int)
 - encodeInvalidateUSCInstCache()
@@ -965,7 +727,79 @@ AGXTimeStampQueue
 - init(AGXAccelerator*)
 - setUpdateMode(bool)
 - resetTimeStampQueueState()
+AHTFunction
+- initWithProvider(IORegistryEntry*, char const*)
+- callFunction(void*, void*, void*)
+AHTFunctionInfo
+AHTFunctionSequence
+AHTHSWorkLoop
+- run()
+- doWork()
+- addEventSource(HSEventSource*)
+- removeEventSource(HSEventSource*)
+- signalWorkAvailable()
+- getDeadline(unsigned long long)
+- commandSleep(void*, unsigned long long)
+- commandWakeup(void*)
+AHTImageDownloader
+AHTMemoryDumpExtractor
+-
+- initWithConfig(OSDictionary*, AppleHIDTransportBootloader*)
+- validateConfig(OSDictionary*)
+-
+-
+-
+- getBootloader() const
 AICInterruptTimestampFunction
+AIDCircularBuffer
+- init(unsigned int)
+AIDCircularBufferShared
+- init(IOMapper*, unsigned long)
+AIDInterface
+-
+- newSerialNumberString() const
+- resetDevice()
+- setPower(AIDPowerState)
+- getPower(AIDPowerState*) const
+-
+AIDLogger
+-
+-
+-
+-
+-
+AIDLoggerUserClient
+- start(IOService*, AIDLogger*)
+AIDQueueEventSource
+- init(OSObject*, void (*)(OSObject*, OSObject*), unsigned int, bool)
+AIDQueueEventSourceWorkItem
+- init(void (*)(OSObject*, void*, void*, void*, void*), OSObject*, void*, void*, void*, void*)
+AIDReporter
+- init(IOService*, OSDictionary*, unsigned long long, AIDReporters*)
+-
+- configureReport(IOReportChannelList*, unsigned int, void*, void*)
+- updateReport(IOReportChannelList*, unsigned int, void*, void*)
+-
+-
+-
+-
+-
+- initReporter(IOService*, OSDictionary*, unsigned short, unsigned long long)
+- getReporter()
+AIDReporterSimple
+AIDReporterState
+AIDReporters
+AIDSerialLogger
+AIDService
+AIDUserClient
+AIDUserClientLogger
+- registerUserClient(AIDLoggerUserClient*)
+- unregisterUserClient(AIDLoggerUserClient*)
+-
+-
+-
+-
+-
 ALSS
 -
 -
@@ -981,27 +815,8 @@ ALSS
 -
 -
 AMCTempSensor
+AMDTimestampSyncMgr
 AOPAsyncEvent
-ASPBlockStorage
-- synchronizeCache(unsigned long long, unsigned long long, unsigned int)
-- doUnmap(IOBlockStorageDeviceExtent*, unsigned int, unsigned int)
-ASPDiagnostic
-ASPEffaceable
-ASPFirmware
-ASPLLBFirmware
-ASPNVRAM
-ASPPanicLog
-ASPRequest
-ASPRequestPool
-ASPSEPNotifier
-ASPStorage
-- HandleShutdown()
-ASPStoragePolledAdapter
-ASPTemperatureSensor
-- init(ASPStorage*)
-ASPTimer
-ASPUserClient
-ASPWorkLoop
 AUAADC3ClassSpecificDescriptorFetcher
 AUAConfigurationDictionary
 - init(StandardUSB::ConfigurationDescriptor const*, unsigned char, AppleUSBAudioDevice*)
@@ -1768,6 +1583,8 @@ AppleAgileDPDisplay
 AppleAgileDPDisplaySACController
 AppleAirPowerCharger
 AppleAirPowerMultiDevice
+AppleAstrisGpioProbe
+AppleAstrisGpioProbeUserClient
 AppleAuthCP
 - generateSignature(void const*, unsigned long long, void*, unsigned long long*)
 - setAuthStatus(bool)
@@ -1788,6 +1605,8 @@ AppleAuthCPRelayInterface
 - authSendData(unsigned char, OSData*)
 AppleAuthCPUserClient
 AppleB237DockInfo
+AppleBCM4750
+-
 AppleBCMWLANAudioProtector
 - initWithDriver(AppleBCMWLANCore*, OSString const*)
 AppleBCMWLANBGScanManager
@@ -3065,6 +2884,10 @@ AppleCS42L81Audio
 - notifySidetoneActiveChange(void*)
 AppleCS42L81Mikey
 AppleCS42L81MikeyBus
+AppleCS42L83Audio
+-
+-
+AppleCS42L83Mikey
 AppleCS46L0xAudio
 - init(IOMikeyBusDevice*, OSDictionary*)
 - getControlValue(unsigned int, unsigned int)
@@ -3083,6 +2906,10 @@ AppleCS46L0xDevice
 - setupAudio(bool, OSDictionary*)
 - setupAudioGated(bool, OSDictionary*)
 - notifyHPDetectChanged(bool, OSDictionary*)
+AppleCS46L10Audio
+-
+-
+AppleCS46L10MikeyBus
 AppleCS46L21AccessoryPort
 - start(IOService*, IOAccessoryManager*)
 AppleCS46L21Audio
@@ -3217,22 +3044,17 @@ AppleCallistoTelegramStream
 AppleChestnutDisplayPMU
 AppleCredentialManager
 AppleCredentialManagerUserClient
-AppleD2207PMU
+AppleD2231Charger
 - _index2GPIOAddress(unsigned char)
-AppleD2207PMUADCFunction
-AppleD2207PMUBacklightEnableFunction
-AppleD2207PMUBacklightRampFunction
-AppleD2207PMUBacklightUpdateFunction
-AppleD2207PMUGPIOConfigFunction
-AppleD2207PMUGPIOFunction
-AppleD2207PMULDOFunction
-AppleD2207PMUPowerSource
-AppleD2207PMURTC
-AppleD2207PMURamAccessFunction
-AppleD2207PMURegisterAccessFunction
-AppleD2207PMUSTATFunction
-AppleD2207PMUSensorFunction
-AppleD2207PMUWatchDogTimer
+AppleD2231PMUADCFunction
+AppleD2231PMUGPIOConfigFunction
+AppleD2231PMUGPIOFunction
+AppleD2231PMULDOFunction
+AppleD2231PMUPowerSource
+AppleD2231PMURamAccessFunction
+AppleD2231PMURegisterAccessFunction
+AppleD2231PMUSTATFunction
+AppleD2231PMUSensorFunction
 AppleD2255PMU
 - _index2GPIOAddress(unsigned char)
 AppleD2255PMUADCFunction
@@ -3245,6 +3067,32 @@ AppleD2255PMURamAccessFunction
 AppleD2255PMURegisterAccessFunction
 AppleD2255PMUSTATFunction
 AppleD2255PMUSensorFunction
+AppleD2257PMU
+- _index2GPIOAddress(unsigned char)
+AppleD2257PMUADCFunction
+AppleD2257PMUBacklightEnableFunction
+AppleD2257PMUBacklightRampFunction
+AppleD2257PMUBacklightUpdateFunction
+AppleD2257PMUGPIOConfigFunction
+AppleD2257PMUGPIOFunction
+AppleD2257PMULDOFunction
+AppleD2257PMUPowerSource
+AppleD2257PMURTC
+AppleD2257PMURamAccessFunction
+AppleD2257PMURegisterAccessFunction
+AppleD2257PMUSTATFunction
+AppleD2257PMUSensorFunction
+AppleD2355Charger
+- _index2GPIOAddress(unsigned char)
+AppleD2355PMUADCFunction
+AppleD2355PMUGPIOConfigFunction
+AppleD2355PMUGPIOFunction
+AppleD2355PMULDOFunction
+AppleD2355PMUPowerSource
+AppleD2355PMURamAccessFunction
+AppleD2355PMURegisterAccessFunction
+AppleD2355PMUSTATFunction
+AppleD2355PMUSensorFunction
 AppleD2365PMU
 - _index2GPIOAddress(unsigned char)
 AppleD2365PMUADCFunction
@@ -3615,6 +3463,25 @@ AppleEmbeddedAudioGroup
 AppleEmbeddedAudioHeadsetSwitch
 - configureHeadsetSwitch(unsigned int)
 - getHeadsetSwitchSlowRampDelay()
+AppleEmbeddedBluetoothForce
+- newUserClientGated(task*, void*, OSDictionary*, IOUserClient**)
+- handleInterruptReport(unsigned long long, IOMemoryDescriptor*, IOHIDReportType, unsigned int)
+AppleEmbeddedBluetoothMultitouch
+-
+-
+-
+-
+-
+-
+-
+-
+AppleEmbeddedBluetoothMultitouchPrototype
+-
+-
+-
+-
+-
+-
 AppleEmbeddedButtonController
 - completeHPDetect(bool, OSDictionary*, OSSymbol const*)
 - handleDetectTimer()
@@ -3632,6 +3499,8 @@ AppleEmbeddedExternalAudioObject
 - disableGated()
 - enableGated()
 - pingGated()
+AppleEmbeddedGPSControl
+AppleEmbeddedGPSControlUserClient
 AppleEmbeddedHIDEventService
 - dispatchAccelerometerEvent(unsigned long long, int, int, int, unsigned int, unsigned int, unsigned int, unsigned int)
 - dispatchGyroEvent(unsigned long long, int, int, int, unsigned int, unsigned int, unsigned int, unsigned int)
@@ -3645,6 +3514,10 @@ AppleEmbeddedHIDEventService
 - getOrientation()
 - getPlacement()
 - dispatchAmbientLightSensorEvent(unsigned long long, unsigned int, unsigned char, double, double, double, unsigned int)
+AppleEmbeddedI2CGPS
+- sendData(uio*)
+- enable()
+- disable()
 AppleEmbeddedI2CLightSensor
 - getDefaultReportInterval()
 - setSensorEnabled(bool)
@@ -3668,7 +3541,7 @@ AppleEmbeddedI2CProx
 - serviceInterrupts()
 AppleEmbeddedKeyboard
 AppleEmbeddedNVMeBuffer
--
+- Init(unsigned int, unsigned int, IOMapper*)
 AppleEmbeddedNVMeController
 - AllocateNodes(bool)
 -
@@ -3785,6 +3658,8 @@ AppleEmbeddedPCIEPortControlFunction
 - setDesiredLinkSpeed(unsigned int)
 - nvmeEnable(bool)
 AppleEmbeddedPCIEUserClient
+AppleEmbeddedUSB20XHCIPort
+AppleEmbeddedUSB30XHCIPort
 AppleEmbeddedUSBArbitrator
 - registerPhy(AppleUSBPhy*)
 - enableDeviceClock(OSObject const*, unsigned int)
@@ -3813,6 +3688,7 @@ AppleEmbeddedUSBNub
 - enableDevicePower(OSObject const*, unsigned int)
 - powerStateDidChangeToGated(unsigned long, unsigned long, IOService*)
 - forcePowerGated(AppleEmbeddedUSBNub::tPowerState, bool)
+AppleEmbeddedUSBXHCIFL1100
 AppleEmbeddedUSBiPod
 AppleExternalPowerManager
 - init(IOService*, unsigned int)
@@ -3856,6 +3732,249 @@ AppleHIDKeyboardEventDriverV2
 - setPropertiesGated(OSObject*)
 - initKeyboardConfigurationGated()
 AppleHIDKeyboardEventDriverV2Embedded
+AppleHIDTransportBootloader
+- start(IOService*, AHTImageDownloader*)
+- resetDevice()
+- loadFirmware()
+-
+-
+-
+-
+-
+-
+- newSerialNumberString() const
+-
+-
+-
+-
+- updateProperty(OSString*, OSData*, unsigned int)
+-
+-
+-
+-
+- registerUserClient(AppleHIDTransportBootloaderUserClient*)
+- unregisterUserClient(AppleHIDTransportBootloaderUserClient*)
+-
+-
+-
+-
+- setPropertiesGated(OSObject*)
+-
+-
+- cacheFirmware()
+- cacheCalibration()
+-
+-
+-
+-
+- handleStart(IOService*)
+- handleStop(IOService*)
+-
+-
+-
+-
+-
+- validateProperty(OSString*, OSData*, OSArray*, unsigned int)
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportBootloaderHBPP
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportBootloaderHIDDevice
+-
+-
+-
+AppleHIDTransportBootloaderUserClient
+-
+AppleHIDTransportDevice
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportDeviceSPI
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportDeviceUserClient
+AppleHIDTransportHIDDevice
+-
+-
+AppleHIDTransportIODataQueue
+AppleHIDTransportInterface
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportInterfaceUserClient
+AppleHIDTransportManagement
+-
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportProtocol
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportProtocolHIDSPI
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportProtocolZ2
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleHIDTransportSMCNotifier
+-
+-
+AppleHighVoltageCharger
+AppleHighVoltageChargerUserClient
+AppleHighVoltageChargingData
 AppleHydraBuiltIn
 AppleI2CAudio
 - _writeRegBase(unsigned int, unsigned char)
@@ -4181,6 +4300,98 @@ AppleMobileFileIntegrity
 AppleMobileFileIntegrityUserClient
 AppleMobsiTmpSADC
 - initWithTempSensor(OSString*, unsigned int, unsigned int)
+AppleMultitouchDevice
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleMultitouchDeviceUserClient
+AppleMultitouchEventDriverV2Wrapper
+- setSystemProperties(OSDictionary*)
+AppleMultitouchEventDriverWrapper
+- dispatchKeyboardEvent(unsigned long long, unsigned int, unsigned int, unsigned int, unsigned int)
+- dispatchRelativePointerEvent(unsigned long long, int, int, unsigned int, unsigned int)
+- dispatchScrollWheelEvent(unsigned long long, int, int, int, unsigned int)
+- wrappedObject()
+AppleMultitouchEventServiceWrapper
+AppleMultitouchHIDEventDriver
+AppleMultitouchHIDEventDriverV2
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleMultitouchHIDEventService
+AppleMultitouchHIDService
+-
+- handleResetDevice()
+- handleGetPowerState(unsigned char*)
+- handleSetPowerState(unsigned char)
+- enableMultitouchEvents(bool)
+- getMultitouchReport(unsigned char, unsigned char*, unsigned int*, unsigned char)
+- setMultitouchReport(unsigned char, unsigned char*, unsigned int, unsigned char)
+- getMultitouchReportInfo(unsigned char, unsigned char*, unsigned int*, int)
+-
+-
+- checkMTDeviceAvailable()
+- handleInterruptReport(unsigned long long, IOMemoryDescriptor*, IOHIDReportType, unsigned int)
+-
+- _systemPowerChangeHandler(unsigned int, IOService*, void*, unsigned long)
 AppleMultitouchN1SPI
 AppleMultitouchSPI
 - configureSPIInterface()
@@ -4288,6 +4499,16 @@ AppleMultitouchSPI
 - updateAndPublishIOReportPowerStats(IOReportChannelList*, unsigned int*, void*, void*)
 AppleMultitouchSPIUserClient
 - setPropertiesGated(OSObject*)
+AppleMultitouchTimestampSync
+- reset()
+-
+-
+-
+-
+- lock()
+- unlock()
+AppleMultitouchTimestampSyncLock
+AppleMultitouchTimestampSyncUC
 AppleMultitouchZ2SPI
 - _initForPM(IOService*)
 - handlePowerStateChangeGated(unsigned long)
@@ -4409,145 +4630,6 @@ AppleOrionIDBus
 AppleOrionMCU
 AppleOrionMCUUserClient
 AppleOrionManager
-AppleOscarAccelerometer
-AppleOscarAsyncEventSource
-- init(OSObject*, void (*)(OSObject*, AppleOscarAsyncEventSource*), unsigned int)
-- signal()
-- cancel()
-AppleOscarCMA
-AppleOscarCMAUserClient
-AppleOscarCPU
-- Reset()
-- PowerOnReset()
-- Timesync(unsigned long long*)
-- ClearTimesync()
-- OpenSerial(unsigned long)
-- CloseSerial()
-- OpenSerialGated(unsigned long)
-- CloseSerialGated()
-- SerialChangeBaudRate(unsigned long)
-AppleOscarCommand
-AppleOscarCompass
-AppleOscarEndpoint
-- performCommand(OscarPacketType, void*, unsigned long, void*, unsigned long*, int, unsigned int)
-- _sendCommand(OscarPacketType, unsigned short, void*, unsigned long)
-- _waitForCommandResponse(unsigned short, void*, unsigned long*, int*, unsigned int)
-- handleResponse(AppleOscarMessage*)
-- handleReport(AppleOscarMessage*)
-AppleOscarFirmware
-- waitForFirmwareImage()
-- releaseFirmwareImage()
-- mapImage(IOMemoryDescriptor*)
-- mapImageGated(IOMemoryDescriptor*)
-AppleOscarGyro
-AppleOscarHIDEventService
-- setPowerStateGated(unsigned long, IOService*)
-- RefreshProperties()
-- doSetPropertiesAsync(OSDictionary*)
-AppleOscarMessage
-- init(void (*)(OSObject*, AppleOscarMessage*), OSObject*)
-AppleOscarNub
-AppleOscarPacket
-AppleOscarPacketsCache
-AppleOscarPressure
-AppleOscarProcessor
-- setPropertiesGated(OSObject*)
-- setPowerStateGated(unsigned long, IOService*)
-- OscarReset(unsigned long)
-- OscarResetGated(unsigned long)
-- OscarStartDefault()
-- OscarStart(OSDictionary*, unsigned long, unsigned long, char const*)
-- OscarStartGated(OSDictionary*, unsigned long, unsigned long, char const*)
-- OscarBootGated(AppleOscarFirmware*, unsigned long long, unsigned long)
-- OscarStop()
-- OscarStopGated()
-- OscarStopCpu()
-- OscarStopCpuGated()
-- OscarSPITransfer(unsigned int, IOMemoryDescriptor*, IOMemoryDescriptor*)
-- OscarSPITransferGated(unsigned int, IOMemoryDescriptor*, IOMemoryDescriptor*)
-- OscarReadReg(unsigned char, unsigned char, unsigned long, unsigned char*)
-- OscarReadRegGated(unsigned char, unsigned char, unsigned long, unsigned char*)
-- OscarWriteReg(unsigned char, unsigned char, unsigned long, unsigned char*)
-- OscarWriteRegGated(unsigned char, unsigned char, unsigned long, unsigned char*)
-- OscarI2CRead(unsigned char, unsigned char, unsigned int, unsigned long, unsigned char*)
-- OscarI2CReadGated(unsigned int, unsigned int, unsigned long, unsigned char*)
-- OscarI2CWrite(unsigned char, unsigned char, unsigned int, unsigned long, unsigned char*)
-- OscarI2CWriteGated(unsigned int, unsigned int, unsigned long, unsigned char*)
-- OscarMemRead(unsigned int, unsigned int, unsigned long, unsigned char*)
-- OscarMemReadGated(unsigned int, unsigned int, unsigned long, unsigned char*)
-- OscarMemWrite(unsigned int, unsigned int, unsigned long, unsigned char*)
-- OscarMemWriteGated(unsigned int, unsigned int, unsigned long, unsigned char*)
-- OscarSetBBContext(unsigned int)
-- OscarSetBBContextGated(unsigned int)
-- OscarCMACommand(unsigned char*, unsigned char)
-- OscarCMACommandGated(unsigned char*, unsigned char)
-- OscarPing()
-- OscarPingGated()
-- OscarTimesync()
-- OscarTimesyncGated()
-- OscarHeartbeat()
-- OscarHeartbeatGated()
-- OscarGetProperty(unsigned char, _OscarProperty, unsigned char*, unsigned int, unsigned int*)
-- OscarGetPropertyGated(unsigned char, _OscarProperty, unsigned char*, unsigned int*)
-- OscarSetProperty(unsigned char, _OscarProperty, unsigned int)
-- OscarSetPropertyGated(unsigned char, _OscarProperty, unsigned int)
-- OscarGPIOWrite(unsigned int, unsigned int)
-- OscarGPIOWriteGated(unsigned int, unsigned int)
-- OscarGPIORead(unsigned int, unsigned int*)
-- OscarGPIOReadGated(unsigned int, unsigned int*)
-- OscarTestConnectivity()
-- OscarTestConnectivityGated()
-- OscarSetPowerMask(unsigned int)
-- OscarSetPowerMaskGated(unsigned int)
-- OscarSetPowerState(unsigned int)
-- OscarSetPowerStateGated(unsigned int)
-- OscarStartProfile()
-- OscarStartProfileGated()
-- OscarStopProfile()
-- OscarStopProfileGated()
-- OscarResetProfile()
-- OscarResetProfileGated()
-- OscarGetProfile(OscarGetProfileResponseData*)
-- OscarGetProfileGated(OscarGetProfileResponseData*)
-- OscarFindProfileItem(OscarFindProfileItemData*, OscarProfileItemResponseData*)
-- OscarFindProfileItemGated(OscarFindProfileItemData*, OscarProfileItemResponseData*)
-- OscarStartPowerLog()
-- OscarStartPowerLogGated()
-- OscarStopPowerLog()
-- OscarStopPowerLogGated()
-- OscarResetPowerLog()
-- OscarResetPowerLogGated()
-- OscarGetPowerLog(oscar_powerlog*)
-- OscarGetPowerLogGated(oscar_powerlog*)
-- OscarPanic(char const*)
-- OscarPanicGated(char const*)
-- OscarTestReport()
-- OscarTestReportGated()
-- OscarWake(unsigned int)
-- OscarWakeGated(unsigned int)
-- OscarHalt(unsigned int, unsigned int, unsigned int)
-- OscarHaltGated(unsigned int, unsigned int, unsigned int)
-- publishFirmware(OSDictionary*, AppleOscarFirmware**)
-- unpublishFirmware(AppleOscarFirmware*)
-- OscarRedirectClock(unsigned int)
-- OscarRedirectClockGated(unsigned int)
-- OscarMeasureClock(OscarMeasureClockData*, OscarMeasureClockResponseData*)
-- OscarMeasureClockGated(OscarMeasureClockData*, OscarMeasureClockResponseData*)
-- OscarSetBaudRate(unsigned int)
-- OscarSetBaudRateGated(unsigned int)
-- OscarGetClientInfo(OscarGetClientInfoData*, OscarClientInfoResponseData*)
-- OscarGetClientInfoGated(OscarGetClientInfoData*, OscarClientInfoResponseData*)
-- OscarUartTest(_OscarUartTestData*, void*, unsigned int*)
-- OscarUartTestGated(_OscarUartTestData*, void*, unsigned int*)
-- OscarPerfmonControlSet(unsigned int, unsigned int, void const*, unsigned int*)
-- OscarPerfmonControlSetGated(unsigned int, unsigned int, void const*, unsigned int*)
-- OscarPerfmonControlGet(unsigned int, unsigned int, void*, unsigned int*)
-- OscarPerfmonControlGetGated(unsigned int, unsigned int, void*, unsigned int*)
-- newDeviceWithRegistryEntry(IORegistryEntry*, IOService*)
-- publishBelow(IORegistryEntry*)
-AppleOscarSingleShotReporter
-- initWithReport(OSDictionary*)
-AppleOscarUserClient
 ApplePCIEMSIController
 ApplePMGR
 - initRegMaps()
@@ -4669,7 +4751,7 @@ ApplePMP
 ApplePMPControlFunction
 ApplePMPEvent
 ApplePMPFirmware
-- ApplePMPFirmware::createFirmware(OSString*, OSString*)
+- createFirmware(OSString*, OSString*)
 ApplePMPThermal
 ApplePMPThermalUserClient
 ApplePMPUserClient
@@ -4705,11 +4787,7 @@ AppleS5L8920XPWM
 - _stopPWM(unsigned int, bool)
 - _readReg32(unsigned int)
 - _writeReg32(unsigned int, unsigned int)
-AppleS5L8940XDWI
-AppleS5L8940XDWIBacklightFunction
-AppleS5L8940XDWIVoltageFunction
 AppleS5L8940XI2CController
-AppleS5L8960XAMCPerfFunction
 AppleS5L8960XDART
 - _dartSetMapperEnabled(unsigned int, bool)
 - _dartPowerdown()
@@ -4732,20 +4810,8 @@ AppleS5L8960XGPIOIC
 - _readReg32(unsigned int)
 - _writeReg32(unsigned int, unsigned int)
 - _safeReconfigure(unsigned int, unsigned int)
-AppleS5L8960XIO
-AppleS5L8960XMemCacheController
-AppleS5L8960XMemCacheModeFunction
-AppleS5L8960XMemCachePanicFunction
 AppleS5L8960XNCO
 AppleS5L8960XNCOFrequencyFunction
-AppleS5L8960XPerformanceController
-- _validateRGBClkFrequency(unsigned int, unsigned int)
-- _setRGBClkFrequency(unsigned int, unsigned int)
-- _getRGBClkFrequency(unsigned int*)
-AppleS5L8960XPerformanceControllerFunctionEnableCore
-AppleS5L8960XPerformanceControllerFunctionISPConf
-AppleS5L8960XPerformanceControllerFunctionRGBCLKFrequency
-AppleS5L8960XPlatformErrorHandler
 AppleS5L8960XUSBArbitrator
 AppleS5L8960XUSBEHCI
 AppleS5L8960XUSBEHCIPort
@@ -4790,6 +4856,7 @@ AppleS8000PerformanceControllerFunctionISPConf
 AppleS8000PerformanceControllerFunctionStartS2RTimer
 AppleS8000PlatformErrorHandler
 AppleS8000SOCTuner
+AppleS8001AMCPerfFunction
 AppleS8001DPTXAudioLinkDelegate
 - handleStartLink(AppleANXDPTXController*, IODPDevice*, IOAVAudioLinkData*, IODPLinkTrainingData*)
 - handleStopLink(AppleANXDPTXController*, IODPDevice*, IOAVAudioLinkData*)
@@ -4797,7 +4864,22 @@ AppleS8001DPTXController
 - getAudioLinkDelegateClass() const
 - setAUXAccessWindow(unsigned int, unsigned int)
 - useAUXAccessWindowWithALPM(IODPDevice*, IOAVVideoLinkData*) const
+AppleS8001IO
 AppleS8001LPDPTXPHY
+AppleS8001MemCacheController
+AppleS8001MemCacheModeFunction
+AppleS8001MemCachePanicFunction
+AppleS8001PCIe
+AppleS8001PCIePort
+AppleS8001PMGR
+-
+AppleS8001PMPFirmware
+AppleS8001PerformanceController
+AppleS8001PerformanceControllerFunctionEnableCore
+AppleS8001PerformanceControllerFunctionEnableTouchClock
+AppleS8001PerformanceControllerFunctionISPConf
+AppleS8001PerformanceControllerFunctionStartS2RTimer
+AppleS8001PlatformErrorHandler
 AppleS8003LPDPTXPHY
 AppleS8003PCIe
 AppleS8003PCIePort
@@ -4980,6 +5062,13 @@ AppleSPUTimesync
 AppleSPUTimesyncV1
 AppleSPUTimesyncV2
 AppleSPUUserClient
+AppleSRSDriver
+-
+-
+-
+AppleSRSDriverUserClient
+-
+AppleSRSHal
 AppleSSE
 AppleSSEInterface
 - getSignedSepScores(unsigned char, OSData*, OSData*, OSData*, OSData*, OSData*, OSData*, OSData**, OSData**, OSArray**)
@@ -5039,8 +5128,6 @@ AppleSimpleUARTSync
 - registerEventFilterGated(OSObject*, bool (*)(OSObject*, AppleOnboardSerialSync*, unsigned int, unsigned int))
 - registerMbufCallbackGated(OSObject*, int (*)(OSObject*, AppleOnboardSerialSync*, __mbuf**), int (*)(OSObject*, AppleOnboardSerialSync*, unsigned int, unsigned int))
 AppleSmartIO
-AppleSmartIOAES
-AppleSmartIOAESAccelerator
 AppleSmartIOCommand
 AppleSmartIOCommandPool
 - returnCommand(AppleSmartIOCommand*)
@@ -5101,8 +5188,6 @@ AppleSynopsysOTGDevice
 - stuckEpDetectFunction(IOTimerEventSource*)
 - doCompleteEndpointIO(_IOUSBDeviceIORequestTag*)
 AppleSynopsysUSBEHCI
-AppleT7000AMCPerfFunction
-AppleT7000CLPC
 AppleT7000DPTXController
 - initVideoDataFIFOThreshold()
 - getInfoFrameInfo(IOAVInfoFrameType) const
@@ -5117,46 +5202,12 @@ AppleT7000DPTXController
 - stopALPM(IODPDevice*, IOAVVideoLinkData*)
 - enableALPM(IODPDevice*, IOAVVideoLinkData*)
 - disableALPM(IODPDevice*, IOAVVideoLinkData*)
-AppleT7000IO
 AppleT7000LPDPTXPHY
-AppleT7000MemCacheController
-AppleT7000MemCacheModeFunction
-AppleT7000MemCachePanicFunction
-AppleT7000PCIe
-- _applyCommonTunablesFromData(OSData const*)
-- _enablePortRefclkGating(unsigned int, bool)
-- _enableCounters(unsigned int)
-- _captureCounters(unsigned int)
-- _readTimeCounter(unsigned int, unsigned int)
-- _readEntriesCounter(unsigned int, unsigned int)
-- _setRootPortPerst(unsigned int, bool)
-- _setPipeOverride(unsigned int, bool)
-- _setPortEnable(unsigned int, bool)
-- _setPHYReset(unsigned int, bool)
-- _setRefclkEnable(unsigned int, bool)
-- _setMuxedAuxclkAutoDis(unsigned int, bool)
-AppleT7000PCIePort
-- _applyConfigTunablesFromData(OSData*)
-- readMMUReg(unsigned int)
-AppleT7000PMGR
-- saveClockConfig()
-- restoreClockConfig()
-AppleT7000PMGRFunctionClearSOCHOT0Dithering
-AppleT7000PerformanceController
-AppleT7000PerformanceControllerFunctionClearSOCHOT0Dithering
-AppleT7000PerformanceControllerFunctionEnableCore
-AppleT7000PerformanceControllerFunctionEnableTouchClock
-AppleT7000PerformanceControllerFunctionISPConf
-AppleT7000PerformanceControllerFunctionRGBCLKFrequency
-AppleT7000PlatformErrorHandler
-AppleT7000SOCTuner
 AppleT7000USBOHCI
 - readReg(unsigned long long, unsigned int)
 - writeReg(unsigned long long, unsigned int, unsigned int)
 - orReg(unsigned long long, unsigned int, unsigned int)
 - andReg(unsigned long long, unsigned int, unsigned int)
-AppleT7001IO
-AppleT7001PMGR
 AppleT700XTempSensor
 AppleT700XTempSensorDisableSensorFunction
 AppleT700XTempSensorUserClient
@@ -5181,6 +5232,13 @@ AppleT8020MTRTempSensor
 AppleT8027DPTXAudioLinkDelegate
 AppleT8027DPTXController
 AppleT8027LPDPTXPHY
+AppleTCA7408GPIOIC
+AppleTCAGPIOIC
+- _setGPIODirection(unsigned int, unsigned char)
+- _setGPIOData(unsigned int, unsigned char)
+- _getGPIOData(unsigned int, unsigned int*)
+- _reset()
+AppleTCAGPIOICFunction
 AppleTCS3490
 AppleTHS7383
 AppleTII2CAudio
@@ -5295,6 +5353,11 @@ AppleUSB20InternalIntelHubClient
 AppleUSB20InternalIntelHubPort
 AppleUSB20InternalSMSCHub
 AppleUSB20KeyboardHub
+AppleUSB20XHCIPort
+-
+-
+AppleUSB20XHCIRemovablePort
+AppleUSB20XHCITypeCPort
 AppleUSB30AccessoryHub
 AppleUSB30AccessoryHubPort
 AppleUSB30CameraKitHub
@@ -5307,6 +5370,15 @@ AppleUSB30HubPort
 - warmReset(bool)
 - clearPipeStallGated(IOUSBHostPipe*)
 - getPortSpeed() const
+AppleUSB30XHCICardReaderPort
+-
+-
+-
+-
+-
+AppleUSB30XHCIPort
+AppleUSB30XHCIRemovablePort
+AppleUSB30XHCITypeCPort
 AppleUSBAudioComposite
 AppleUSBAudioControlInterface
 AppleUSBAudioDevice
@@ -6289,13 +6361,213 @@ AppleUSBRequestPool
 - stop()
 - gatedStop()
 AppleUSBSampleBufferMonitor
+AppleUSBXHCI
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIAR
+AppleUSBXHCIARIsochronousRequest
+AppleUSBXHCIARIsochronousRequestPool
+AppleUSBXHCIARRequest
+AppleUSBXHCIARRequestPool
+AppleUSBXHCICommandRing
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIDevice
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIEndpoint
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIFL1100
+AppleUSBXHCIFL1100Boot
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIInterrupter
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIInterrupterMSI
+AppleUSBXHCIIsochronousEndpoint
+AppleUSBXHCIIsochronousRequest
+-
+-
+AppleUSBXHCIIsochronousRequestPool
+AppleUSBXHCIIsochronousTransferRing
+AppleUSBXHCILPT
+AppleUSBXHCILPTCommandRing
+-
+-
+AppleUSBXHCILPTH
+AppleUSBXHCILPTHB
+AppleUSBXHCIPCI
+-
+-
+-
+AppleUSBXHCIPPT
+AppleUSBXHCIParkingCommandRing
+AppleUSBXHCIPipe
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIPort
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIRequest
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIRequestPool
+AppleUSBXHCISPT
+-
+AppleUSBXHCISPTLP
+AppleUSBXHCIStream
+-
+-
+-
+AppleUSBXHCIStreamingEndpoint
+-
+-
+-
+AppleUSBXHCITDPool
+-
+AppleUSBXHCITransferRing
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleUSBXHCIWPT
 AppleVTempDispatcher
-AppleVXD393
-- createWorkLoop()
-- newVendorString() const
-- newModelString() const
-- newRevisionString() const
-AppleVXD393UserClient
 Audio2Control
 - init(unsigned int, OSObject*, unsigned int, char const*, unsigned int, unsigned int, unsigned int, OSDictionary*)
 - setControlID(unsigned int)
@@ -6585,6 +6857,7 @@ DPBDriverV1
 - enableGammaCorrection(bool)
 - getGammaCorrectionTable(IOMFBGammaTable*) const
 - setGammaCorrectionTable(IOMFBGammaTable const*)
+DPBDriverV2
 DPBDriver_Impl
 - interruptFilter(OSObject*, IOFilterInterruptEventSource*)
 - interruptOccurred(IOInterruptEventSource*, int)
@@ -6622,6 +6895,7 @@ DitherDriver
 - getInputDepth()
 - init(IOService*, IOMFBSoCProfile*, IOMFB::BlockType, unsigned int, unsigned int)
 DitherDriverH6
+DitherDriverH8G
 DitherDriver_Impl
 - override_iBoot()
 ESDWatchdog
@@ -6649,6 +6923,7 @@ EndpointInstanceSG
 - getFirstSGListPhysicalAdddr()
 EventElementCollection
 - copyProperties() const
+HIDAlwaysNotifyingIODataQueue
 IO80211AWDLMulticastPeer
 IO80211AWDLPeer
 IO80211AWDLPeerManager
@@ -8757,7 +9032,6 @@ IOECStateNotifier
 - init(void (*)(void*, IOEthernetControllerAVBState, IOEthernetControllerAVBState), void*)
 IOECTimeSyncHandler
 - init(void (*)(void*, IOEthernetController::IOEthernetAVBPacket*), void*, unsigned int)
-IOEffaceableDevice
 IOEmbeddedNVMeBlockDevice
 IOEthernetController
 - getPacketFilters(unsigned int*) const
@@ -8805,7 +9079,6 @@ IOFilterInterruptEventSource
 - signalInterrupt()
 - getFilterAction() const
 IOFilterScheme
-IOFirmwareDevice
 IOGUIDPartitionScheme
 - scan(int*)
 - isPartitionUsed(gpt_ent*)
@@ -9363,7 +9636,6 @@ IOKernelDebugger
 - init(IOService*, void (*)(IOService*, void*, unsigned int), void (*)(IOService*, void*, unsigned int*, unsigned int), unsigned int (*)(IOService*), bool (*)(IOService*, bool))
 IOKitDiagnostics
 IOKitDiagnosticsClient
-IOLLBFirmwareDevice
 IOLittleMemoryCursor
 - initWithSpecification(unsigned long long, unsigned long long, unsigned long long)
 - getPhysicalSegments(IOMemoryDescriptor*, unsigned long long, IOMemoryCursor::PhysicalSegment*, unsigned int, unsigned int, unsigned long long*)
@@ -9939,8 +10211,6 @@ IOMobileFramebufferUserClient
 IOModemSerialStreamSync
 IOMultiMemoryDescriptor
 - initWithDescriptors(IOMemoryDescriptor**, unsigned int, unsigned int, bool)
-IONANDBlockDevice
-- initWithParameters(unsigned long long, unsigned long long)
 IONVMeBlockStorageDevice
 - GetDeviceProperties()
 - SetProperties()
@@ -10354,7 +10624,6 @@ IOPacketQueue
 - lockDequeueAll()
 - flush()
 - lockFlush()
-IOPanicLog
 IOPanicPlatform
 IOPartitionScheme
 - attachMediaObjectToDeviceTree(IOMedia*)
@@ -12089,8 +12358,6 @@ MTSPIBootloader_Z2
 - sendCalibrationDataBytes()
 - sendProxCalibrationDataBytes()
 - sendAdditionalCalibrationDataBytes()
-MessageQueue
-- init(OSObject*, void (*)(OSObject*, AppleOscarMessage*))
 NVMeSEPNotifier
 OSArray
 - initWithCapacity(unsigned int)
@@ -12336,6 +12603,20 @@ PMTraceWorker
 PacketMemoryDescriptorEx
 PanelResponseCorrection
 - init(IOService*, IOMFBSoCProfile*, unsigned int, unsigned int)
+PanelResponseCorrectionV1
+PanelResponseCorrection_Impl
+- supportsGammaCorrection() const
+- isGammaCorrectionEnabled() const
+- enableGammaCorrection(bool)
+- getGammaCorrectionTable(IOMFBGammaTable*) const
+- setGammaCorrectionTable(IOMFBGammaTable const*)
+- get_LUT_size() const
+- get_LUT_offset(IOMFB::RGB, int)
+-
+-
+-
+-
+-
 PixelBacklightModulator
 - initHW(unsigned int, unsigned int)
 - powerDown()
@@ -12469,6 +12750,16 @@ WhitePointCorrection
 - enable(bool, WhitePointCorrection::EnableObject)
 - isEnabled(WhitePointCorrection::EnableObject) const
 - init(IOService*, IOMFBSoCProfile*, unsigned long, unsigned long)
+WhitePointCorrectionV1
+- temperature_table_changed()
+- temperature_changed()
+- brightness_changed()
+WhitePointCorrection_Impl
+- register_temp_comp(IOMFB::TempCompHandler*)
+- register_ksf_comp(IOMFB::KSFCompHandler*)
+-
+-
+-
 _AGXIOFenceData
 _HACK_RingBuffer
 _IOConfigThread
@@ -12523,5 +12814,4 @@ com_apple_driver_KeyDeliveryIOKitUserClientMSE
 - NeurZDENovkbM5B(RwYEgOMUTKuzQ*, RwYEgOMUTKuzQ*)
 com_apple_filesystems_apfs
 com_apple_filesystems_hfs
-com_apple_oscar_firmware_userclient
 lwvmDictionary
