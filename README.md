@@ -1,7 +1,7 @@
 # iometa
 
-Dumps IOKit class information off a kernel Mach-O.  
-Supports sorting and filtering by kext and/or parents/children of classes.
+Extracts C++ class runtime information from an arm64 iOS kernel.  
+Class names, inheritance, vtables, methods, 
 
 ### Building
 
@@ -13,7 +13,21 @@ Links against CoreFoundation and IOKit though, so probably only works on Darwin 
 
 ### Usage
 
-Run with no arguments for help.
+Run with no arguments for exhaustive help.
+
+Examples:
+
+    iometa kernel                                   # List all classes
+    iometa -a kernel                                # List all classes with more info
+    iometa -A kernel                                # List all classes and print all virtual methods
+    iometa -AC IOSurfaceRoot kernel                 # Print info and methods of class IOSurfaceRoot
+    iometa -Ae IOSurfaceRoot kernel                 # Print info and methods of all classes extending IOSurfaceRoot
+    iometa -Ap IOSurfaceRoot kernel                 # Print info and methods of all classes from which IOSurfaceRoot inherits
+    iometa -AB com.apple.iokit.IOSurface kernel     # Print info and methods of classes from kext com.apple.iokit.IOSurface
+    iometa -M kernel >map.txt                       # Create symbol map
+    iometa -A kernel map.txt                        # List all classes with virtual methods, and resymbolicate them
+
+For more info on symbol maps and resymbolication, see [`/sym`](https://github.com/Siguza/iometa/tree/master/sym).
 
 ### License
 
