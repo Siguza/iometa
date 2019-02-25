@@ -224,6 +224,7 @@ typedef struct
 {
     const char *class;
     const char *method;
+    const char *cxxsym;
     uint32_t structor :  1,
              reserved : 31;
 } symmap_method_t;
@@ -243,6 +244,7 @@ typedef struct vtab_entry
     struct vtab_entry *chain; // only used for back-propagating name
     const char *class;
     const char *method;
+    const char *cxxsym;
     kptr_t addr;
     uint16_t pac;
     uint16_t structor      :  1,
@@ -1248,6 +1250,7 @@ do \
                 ARRNEXT(current.arr, ent);
                 ent->class = NULL;
                 ent->method = NULL;
+                ent->cxxsym = NULL;
                 ent->structor = 0;
                 ent->reserved = 0;
                 if(mem >= end) break;
@@ -1429,7 +1432,7 @@ out:;
 #undef PUSHENT
 }
 
-static void print_syment(const char *owner, const char *class, const char *method)
+static void print_syment(const char *owner, const char *class, const char *method, const char *cxxsym)
 {
     if(!method)
     {
@@ -1442,7 +1445,7 @@ static void print_syment(const char *owner, const char *class, const char *metho
     {
         printf("%s::", class);
     }
-    printf("%s\n", method);
+    printf("%s (%s)\n", method, cxxsym);
 }
 
 static void print_symmap(metaclass_t *meta)
@@ -1456,7 +1459,7 @@ static void print_symmap(metaclass_t *meta)
     for(size_t i = parent ? parent->nmethods : 0; i < meta->nmethods; ++i)
     {
         vtab_entry_t *ent = &meta->methods[i];
-        print_syment(meta->name, ent->class, ent->placeholder ? NULL : ent->method);
+        print_syment(meta->name, ent->class, ent->placeholder ? NULL : ent->method, ent->cxxsym);
     }
 }
 
@@ -3606,6 +3609,7 @@ int main(int argc, const char **argv)
                     ent->chain = chain;
                     ent->class = class;
                     ent->method = method;
+                    ent->cxxsym = cxx_sym;
                     ent->addr = func;
                     ent->pac = pac;
                     ent->structor = !!structor;
@@ -4149,7 +4153,7 @@ int main(int argc, const char **argv)
                         for(size_t k = 0; k < class->num; ++k)
                         {
                             symmap_method_t *ent = &class->methods[k];
-                            print_syment(class->name, ent->class, ent->method);
+                            print_syment(class->name, ent->class, ent->method, ent->cxxsym);
                         }
                     }
                 }
