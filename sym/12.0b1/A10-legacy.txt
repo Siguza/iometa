@@ -13224,6 +13224,10 @@ VideoInterface
 -
 -
 -
+VideoInterfaceIOAV
+VideoInterfaceMipi
+VideoInterfaceStub
+VideoModeMailboxHandler
 WhitePointCorrection
 - enable(bool, WhitePointCorrection::EnableObject)
 - isEnabled(WhitePointCorrection::EnableObject) const
@@ -13238,26 +13242,6 @@ WhitePointCorrection_Impl
 -
 -
 -
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
-VideoInterfaceIOAV
-VideoInterfaceMipi
-VideoInterfaceStub
-VideoModeMailboxHandler
 _AGXIOFenceData
 _HACK_RingBuffer
 _IOConfigThread
