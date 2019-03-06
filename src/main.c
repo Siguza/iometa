@@ -273,19 +273,45 @@ typedef struct metaclass
              reserved     : 28;
 } metaclass_t;
 
+// XNU says:
+#if 0
+A pointer is one of:
+{
+    uint64_t pointerValue : 51;
+    uint64_t offsetToNextPointer : 11;
+    uint64_t isBind : 1 = 0;
+    uint64_t authenticated : 1 = 0;
+}
+{
+    uint32_t offsetFromSharedCacheBase;
+    uint16_t diversityData;
+    uint16_t hasAddressDiversity : 1;
+    uint16_t hasDKey : 1;
+    uint16_t hasBKey : 1;
+    uint16_t offsetToNextPointer : 11;
+    uint16_t isBind : 1;
+    uint16_t authenticated : 1 = 1;
+}
+#endif
+
 typedef union
 {
     kptr_t ptr;
-    struct {
-        int64_t lo : 51,
-                hi : 13;
+    struct
+    {
+        int64_t lo  : 51,
+                hi  : 13;
     };
-    struct {
-        kptr_t off : 32,
-               pac : 16,
-               flg :  3,
-               nxt : 12,
-               one :  1;
+    struct
+    {
+        kptr_t off  : 32,
+               pac  : 16,
+               tag  :  1,
+               dkey :  1,
+               bkey :  1,
+               next : 11,
+               bind :  1,
+               auth :  1;
     };
 } pacptr_t;
 
@@ -337,7 +363,7 @@ static bool is_part_of_vtab(void *kernel, bool x1469, relocrange_t *locreloc, si
     }
     if(x1469)
     {
-        return ((pacptr_t*)vtab)[idx - 1].nxt * sizeof(uint32_t) == sizeof(kptr_t);
+        return ((pacptr_t*)vtab)[idx - 1].next * sizeof(uint32_t) == sizeof(kptr_t);
     }
     else
     {
@@ -356,9 +382,9 @@ static kptr_t kuntag(kptr_t kbase, bool x1469, kptr_t ptr, uint16_t *pac)
     pp.ptr = ptr;
     if(x1469)
     {
-        if(pp.one)
+        if(pp.auth)
         {
-            if(pac) *pac = pp.flg == 1 ? pp.pac : 0;
+            if(pac) *pac = pp.tag ? pp.pac : 0;
             return kbase + pp.off;
         }
         pp.ptr = (kptr_t)pp.lo;
