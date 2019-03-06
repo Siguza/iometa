@@ -6,7 +6,6 @@
         <th>Models</th>
         <th align="center">New kernelcache format since</th>
     </tr>
-    
     <tr>
         <td rowspan="11" align="center">A7</td>
         <td rowspan="3">iPad Air</td>
@@ -58,7 +57,6 @@
         <td>iPhone6,2</td>
         <td>N53AP</td>
     </tr>
-    
     <tr>
         <td rowspan="7" align="center">A8</td>
         <td rowspan="2">iPad mini 4</td>
@@ -96,7 +94,6 @@
         <td>N102AP</td>
         <td align="center">12.0 beta 2</td>
     </tr>
-    
     <tr>
         <td rowspan="14" align="center">A9</td>
         <td rowspan="2">iPad Pro (9.7in)</td>
@@ -156,7 +153,6 @@
     <tr>
         <td>N69uAP</td>
     </tr>
-    
     <tr>
         <td rowspan="10" align="center">A10</td>
         <td rowspan="2">iPad Pro 2 (12.9in)</td>
@@ -204,7 +200,6 @@
         <td>iPhone9,4</td>
         <td>D111AP</td>
     </tr>
-    
     <tr>
         <td rowspan="10" align="center">A11</td>
         <td rowspan="4">iPhone 8</td>
@@ -246,7 +241,6 @@
         <td>iPhone10,6</td>
         <td>D221AP</td>
     </tr>
-    
     <tr>
         <td rowspan="12" align="center">A12</td>
         <td rowspan="4">iPad Pro 3 (11.0in)</td>
