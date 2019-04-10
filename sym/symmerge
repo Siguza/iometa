@@ -10,6 +10,7 @@ define('NL', "\n");
 if($_SERVER['argc'] < 2)
 {
     echo 'Usage: '.$_SERVER['argv'][0].' file1.txt [file2.txt ...] >all.txt'.NL;
+    exit;
 }
 
 $all = [];
