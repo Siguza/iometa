@@ -552,14 +552,14 @@ AGXFirmware
 - drainFirmwareLogRing()
 - configurePoolElementSizes()
 - requestFastDieParamReset()
+- setFastDieReleaseTempOverride(unsigned int)
 - setFastDieTargetOverride(unsigned int)
 - setFastDieKpOverride(float)
 - setFastDieKiOverride(float)
 - setFastDieControlEffortOverride(float)
 - setFastDieTransferOverride(unsigned int)
 -
--
--
+- updatePPMControllerOverride(OSDictionary*)
 AGXFirmwareKextG5G
 - requestFirmwareBinary(unsigned char const**, unsigned long*)
 AGXFirmwareKextG5P

@@ -527,7 +527,7 @@ AGXAllocationList
 AGXAllocationList2
 AGXArmFirmware
 AGXArmFirmwareKingfisherV2
--
+- AGXArmFirmware::receivedMessageFromAKF(unsigned long long)
 -
 -
 -
@@ -685,14 +685,14 @@ AGXFirmware
 - drainFirmwareLogRing()
 - configurePoolElementSizes()
 - requestFastDieParamReset()
+- setFastDieReleaseTempOverride(unsigned int)
 - setFastDieTargetOverride(unsigned int)
 - setFastDieKpOverride(float)
 - setFastDieKiOverride(float)
 - setFastDieControlEffortOverride(float)
 - setFastDieTransferOverride(unsigned int)
 -
--
--
+- updatePPMControllerOverride(OSDictionary*)
 AGXFirmwareKextG9GRTBuddy
 AGXFirmwareKextG9PRTBuddy
 AGXFirmwareKextRTBuddy
@@ -1191,24 +1191,24 @@ AppleAOPAudioController
 -
 -
 AppleAOPAudioDevice
--
--
--
--
--
--
--
--
--
--
--
+- getStatusReport(void*)
+- transferOptionalEdtProperty(char const*)
+- setActive(unsigned int, int)
+- startDevice(unsigned int, unsigned int)
+- stopDevice(unsigned int, unsigned int)
+- getInterruptStatus(unsigned int, void*)
+- setInterruptEnable(unsigned int, unsigned long long, unsigned long long)
+- setInterruptAction(unsigned int, void*, void*)
+- processDeviceTreeU32Entry(char const*, unsigned int)
+- getNamedProperty(char const*, void*, unsigned long*)
+- getNamedProperty(char const*, unsigned int*)
 AppleAOPAudioDeviceController
--
--
--
--
--
--
+- setActive(unsigned int, int)
+- startDevice(unsigned int, unsigned int)
+- stopDevice(unsigned int, unsigned int)
+- getInterruptStatus(unsigned int, void*)
+- setInterruptEnable(unsigned int, unsigned long long, unsigned long long)
+- setInterruptAction(unsigned int, void*, void*)
 AppleAOPAudioDeviceControllerObject
 -
 -
