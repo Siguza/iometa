@@ -12,7 +12,8 @@ if($_SERVER['argc'] < 2)
     echo 'Usage: '.$_SERVER['argv'][0].' file1.txt [file2.txt ...] >all.txt'.NL;
     exit;
 }
-
+// This script is ghetto, and should not be used as
+// a reference implementation for symbol map parsing.
 $all = [];
 for($i = 1; $i < $_SERVER['argc']; ++$i)
 {
@@ -32,11 +33,28 @@ for($i = 1; $i < $_SERVER['argc']; ++$i)
         {
             unset($cur);
             $cur = [];
-            $all[$l] = &$cur;
+            if(!isset($all[$l]))
+            {
+                $all[$l] = [];
+            }
+            $all[$l][] = &$cur;
         }
     }
     unset($cur);
 }
+// Return body with most methods
+$all = array_map(function($list)
+{
+    $top = [];
+    foreach($list as $el)
+    {
+        if(count($el) > count($top))
+        {
+            $top = $el;
+        }
+    }
+    return $top;
+}, $all);
 ksort($all);
 foreach($all as $k => $v)
 {
