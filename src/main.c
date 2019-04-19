@@ -1,4 +1,4 @@
-/* Copyright (c) 2018 Siguza
+/* Copyright (c) 2018-2019 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -1486,11 +1486,72 @@ static void print_symmap(metaclass_t *meta)
     }
 }
 
+// Turn special chars to underscores for now.
+// Eventually this should be replaced by the mangled name.
+static const char* radarify(const char *sym)
+{
+    static char *buf = NULL;
+    static size_t buflen = 0;
+    size_t len = strlen(sym) + 1;
+    if(len > buflen)
+    {
+        if(buf) free(buf);
+        buf = malloc(len);
+        buflen = len;
+    }
+    size_t from = 0,
+           to   = 0,
+           last = 0;
+    while(from < len)
+    {
+        char c = sym[from++];
+        if(
+            (c >= '0' && c <= '9') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c == '.') ||
+            (c == ':')
+        )
+        {
+            last = to;
+        }
+        else
+        {
+            c = '_';
+        }
+        buf[to++] = c;
+    }
+    buf[last+1] = '\0';
+    return buf;
+}
+
 static void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
 {
     if(opt.radare)
     {
-        // TODO
+        if(meta->vtab != 0 && meta->vtab != -1)
+        {
+            printf("f sym.vtablefor%s 0 " ADDR "\n", meta->name, meta->vtab);
+        }
+        if(meta->addr)
+        {
+            printf("f sym.%s::gMetaClass 0 " ADDR "\n", meta->name, meta->addr);
+        }
+        if(meta->metavtab != 0 && meta->metavtab != -1)
+        {
+            printf("f sym.vtablefor%s::MetaClass 0 " ADDR "\n", meta->name, meta->metavtab);
+        }
+        for(size_t i = 0; i < meta->nmethods; ++i)
+        {
+            vtab_entry_t *ent = &meta->methods[i];
+            if(!ent->overrides)
+            {
+                continue;
+            }
+            const char *r2name = radarify(ent->method);
+            printf("f sym.%s::%s 0 " ADDR "\n", ent->class, r2name, ent->addr);
+            printf("\"fN sym.%s::%s %s::%s\"\n", ent->class, r2name, ent->class, ent->method);
+        }
     }
     else
     {
@@ -1571,7 +1632,7 @@ static void print_help(const char *self)
                     "    -M  Print symbol map (implies -o, takes precedence)\n"
                     "    -MM Same as above, and copy input map for missing classes\n"
                     "    -o  Print overridden/new virtual methods\n"
-                    "    -R  Print symbols for radare2 (implies -iov, takes precedence)\n"
+                    "    -R  Print symbols for radare2 (implies -mov, takes precedence)\n"
                     "    -s  Print object sizes\n"
                     "    -v  Print object vtabs\n"
                     "\n"
@@ -1727,7 +1788,7 @@ int main(int argc, const char **argv)
                 }
                 case 'R':
                 {
-                    opt.inherit   = 1;
+                    opt.meta      = 1;
                     opt.overrides = 1;
                     opt.radare    = 1;
                     opt.vtab      = 1;
@@ -4308,6 +4369,10 @@ int main(int argc, const char **argv)
                     namelen = nl;
                 }
             }
+        }
+        if(opt.radare)
+        {
+            printf("fs symbols\n");
         }
         for(size_t i = 0; i < lsize; ++i)
         {
