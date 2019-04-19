@@ -2586,23 +2586,8 @@ AppleCallistoPacket
 - firstFragment() const
 - finalFragment() const
 AppleCallistoTelegramStream
-AppleChestnutDisplayPMU
 AppleCredentialManager
 AppleCredentialManagerUserClient
-AppleD2186PMU
-- _index2GPIOAddress(unsigned char)
-AppleD2186PMUADCFunction
-AppleD2186PMUGPIOConfigFunction
-AppleD2186PMUGPIOFunction
-AppleD2186PMULDOFunction
-AppleD2186PMUPWM
-AppleD2186PMUPowerSource
-AppleD2186PMURTC
-AppleD2186PMURamAccessFunction
-AppleD2186PMURegisterAccessFunction
-AppleD2186PMUSTATFunction
-AppleD2186PMUSensorFunction
-AppleD2186PMUWatchDogTimer
 AppleD2207PMU
 - _index2GPIOAddress(unsigned char)
 AppleD2207PMUADCFunction
@@ -2697,10 +2682,6 @@ AppleDialogPMU
 AppleDialogPMUUserClient
 AppleDieTempController
 AppleDieTempControllerUserClient
-AppleDisplayPMU
-- handleStart(IOService*)
-- setLDO(unsigned char, unsigned char, unsigned short, bool)
-AppleDisplayPMUFunctionLDOEnable
 AppleDisplayPipe
 - set_frame_notification_gated(bool, bool)
 - enable_mock_alss_capture(bool)
@@ -3955,12 +3936,6 @@ AppleParadeDP825
 - masterI2CReadAt(AppleDPDisplayComponent*, unsigned int, unsigned char*, unsigned int)
 - masterI2CRead(AppleDPDisplayComponent*, unsigned char*, unsigned int)
 - initPages(OSDictionary*)
-ApplePinotLCD
-- _lcdEnable(bool, void*, void (*)(void*, bool), unsigned long long*)
-- _lcdErrorOccurred(void*, void*, int)
-- _sendNoOpCommand()
-- _enableSleepMode(bool)
-- _enableDisplayMode(bool)
 AppleR5IOPT8006
 AppleRegStmAPIODMA
 AppleRheaLPDPTXPHY

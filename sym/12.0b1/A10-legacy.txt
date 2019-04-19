@@ -10143,6 +10143,7 @@ IOMFBColorManagerDriver_Impl
 - init_linear_LUT()
 - is_LUT_paired() const
 - is_LUT(IOMFB::DeEnGamma, IOMFB::LUTLocation) const
+IOMFBEvtMonTrampoline
 IOMFBParamFIFO
 - init(IOMFBParamFIFODriver*)
 IOMFBParamFIFODriver
@@ -10151,7 +10152,6 @@ IOMFBParamFIFODriver
 - flushParamFifo()
 - enableParamFifo()
 - overrideVRR()
-IOMFBEvtMonTrampoline
 IOMFBReporter
 - init(IOService*)
 IOMFBSwapIORequest
