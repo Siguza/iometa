@@ -1532,19 +1532,22 @@ static void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
         if(meta->vtab != 0 && meta->vtab != -1)
         {
             printf("f sym.vtablefor%s 0 " ADDR "\n", meta->name, meta->vtab);
+            printf("fN sym.vtablefor%s vtablefor%s\n", meta->name, meta->name);
         }
         if(meta->addr)
         {
             printf("f sym.%s::gMetaClass 0 " ADDR "\n", meta->name, meta->addr);
+            printf("fN sym.%s::gMetaClass %s::gMetaClass\n", meta->name, meta->name);
         }
         if(meta->metavtab != 0 && meta->metavtab != -1)
         {
             printf("f sym.vtablefor%s::MetaClass 0 " ADDR "\n", meta->name, meta->metavtab);
+            printf("fN sym.vtablefor%s::MetaClass vtablefor%s::MetaClass\n", meta->name, meta->name);
         }
         for(size_t i = 0; i < meta->nmethods; ++i)
         {
             vtab_entry_t *ent = &meta->methods[i];
-            if(!ent->overrides)
+            if(!ent->overrides || ent->addr == -1)
             {
                 continue;
             }
@@ -1917,7 +1920,8 @@ int main(int argc, const char **argv)
            OSObjectGetMetaClass = 0,
            kbase = 0,
            plk_base = 0,
-           initcode = 0;
+           initcode = 0,
+           pure_virtual = 0;
     bool x1469 = false,
          have_plk_text_exec = false;
 #define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!x1469 && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
@@ -2998,7 +3002,6 @@ int main(int argc, const char **argv)
             }
         }
 
-        kptr_t pure_virtual = 0;
         size_t VtabAllocIdx = 0;
         if(hdr->filetype != MH_KEXT_BUNDLE)
         {
@@ -4373,6 +4376,11 @@ int main(int argc, const char **argv)
         if(opt.radare)
         {
             printf("fs symbols\n");
+            if(pure_virtual)
+            {
+                printf("f sym.___cxa_pure_virtual 0 " ADDR "\n", pure_virtual);
+                printf("fN sym.___cxa_pure_virtual ___cxa_pure_virtual\n");
+            }
         }
         for(size_t i = 0; i < lsize; ++i)
         {
