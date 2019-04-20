@@ -90,7 +90,7 @@ Then the next split is by kernelcache format. This is `A8-dense.txt` vs `A8-lega
 
 - Class `A` is a non-abstract base class declaring virtual method `x()`.
 - Class `B` is an abstract class inheriting from class `A` and declaring virtual method `y()`.
-- Class `C` is a non-abstract class inheriting from class `A` and declaring virtual method `z()`.
+- Class `C` is a non-abstract class inheriting from class `B` and declaring virtual method `z()`.
 
 Now in the "legacy" kernelcache format, class `B` usually gets its own vtable and everything, and a symbol map would look as following:
 
