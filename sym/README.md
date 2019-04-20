@@ -128,16 +128,16 @@ With that sorted out, here's how I actually go at updating symbol maps:
 2.  I go through all classes with `fn_0x...` methods and, before even looking at assembly, compare a bunch of vtables between this and the last generation. Of particular interest are "pure virtual" methods (i.e. those showing up red in `iometa` output) as well as those overridden in child classes:  
     <table>
         <tr>
-            <td>![vtab-1a](https://user-images.githubusercontent.com/1659374/56452914-19e16b80-6339-11e9-9eaa-276ba67880be.png)</td>
-            <td>![vtab-1b](https://user-images.githubusercontent.com/1659374/56452918-367da380-6339-11e9-9583-f8c960fc9368.png)</td>
+            <td><img src="https://user-images.githubusercontent.com/1659374/56452914-19e16b80-6339-11e9-9eaa-276ba67880be.png" alt="vtab-1a"></td>
+            <td><img src="https://user-images.githubusercontent.com/1659374/56452918-367da380-6339-11e9-9583-f8c960fc9368.png" alt="vtab-1b"></td>
         </tr>
         <tr>
-            <td>![vtab-2a](https://user-images.githubusercontent.com/1659374/56452933-662cab80-6339-11e9-8886-47cfa2df908c.png)</td>
-            <td>![vtab-2b](https://user-images.githubusercontent.com/1659374/56452934-6e84e680-6339-11e9-9ca2-a5114caa8871.png)</td>
+            <td><img src="https://user-images.githubusercontent.com/1659374/56452933-662cab80-6339-11e9-8886-47cfa2df908c.png" alt="vtab-2a"></td>
+            <td><img src="https://user-images.githubusercontent.com/1659374/56452934-6e84e680-6339-11e9-9ca2-a5114caa8871.png" alt="vtab-2b"></td>
         </tr>
         <tr>
-            <td>![vtab-3a](https://user-images.githubusercontent.com/1659374/56452937-76dd2180-6339-11e9-8631-d20272be61a6.png)</td>
-            <td>![vtab-3b](https://user-images.githubusercontent.com/1659374/56452939-7e9cc600-6339-11e9-81ae-cb1db510ea06.png)</td>
+            <td><img src="https://user-images.githubusercontent.com/1659374/56452937-76dd2180-6339-11e9-8631-d20272be61a6.png" alt="vtab-3a"></td>
+            <td><img src="https://user-images.githubusercontent.com/1659374/56452939-7e9cc600-6339-11e9-81ae-cb1db510ea06.png" alt="vtab-3b"></td>
         </tr>
     </table>
     You can tell a damn lot from just those patterns.
