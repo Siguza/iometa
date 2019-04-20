@@ -73,15 +73,15 @@ So I would greatly appreciate if you could [point out](https://github.com/Siguza
 
 Ok, first of all, the symbol maps are organised by device class - A7, A8, etc. Originally I wanted to put all symbols for all devices into a single file, but in attempting to do that my own tool greeted me with warnings like:
 
-> \[WRN\] Symmap entry for AppleBCMWLANBusInterface has 60 methods, vtab has 88.
-> \[WRN\] Symmap entry for AppleBCMWLANCore has 84 methods, vtab has 136.
-> \[WRN\] Symmap entry for AppleBCMWLANBSSBeacon has 61 methods, vtab has 66.
-> \[WRN\] Symmap entry for AppleBCMWLANIO80211APSTAInterface has 88 methods, vtab has 83.
+> \[WRN\] Symmap entry for AppleBCMWLANBusInterface has 60 methods, vtab has 88.  
+> \[WRN\] Symmap entry for AppleBCMWLANCore has 84 methods, vtab has 136.  
+> \[WRN\] Symmap entry for AppleBCMWLANBSSBeacon has 61 methods, vtab has 66.  
+> \[WRN\] Symmap entry for AppleBCMWLANIO80211APSTAInterface has 88 methods, vtab has 83.  
 > \[WRN\] Symmap entry for AppleBCMWLANProximityInterface has 88 methods, vtab has 83.
 
 You can reproduce that by attempting to use an A7 symbol map on an A8 cache or vice versa. Basically different device generations have, under the same name, different classes implementing different methods. So in order to work around that, I gave each generation its own map, since within generations there's at best very little difference. With maps provided on this repo, you should only ever see two kinds of warnings:
 
-> \[WRN\] Symmap entry for \<Class\> has X methods, vtab has 0.
+> \[WRN\] Symmap entry for \<Class\> has X methods, vtab has 0.  
 > \[WRN\] Symmap entry for \<Class\> has X methods, but class has no vtab.
 
 Both are symptoms of the same condition, namely the symbol map holding information on a class when the kernel effectively optimised that class out of existence for that device. And I can live with that.
@@ -126,9 +126,20 @@ With that sorted out, here's how I actually go at updating symbol maps:
 1.  I simply run `iometa -M kernel old.txt >/tmp/new.txt` against a kernel, using the symbol map from the last version (or in the case of a new device, the closest existing device I have a map for). Usually that will throw a bunch of warnings and turn between a few hundred and a few thousand functions into `fn_0x...`, but the vast majority will go through just fine, and I blindly assume those to still be accurate.  
     I do this for each device belonging to a generation, collect all newly generated symbol maps, and then merge them back into one with [my ugly script](https://github.com/Siguza/iometa/blob/master/sym/symmerge) (this is necessary in order to keep classes that only e.g. either iPads _or_ iPhones have, but yet get rid of classes that were actually removed).
 2.  I go through all classes with `fn_0x...` methods and, before even looking at assembly, compare a bunch of vtables between this and the last generation. Of particular interest are "pure virtual" methods (i.e. those showing up red in `iometa` output) as well as those overridden in child classes:  
-    ![vtab-1a](https://user-images.githubusercontent.com/1659374/56452914-19e16b80-6339-11e9-9eaa-276ba67880be.png) ![vtab-1b](https://user-images.githubusercontent.com/1659374/56452918-367da380-6339-11e9-9583-f8c960fc9368.png)  
-    ![vtab-2a](https://user-images.githubusercontent.com/1659374/56452933-662cab80-6339-11e9-8886-47cfa2df908c.png) ![vtab-2b](https://user-images.githubusercontent.com/1659374/56452934-6e84e680-6339-11e9-9ca2-a5114caa8871.png)  
-    ![vtab-3a](https://user-images.githubusercontent.com/1659374/56452937-76dd2180-6339-11e9-8631-d20272be61a6.png) ![vtab-3b](https://user-images.githubusercontent.com/1659374/56452939-7e9cc600-6339-11e9-81ae-cb1db510ea06.png)  
+    <table>
+        <tr>
+            <td>![vtab-1a](https://user-images.githubusercontent.com/1659374/56452914-19e16b80-6339-11e9-9eaa-276ba67880be.png)</td>
+            <td>![vtab-1b](https://user-images.githubusercontent.com/1659374/56452918-367da380-6339-11e9-9583-f8c960fc9368.png)</td>
+        </tr>
+        <tr>
+            <td>![vtab-2a](https://user-images.githubusercontent.com/1659374/56452933-662cab80-6339-11e9-8886-47cfa2df908c.png)</td>
+            <td>![vtab-2b](https://user-images.githubusercontent.com/1659374/56452934-6e84e680-6339-11e9-9ca2-a5114caa8871.png)</td>
+        </tr>
+        <tr>
+            <td>![vtab-3a](https://user-images.githubusercontent.com/1659374/56452937-76dd2180-6339-11e9-8631-d20272be61a6.png)</td>
+            <td>![vtab-3b](https://user-images.githubusercontent.com/1659374/56452939-7e9cc600-6339-11e9-81ae-cb1db510ea06.png)</td>
+        </tr>
+    </table>
     You can tell a damn lot from just those patterns.
 3.  When you've finally exhausted pattern matching, it's time to dive into assembly and find out which of those methods in between were added or removed. And if methods were added and we're somewhat lucky, it will also pass its own name and/or signature to some logging function. Now if it's just the name without signature, recovering the argument list can be challenge, so here are a few tricks:
     -   When arguments are either stored to memory or passed to printf-like functions, that usually gives away their exact size. Otherwise you only get the information whether they're 32- or 64bit.
