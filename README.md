@@ -1,7 +1,7 @@
 # iometa
 
 Extracts C++ class runtime information from an arm64 iOS kernel.  
-Class names, inheritance, vtables, methods, 
+Class names, inheritance, vtables, methods, etc.
 
 ### Building
 
@@ -26,6 +26,7 @@ Examples:
     iometa -AB com.apple.iokit.IOSurface kernel     # Print info and methods of classes from kext com.apple.iokit.IOSurface
     iometa -M kernel >map.txt                       # Create symbol map
     iometa -A kernel map.txt                        # List all classes with virtual methods, and resymbolicate them
+    iometa -R kernel map.txt                        # Generate a radare2 script file with all symbols
 
 For more info on symbol maps and resymbolication, see [`/sym`](https://github.com/Siguza/iometa/tree/master/sym).
 
