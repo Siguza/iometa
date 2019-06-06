@@ -124,6 +124,28 @@ typedef struct
              op1    :  1;
 } str_uoff_t;
 
+typedef struct
+{
+    uint32_t Rt     : 5,
+             Rn     : 5,
+             op3    : 2,
+             imm    : 9,
+             op2    : 9,
+             sf     : 1,
+             op1    : 1;
+} ldur_t, stur_t;
+
+typedef struct
+{
+    uint32_t Rt     :  5,
+             Rn     :  5,
+             imm    : 12,
+             op2    :  1,
+             opc    :  1,
+             op1    :  6,
+             size   :  2;
+} ldr_fp_uoff_t, str_fp_uoff_t;
+
 /*typedef struct
 {
     uint32_t Rt     : 5,
@@ -173,6 +195,19 @@ typedef struct
              op     :  8,
              sf     :  1;
 } movz_t, movk_t, movn_t;
+
+typedef struct
+{
+    uint32_t Rd     :  5,
+             defgh  :  5,
+             op3    :  2,
+             cmode  :  4,
+             abc    :  3,
+             op2    : 10,
+             op     :  1,
+             Q      :  1,
+             op1    :  1;
+} movi_t;
 
 typedef struct
 {
@@ -355,6 +390,46 @@ static inline uint32_t get_str_uoff(str_uoff_t *str)
     return str->imm << (2 + str->sf);
 }
 
+static inline bool is_ldur(ldur_t *ldur)
+{
+    return ldur->op1 == 0b1 && ldur->op2 == 0b111000010 && ldur->op3 == 0b0;
+}
+
+static inline int64_t get_ldur_off(ldur_t *ldur)
+{
+    return (int64_t)ldur->imm;
+}
+
+static inline bool is_stur(stur_t *stur)
+{
+    return stur->op1 == 0b1 && stur->op2 == 0b111000000 && stur->op3 == 0b0;
+}
+
+static inline int64_t get_stur_off(stur_t *stur)
+{
+    return (int64_t)stur->imm;
+}
+
+static inline bool is_ldr_fp_uoff(ldr_fp_uoff_t *ldr)
+{
+    return ldr->op1 == 0b111101 && ldr->op2 == 0b1;
+}
+
+static inline bool is_str_fp_uoff(str_fp_uoff_t *str)
+{
+    return str->op1 == 0b111101 && str->op2 == 0b0;
+}
+
+static inline uint32_t get_fp_uoff_size(ldr_fp_uoff_t *ldr)
+{
+    return (ldr->opc << 2) | ldr->size;
+}
+
+static inline uint32_t get_fp_uoff(ldr_fp_uoff_t *ldr)
+{
+    return ldr->imm << get_fp_uoff_size(ldr);
+}
+
 /*static inline bool is_stp_fp_uoff(stp_fp_t *stp)
 {
     return stp->op == 0xb4;
@@ -425,6 +500,16 @@ static inline int64_t get_movn_imm(movn_t *movn)
     return ~get_movzk_imm(movn);
 }
 
+static inline bool is_movi(movi_t *movi)
+{
+    if(movi->op1 == 0b0 && movi->op2 == 0b0111100000 && movi->op3 == 0b01)
+    {
+        uint8_t x = (movi->cmode << 1) | movi->op;
+        return ((x & 0b10011) == 0b00000) || ((x & 0b11011) == 0b10000) || ((x & 0b11101) == 0b11000) || ((x & 0b11110) == 0b11100) || (x == 0b11110) || (x == 0b11111 && movi->Q == 0b1);
+    }
+    return false;
+}
+
 static inline bool is_pac(pac_t *pac)
 {
     return pac->op1 == 0x36b04 && pac->op2 == 0;
@@ -442,7 +527,7 @@ static inline bool is_pacga(pacga_t *pacga)
 
 static inline bool is_aut(pac_t *pac)
 {
-    return pac->op1 == 0x36B04 && pac->op2 == 1;
+    return pac->op1 == 0x36b04 && pac->op2 == 1;
 }
 
 static inline bool is_autsys(pacsys_t *pacsys)
@@ -475,6 +560,20 @@ extern uint64_t DecodeBitMasks(uint8_t N, uint8_t imms, uint8_t immr, uint8_t bi
 static inline uint32_t get_orr_imm(orr_t *orr)
 {
     return DecodeBitMasks(orr->N, orr->imms, orr->immr, 32 << orr->sf);
+}
+
+// movi - well fml this is even worse
+
+extern uint64_t AdvSIMDExpandImm(uint8_t op, uint8_t cmode, uint64_t imm8);
+
+static inline __uint128_t get_movi_imm(movi_t *movi)
+{
+    __uint128_t val = AdvSIMDExpandImm(movi->op, movi->cmode, (movi->abc << 5) | movi->defgh);
+    if(movi->Q == 0b1)
+    {
+        val |= val << 64;
+    }
+    return val;
 }
 
 #endif
