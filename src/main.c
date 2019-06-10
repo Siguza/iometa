@@ -1220,6 +1220,68 @@ static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdr
         ERR("Wrong Mach-O type: 0x%x", hdr->filetype);
         return -1;
     }
+    if(hdr->sizeofcmds > kernelsize - sizeof(mach_hdr_t))
+    {
+        ERR("Mach-O header out of bounds.");
+        return -1;
+    }
+    // TODO: replace header & weed out invalid load commands?
+    FOREACH_CMD(hdr, cmd)
+    {
+        if(cmd->cmd == MACH_SEGMENT)
+        {
+            mach_seg_t *seg = (mach_seg_t*)cmd;
+            if(seg->fileoff > kernelsize || seg->filesize > kernelsize - seg->fileoff)
+            {
+                ERR("Mach-O segment out of bounds: %s", seg->segname);
+                return -1;
+            }
+            mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+            for(size_t h = 0; h < seg->nsects; ++h)
+            {
+                if(secs[h].offset > kernelsize || secs[h].size > kernelsize - secs[h].offset)
+                {
+                    ERR("Mach-O section out of bounds: %s.%s", secs[h].segname, secs[h].sectname);
+                    return -1;
+                }
+            }
+        }
+        else if(cmd->cmd == LC_SYMTAB)
+        {
+            mach_stab_t *stab = (mach_stab_t*)cmd;
+            if(stab->stroff > kernelsize || stab->symoff > kernelsize || stab->nsyms > (kernelsize - stab->symoff) / sizeof(mach_nlist_t))
+            {
+                ERR("Mach-O symtab out of bounds.");
+                return -1;
+            }
+            mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
+            for(size_t i = 0; i < stab->nsyms; ++i)
+            {
+                if((symtab[i].n_type & N_TYPE) == N_UNDF || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT))) // XXX: eliminate check for verification?
+                {
+                    continue;
+                }
+                if(symtab[i].n_un.n_strx > kernelsize - stab->stroff)
+                {
+                    ERR("Mach-O symbol out of bounds.");
+                    return -1;
+                }
+            }
+        }
+        else if(cmd->cmd == LC_DYSYMTAB)
+        {
+            mach_dstab_t *dstab = (mach_dstab_t*)cmd;
+            if(hdr->filetype == MH_KEXT_BUNDLE) // XXX: get rid of this too?
+            {
+                if(dstab->extreloff > kernelsize || dstab->nextrel > (kernelsize - dstab->extreloff) / sizeof(mach_reloc_t))
+                {
+                    ERR("Mach-O dsymtab out of bounds.");
+                    return -1;
+                }
+                // TODO: verify dstab entries as well
+            }
+        }
+    }
 
     *kernelp     = kernel;
     *kernelsizep = kernelsize;
