@@ -2317,50 +2317,50 @@ AppleBasebandPCIControl
 -
 -
 -
+- errorFunction(unsigned int, void*, void*)
+- prepareDMATransfer(IOMemoryDescriptor*, IODMACommand**)
+- clearDMATransfer(IODMACommand**)
+-
+-
+- enableUnlockPort()
+- disableLockPort()
+- portDeepSleep(unsigned int)
 -
 -
 -
 -
+- setBootStage(unsigned int)
 -
--
--
--
--
--
--
--
--
--
--
+- getDeviceDescriptorDict()
 - setPowerStateGated(unsigned long, IOService*)
 - powerStateDidChangeToGated(unsigned long, unsigned long, IOService*)
--
--
+- createSetupControl()
+- createSetupPort()
 - terminateDevice()
 - createDeviceFunction(bool, unsigned int)
--
--
--
--
--
--
--
--
+- linkStateUpFunction(void*, void*, void*, void*)
+- sleepAckFunction()
+- deviceWakeFunction(unsigned int)
+- timerFunction(void*, unsigned long long, void*, void*)
+- portManualEnableFunction()
+- portChangeFunction(unsigned int, unsigned int)
+- portQuiesceWaitFunction(unsigned int, void*)
+- asyncFunction(void*, void*, void*)
 - timerCompletion(IOTimerEventSource*)
--
--
--
+- asyncThreadCallGated()
+- serviceNotifier(void*, OSObject*)
+- serviceRegisterThreadCallGated(OSObject*, void*)
 -
 -
 -
 - handleAER(IOPCIEventSource*, IOPCIEvent*)
--
--
--
--
--
--
--
+- enableUnlockPortGated()
+- disableLockPortGated()
+- setupDARTWindowGated()
+- handlePCIMessage(unsigned int)
+- pciMessageThreadCallGated(unsigned int*)
+- setupBasebandService()
+- releaseBasebandService()
 - configureReportGated(IOReportChannelList*, unsigned int, void*, void*)
 - updateReportGated(IOReportChannelList*, unsigned int, void*, void*)
 AppleBasebandPCIControlReporter

@@ -527,7 +527,7 @@ AGXAllocationList
 AGXAllocationList2
 AGXArmFirmware
 AGXArmFirmwareKingfisherV2
--
+- AGXArmFirmware::receivedMessageFromAKF(unsigned long long)
 -
 -
 -
@@ -1184,23 +1184,23 @@ AppleAOPAudioController
 -
 -
 AppleAOPAudioDevice
--
--
--
--
--
--
--
--
--
--
+- getStatusReport(void*)
+- setActive(unsigned int, int)
+- startDevice(unsigned int, unsigned int)
+- stopDevice(unsigned int, unsigned int)
+- getInterruptStatus(unsigned int, void*)
+- setInterruptEnable(unsigned int, unsigned long long, unsigned long long)
+- setInterruptAction(unsigned int, void*, void*)
+- processDeviceTreeU32Entry(char const*, unsigned int)
+- getNamedProperty(char const*, void*, unsigned long*)
+- getNamedProperty(char const*, unsigned int*)
 AppleAOPAudioDeviceController
--
--
--
--
--
--
+- setActive(unsigned int, int)
+- startDevice(unsigned int, unsigned int)
+- stopDevice(unsigned int, unsigned int)
+- getInterruptStatus(unsigned int, void*)
+- setInterruptEnable(unsigned int, unsigned long long, unsigned long long)
+- setInterruptAction(unsigned int, void*, void*)
 AppleAOPAudioDeviceControllerObject
 -
 -
@@ -2568,50 +2568,50 @@ AppleBasebandPCIControl
 -
 -
 -
+- errorFunction(unsigned int, void*, void*)
+- prepareDMATransfer(IOMemoryDescriptor*, IODMACommand**)
+- clearDMATransfer(IODMACommand**)
+-
+-
+- enableUnlockPort()
+- disableLockPort()
+- portDeepSleep(unsigned int)
 -
 -
 -
 -
+- setBootStage(unsigned int)
 -
--
--
--
--
--
--
--
--
--
--
+- getDeviceDescriptorDict()
 - setPowerStateGated(unsigned long, IOService*)
 - powerStateDidChangeToGated(unsigned long, unsigned long, IOService*)
--
--
+- createSetupControl()
+- createSetupPort()
 - terminateDevice()
 - createDeviceFunction(bool, unsigned int)
--
--
--
--
--
--
--
--
+- linkStateUpFunction(void*, void*, void*, void*)
+- sleepAckFunction()
+- deviceWakeFunction(unsigned int)
+- timerFunction(void*, unsigned long long, void*, void*)
+- portManualEnableFunction()
+- portChangeFunction(unsigned int, unsigned int)
+- portQuiesceWaitFunction(unsigned int, void*)
+- asyncFunction(void*, void*, void*)
 - timerCompletion(IOTimerEventSource*)
--
--
--
+- asyncThreadCallGated()
+- serviceNotifier(void*, OSObject*)
+- serviceRegisterThreadCallGated(OSObject*, void*)
 -
 -
 -
 - handleAER(IOPCIEventSource*, IOPCIEvent*)
--
--
--
--
--
--
--
+- enableUnlockPortGated()
+- disableLockPortGated()
+- setupDARTWindowGated()
+- handlePCIMessage(unsigned int)
+- pciMessageThreadCallGated(unsigned int*)
+- setupBasebandService()
+- releaseBasebandService()
 - configureReportGated(IOReportChannelList*, unsigned int, void*, void*)
 - updateReportGated(IOReportChannelList*, unsigned int, void*, void*)
 AppleBasebandPCIControlReporter
@@ -10143,6 +10143,7 @@ IOMFBColorManagerDriver_Impl
 - init_linear_LUT()
 - is_LUT_paired() const
 - is_LUT(IOMFB::DeEnGamma, IOMFB::LUTLocation) const
+IOMFBEvtMonTrampoline
 IOMFBParamFIFO
 - init(IOMFBParamFIFODriver*)
 IOMFBParamFIFODriver
@@ -10151,7 +10152,6 @@ IOMFBParamFIFODriver
 - flushParamFifo()
 - enableParamFifo()
 - overrideVRR()
-IOMFBEvtMonTrampoline
 IOMFBReporter
 - init(IOService*)
 IOMFBSwapIORequest
@@ -13224,6 +13224,10 @@ VideoInterface
 -
 -
 -
+VideoInterfaceIOAV
+VideoInterfaceMipi
+VideoInterfaceStub
+VideoModeMailboxHandler
 WhitePointCorrection
 - enable(bool, WhitePointCorrection::EnableObject)
 - isEnabled(WhitePointCorrection::EnableObject) const
@@ -13238,26 +13242,6 @@ WhitePointCorrection_Impl
 -
 -
 -
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
-VideoInterfaceIOAV
-VideoInterfaceMipi
-VideoInterfaceStub
-VideoModeMailboxHandler
 _AGXIOFenceData
 _HACK_RingBuffer
 _IOConfigThread

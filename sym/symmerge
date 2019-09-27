@@ -1,0 +1,66 @@
+#!/usr/bin/env php
+<?php
+
+// Yes, I script in PHP.
+// And yes, I still make fun of it.
+
+// Lazy
+define('NL', "\n");
+
+if($_SERVER['argc'] < 2)
+{
+    echo 'Usage: '.$_SERVER['argv'][0].' file1.txt [file2.txt ...] >all.txt'.NL;
+    exit;
+}
+// This script is ghetto, and should not be used as
+// a reference implementation for symbol map parsing.
+$all = [];
+for($i = 1; $i < $_SERVER['argc']; ++$i)
+{
+    $lines = explode(NL, file_get_contents($_SERVER['argv'][$i]));
+    $cur = NULL;
+    foreach($lines as $l)
+    {
+        if(strlen($l) == 0)
+        {
+            // Skip
+        }
+        else if($l[0] == '-')
+        {
+            $cur[] = $l;
+        }
+        else
+        {
+            unset($cur);
+            $cur = [];
+            if(!isset($all[$l]))
+            {
+                $all[$l] = [];
+            }
+            $all[$l][] = &$cur;
+        }
+    }
+    unset($cur);
+}
+// Return body with most methods
+$all = array_map(function($list)
+{
+    $top = [];
+    foreach($list as $el)
+    {
+        if(count($el) > count($top))
+        {
+            $top = $el;
+        }
+    }
+    return $top;
+}, $all);
+ksort($all);
+foreach($all as $k => $v)
+{
+    echo $k.NL;
+    foreach($v as $l) // Easier to use than implode() in the case of 0 elements (which happens often)
+    {
+        echo $l.NL;
+    }
+}
