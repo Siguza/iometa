@@ -1191,8 +1191,20 @@ static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdr
         {
             if(SWAP32(arch[i].cputype) == CPU_TYPE_ARM64)
             {
-                kernel = (void*)((uintptr_t)kernel + SWAP32(arch[i].offset));
-                kernelsize = SWAP32(arch[i].size);
+                uint32_t offset = SWAP32(arch[i].offset);
+                uint32_t newsize = SWAP32(arch[i].size);
+                if(offset > kernelsize || newsize > kernelsize - offset)
+                {
+                    ERR("Fat arch out of bounds.");
+                    return -1;
+                }
+                if(newsize < sizeof(mach_hdr_t))
+                {
+                    ERR("Fat arch is too short to contain a Mach-O.");
+                    return -1;
+                }
+                kernel = (void*)((uintptr_t)kernel + offset);
+                kernelsize = newsize;
                 found = true;
                 break;
             }
@@ -2691,6 +2703,29 @@ int main(int argc, const char **argv)
         }
     }
 
+    DBG("Got %lu names (probably a ton of dupes)", namelist.idx);
+    qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_strings);
+    for(size_t i = 0; i < namelist.idx; ++i)
+    {
+        const char *current = namelist.val[i];
+        if(i > 0 && strcmp(current, namelist.val[i - 1]) == 0)
+        {
+            continue;
+        }
+        for(size_t j = 0; j < metas.idx; ++j)
+        {
+            if(strcmp(current, metas.val[j].name) == 0)
+            {
+                goto onward;
+            }
+        }
+        WRN("Failed to find MetaClass constructor for %s", current);
+        onward:;
+    }
+    free(namelist.val);
+    namelist.val = NULL;
+    namelist.size = namelist.idx = 0;
+
     DBG("Got %lu metaclasses", metas.idx);
     for(size_t i = 0; i < metas.idx; ++i)
     {
@@ -2714,29 +2749,6 @@ int main(int argc, const char **argv)
             return -1;
         }
     }
-
-    DBG("Got %lu names (probably a ton of dupes)", namelist.idx);
-    qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_strings);
-    for(size_t i = 0; i < namelist.idx; ++i)
-    {
-        const char *current = namelist.val[i];
-        if(i > 0 && strcmp(current, namelist.val[i - 1]) == 0)
-        {
-            continue;
-        }
-        for(size_t j = 0; j < metas.idx; ++j)
-        {
-            if(strcmp(current, metas.val[j].name) == 0)
-            {
-                goto onward;
-            }
-        }
-        WRN("Failed to find MetaClass constructor for %s", current);
-        onward:;
-    }
-    free(namelist.val);
-    namelist.val = NULL;
-    namelist.size = namelist.idx = 0;
 
     CFTypeRef prelink_info = NULL;
     if(want_vtabs)
