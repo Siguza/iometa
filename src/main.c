@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2019 Siguza
+/* Copyright (c) 2018-2020 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -273,6 +273,12 @@ typedef struct metaclass
              reserved     : 28;
 } metaclass_t;
 
+typedef struct
+{
+    const char *name;
+    uint32_t *fncall;
+} metaclass_candidate_t;
+
 // XNU says:
 #if 0
 A pointer is one of:
@@ -426,6 +432,24 @@ static void* addr2ptr(void *kernel, kptr_t addr)
     return NULL;
 }
 
+static mach_seg_t* seg4ptr(void *kernel, void *ptr)
+{
+    char *p = ptr;
+    FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
+    {
+        if(cmd->cmd == MACH_SEGMENT)
+        {
+            mach_seg_t *seg = (mach_seg_t*)cmd;
+            if(p >= (char*)((uintptr_t)kernel + seg->fileoff) && p < (char*)((uintptr_t)kernel + seg->fileoff + seg->vmsize))
+            {
+                return seg;
+            }
+        }
+    }
+    ERR("Failed to find segment for ptr 0x%llx", (uint64_t)ptr);
+    exit(-1);
+}
+
 static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str)
 {
     struct
@@ -504,14 +528,24 @@ typedef struct
 typedef enum
 {
     kEmuErr,
+    kEmuUnknown,
     kEmuEnd,
     kEmuRet,
 } emu_ret_t;
 
+typedef enum
+{
+    kEmuFnIgnore,
+    kEmuFnAssumeX0,
+    kEmuFnEnter,
+} emu_fn_behaviour_t;
+
+#define SPSIZE 0x1000
+
 // Best-effort emulation: halt on unknown instructions, keep track of which registers
 // hold known values and only operate on those. Ignore non-static memory unless
 // it is specifically marked as "host memory".
-static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32_t *to, bool init, bool assume_x0)
+static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32_t *to, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour)
 {
     if(init)
     {
@@ -553,8 +587,9 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 {
                     if(!(state->valid & (1 << str->Rt)))
                     {
-                        WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                        return kEmuErr;
+                        if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                        else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
+                        return kEmuUnknown;
                     }
                     if(str->sf)
                     {
@@ -595,8 +630,9 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
             {
                 if(!(state->valid & (1 << Rt)))
                 {
-                    WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                    return kEmuErr;
+                    if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                    else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
+                    return kEmuUnknown;
                 }
                 kptr_t staddr = state->x[Rn] + off;
                 if(sf)
@@ -629,8 +665,9 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 {
                     if(!(state->valid & (1 << stp->Rt)) || !(state->valid & (1 << stp->Rt2)))
                     {
-                        WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                        return kEmuErr;
+                        if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                        else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
+                        return kEmuUnknown;
                     }
                     if(stp->sf)
                     {
@@ -659,8 +696,9 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
             {
                 if(!(state->valid & (1 << stxr->Rt)))
                 {
-                    WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                    return kEmuErr;
+                    if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                    else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
+                    return kEmuUnknown;
                 }
                 kptr_t staddr = state->x[stxr->Rn];
                 if(stxr->sf)
@@ -844,8 +882,9 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 {
                     if(!(state->valid & (1 << ldadd->Rs)))
                     {
-                        WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                        return kEmuErr;
+                        if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                        else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
+                        return kEmuUnknown;
                     }
                     val += state->x[ldadd->Rs];
                     if(ldadd->sf)
@@ -895,8 +934,9 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
             {
                 if(!(state->qvalid & (1 << str->Rt)))
                 {
-                    WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                    return kEmuErr;
+                    if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                    else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
+                    return kEmuUnknown;
                 }
                 kptr_t staddr = state->x[str->Rn] + get_fp_uoff(str);
                 switch(get_fp_uoff_size(str))
@@ -914,12 +954,24 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
         }
         else if(is_bl(ptr))
         {
-            state->valid &= ~0x4003fffe;
-            if(!assume_x0 || !((state->valid & 0x1) && (state->host & 0x1)))
+            if(fn_behaviour == kEmuFnEnter)
             {
-                state->valid &= ~0x1;
+                state->x[30] = addr + 4;
+                state->valid |=   1 << 30;
+                state->wide  |=   1 << 30;
+                state->host  &= ~(1 << 30);
+                from = (uint32_t*)((uintptr_t)from + get_bl_off(ptr));
+                goto continue_skip_increment;
             }
-            state->qvalid &= 0xff00; // blindly assuming 128bit shit is handled as needed
+            else
+            {
+                state->valid &= ~0x4003fffe;
+                if(fn_behaviour != kEmuFnAssumeX0 || !((state->valid & 0x1) && (state->host & 0x1)))
+                {
+                    state->valid &= ~0x1;
+                }
+                state->qvalid &= 0xff00; // blindly assuming 128bit shit is handled as needed
+            }
         }
         else if(is_mov(ptr))
         {
@@ -994,8 +1046,9 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
             cbz_t *cbz = ptr;
             if(!(state->valid & (1 << cbz->Rt)))
             {
-                WRN("Cannot decide cbz/cbnz at " ADDR, addr);
-                return kEmuErr;
+                if(warnUnknown) WRN("Cannot decide cbz/cbnz at " ADDR, addr);
+                else            DBG("Cannot decide cbz/cbnz at " ADDR, addr);
+                return kEmuUnknown;
             }
             if((state->x[cbz->Rt] == 0) == is_cbz(cbz))
             {
@@ -1005,6 +1058,26 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
         }
         else if(is_ret(ptr))
         {
+            if(fn_behaviour == kEmuFnEnter)
+            {
+                if(!(state->valid & (1 << 30)) || !(state->wide & (1 << 30)))
+                {
+                    if(warnUnknown) WRN("Cannot return at " ADDR, addr);
+                    else            DBG("Cannot return at " ADDR, addr);
+                    return kEmuUnknown;
+                }
+                if(state->host & (1 << 30))
+                {
+                    WRN("Cannot return to host address at " ADDR, addr);
+                    return kEmuErr;
+                }
+                // This is really dirty, but... whatcha gonna do?
+                if(state->x[30] != 0)
+                {
+                    from = addr2ptr(kernel, state->x[30]);
+                    goto continue_skip_increment;
+                }
+            }
             return kEmuRet;
         }
         else
@@ -1016,9 +1089,167 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
     return kEmuEnd;
 }
 
+// This is a very annoying thing that we only need as a fallback.
+// Certain calls to OSMetaClass::OSMetaClass() do not have x0 generated as an immediate,
+// but passed in from the caller. If these are the only constructor calls for a given class,
+// then we have no choice but to follow those calls back until we get an x0.
+static bool multi_call_emulate(void *kernel, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint32_t wantvalid, const char *name)
+{
+    mach_seg_t *seg = seg4ptr(kernel, fncall);
+    kptr_t fncalladdr = seg->vmaddr + ((uintptr_t)fncall - ((uintptr_t)kernel + seg->fileoff));
+
+    // This is quite possibly the trickiest part: finding the start of the function.
+    // At first glance it seems simple: just find the function prologue. But how do you
+    // actually detect the first instruction of the prologue? On arm64e kernels there
+    // should be a "pacibsp", but on arm64? Is "sub sp, sp, 0x..." or a pre-index store
+    // enough? But either way, there are functions that just rearrange some args and
+    // then do a tail call - these functions have no stack frame whatsoever. And
+    // at some point clang also started what I call "late stack frames" which only
+    // happen after some early-exit conditions have been passed already, so the prologue
+    // is no longer guaranteed to constitute the start of the function.
+    // The other approach would be to just seek backwards as long as we hit "linear"
+    // instructions, as that would at least constitute one *possible* call path.
+    // The nasty issue with that are "noreturn" functions like panic and __stack_chk_fail.
+    // Those are excruciatingly often ordered right before the following function like so:
+    //
+    //      ldp x29, x30, [sp, 0x10]
+    //      add sp, sp, 0x20
+    //      ret
+    //      adrp x0, 0x...
+    //      add x0, x0, 0x...
+    //      bl sym.panic
+    //      sub sp, sp, 0x20
+    //      stp x29, x30, [sp, 0x10]
+    //      add x29, sp, 0x10
+    //
+    // Without more information on the function called by such a "bl", we simply don't know
+    // whether that function can/will return or not. There is but one assumption we can make:
+    // We can assume function calls are only made inside stack frames, because "bl" will
+    // otherwise corrupt x30. So we simply keep track of whether we have a stack frame
+    // (or more precisely, whether x30 was stashed away) by looking out for "ldp/stp x29, x30"
+    // when seeking backwards. As long as we're inside a stack frame, "bl" are assumed to be
+    // part of the function, once we leave it, they are no longer considered to be "linear".
+    // We also always start seeking backwards from a function call, and in the case of "bl"
+    // we assume we have a stack frame, in the case of "b" we assume we do not.
+    bool have_stack_frame;
+    bl_t *bl = (bl_t*)fncall;
+    if(is_bl(bl))
+    {
+        have_stack_frame = true;
+    }
+    else if(is_b(bl))
+    {
+        have_stack_frame = false;
+    }
+    else
+    {
+        ERR("Bug in multi_call_emulate: fncall at " ADDR " is neither b nor bl", fncalladdr);
+        exit(-1);
+    }
+    uint32_t *fnstart = fncall;
+    while(1)
+    {
+        --fnstart;
+        if(fnstart < (uint32_t*)((uintptr_t)kernel + seg->fileoff))
+        {
+            WRN("Hit start of segment at " ADDR " for %s", seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), name);
+            // If we expect a stack frame, this is fatal.
+            if(have_stack_frame)
+            {
+                return false;
+            }
+            // Otherwise ehh whatever.
+            ++fnstart;
+            break;
+        }
+        if(!is_linear_inst(fnstart) || (is_bl((bl_t*)fnstart) && !have_stack_frame))
+        {
+            ++fnstart;
+            break;
+        }
+        stp_t *stp = (stp_t*)fnstart;
+        ldp_t *ldp = (ldp_t*)fnstart;
+        if((is_stp_pre(stp) || is_stp_uoff(stp)) && stp->Rt == 29 && stp->Rt2 == 30)
+        {
+            have_stack_frame = false;
+        }
+        else if((is_ldp_post(ldp) || is_ldp_uoff(ldp)) && ldp->Rt == 29 && ldp->Rt2 == 30)
+        {
+            have_stack_frame = true;
+        }
+    }
+    kptr_t fnaddr = seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff));
+    DBG("Function with call " ADDR " starts at " ADDR, fncalladdr, fnaddr);
+
+    bzero(sp, SPSIZE);
+    for(size_t i = 0; i < 31; ++i)
+    {
+        state->x[i] = 0;
+        state->q[i] = 0;
+    }
+    state->q[31]  = 0;
+    state->x[31]  = (uintptr_t)sp + SPSIZE;
+    state->valid  = 0xfff80000;
+    state->qvalid = 0x0000ff00;
+    state->wide   = 0xfff80000;
+    state->host   = 0x80000000;
+    emu_ret_t ret = a64_emulate(kernel, state, fnstart, end, false, false, kEmuFnEnter);
+    switch(ret)
+    {
+        default:
+        case kEmuRet:
+            // This should be impossible
+            ERR("Bug in a64_emulate: got %u for kEmuFnEnter", ret);
+            exit(-1);
+
+        case kEmuErr:
+            // This is a fatal error, so no point in trying further.
+            return false;
+
+        case kEmuEnd:
+            // This is the only possibly successful case. Just need to make sure we got everything we need.
+            if((state->valid & wantvalid) == wantvalid)
+            {
+                DBG("Got a satisfying function call stack at " ADDR, fnaddr);
+                return true;
+            }
+            // Otherwise fall through
+
+        case kEmuUnknown:
+            // This means we don't have enough info yet, so break into the code below and do another call level.
+            break;
+    }
+
+    DBG("Searching for function calls to " ADDR, fnaddr);
+    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
+    {
+        bl_t *bl = (bl_t*)mem;
+        if(is_bl(bl) || is_b(bl))
+        {
+            kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
+            kptr_t bltarg = bladdr + get_bl_off(bl);
+            if(bltarg == fnaddr && multi_call_emulate(kernel, mem, end, state, sp, wantvalid, name))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+#if 0
 static int compare_strings(const void *a, const void *b)
 {
     return strcmp(*(char * const*)a, *(char * const*)b);
+}
+#endif
+
+static int compare_candidates(const void *a, const void *b)
+{
+    const metaclass_candidate_t *x = (const metaclass_candidate_t*)a,
+                                *y = (const metaclass_candidate_t*)b;
+    int r = strcmp(x->name, y->name);
+    return r != 0 ? r : !x->fncall - !y->fncall;
 }
 
 static int compare_names(const void *a, const void *b)
@@ -1798,6 +2029,67 @@ static void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
     }
 }
 
+static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t *callsite, bool want_vtabs)
+{
+    struct
+    {
+        size_t size;
+        size_t idx;
+        metaclass_t *val;
+    } *metas = arg;
+    const char *name = addr2ptr(kernel, state->x[1]);
+    DBG("Adding metaclass: %s", name);
+
+    metaclass_t *meta;
+    ARRNEXT(*metas, meta);
+    meta->addr = state->x[0];
+    meta->parent = state->x[2];
+    meta->vtab = 0;
+    meta->metavtab = 0;
+    meta->callsite = off2addr(kernel, (uintptr_t)callsite - (uintptr_t)kernel);
+    meta->parentP = NULL;
+    meta->symclass = NULL;
+    meta->name = name;
+    meta->bundle = NULL;
+    meta->methods = NULL;
+    meta->nmethods = 0;
+    meta->objsize = state->x[3];
+    meta->methods_done = 0;
+    meta->methods_err = 0;
+    meta->visited = 0;
+    meta->duplicate = 0;
+    meta->reserved = 0;
+    if(want_vtabs)
+    {
+        kptr_t x0 = state->x[0];
+        for(uint32_t *m = callsite + 1; is_linear_inst(m); ++m)
+        {
+            if(a64_emulate(kernel, state, m, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
+            {
+                break;
+            }
+            str_uoff_t *stru = (str_uoff_t*)m;
+            if(is_str_uoff(stru) && (state->valid & (1 << stru->Rn)) && state->x[stru->Rn] + get_str_uoff(stru) == x0)
+            {
+                DBG("Got str at " ADDR, off2addr(kernel, (uintptr_t)stru - (uintptr_t)kernel));
+                if(!(state->valid & (1 << stru->Rt)))
+                {
+                    DBG("Store has no valid source register");
+                }
+                else
+                {
+                    meta->metavtab = state->x[stru->Rt];
+                }
+                break;
+            }
+        }
+        if(!meta->metavtab)
+        {
+            WRN("Failed to find metavtab for %s", name);
+        }
+    }
+}
+
 static void print_help(const char *self)
 {
     fprintf(stderr, "Usage:\n"
@@ -2408,7 +2700,7 @@ int main(int argc, const char **argv)
                                         if(is_bl(bl))
                                         {
                                             a64_state_t state;
-                                            if(a64_emulate(kernel, &state, mem, m, true, false) != kEmuEnd)
+                                            if(a64_emulate(kernel, &state, mem, m, true, true, kEmuFnIgnore) != kEmuEnd)
                                             {
                                                 // a64_emulate should've printed error already
                                                 goto skip;
@@ -2549,7 +2841,7 @@ int main(int argc, const char **argv)
     }
 
     ARRDECL(metaclass_t, metas, NUM_METACLASSES_EXPECT);
-    ARRDECL(const char*, namelist, NUM_METACLASSES_EXPECT);
+    ARRDECL(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
 
     FOREACH_CMD(hdr, cmd)
     {
@@ -2592,9 +2884,10 @@ int main(int argc, const char **argv)
                                     --fnstart;
                                 }
                                 a64_state_t state;
-                                if(a64_emulate(kernel, &state, fnstart, mem, true, false) == kEmuEnd)
+                                if(a64_emulate(kernel, &state, fnstart, mem, true, true, kEmuFnIgnore) == kEmuEnd)
                                 {
                                     const char *name = NULL;
+                                    uint32_t *fncall = NULL;
                                     if((state.valid & 0x2) && (state.wide & 0x2))
                                     {
                                         name = addr2ptr(kernel, state.x[1]);
@@ -2615,6 +2908,7 @@ int main(int argc, const char **argv)
                                         else
                                         {
                                             DBG("Skipping constructor call without x0 at " ADDR, bladdr);
+                                            fncall = mem;
                                         }
                                         // Fall through
                                     }
@@ -2635,62 +2929,17 @@ int main(int argc, const char **argv)
                                     else
                                     {
                                         DBG("Processing constructor call at " ADDR " (%s)", bladdr, name);
-                                        metaclass_t *meta;
-                                        ARRNEXT(metas, meta);
-                                        meta->addr = state.x[0];
-                                        meta->parent = state.x[2];
-                                        meta->vtab = 0;
-                                        meta->metavtab = 0;
-                                        meta->callsite = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
-                                        meta->parentP = NULL;
-                                        meta->symclass = NULL;
-                                        meta->name = name;
-                                        meta->bundle = NULL;
-                                        meta->methods = NULL;
-                                        meta->nmethods = 0;
-                                        meta->objsize = state.x[3];
-                                        meta->methods_done = 0;
-                                        meta->methods_err = 0;
-                                        meta->visited = 0;
-                                        meta->duplicate = 0;
-                                        meta->reserved = 0;
-                                        if(want_vtabs)
-                                        {
-                                            kptr_t x0 = state.x[0];
-                                            //uintptr_t base = ((uintptr_t)kernel + seg->fileoff) - seg->vmaddr;
-                                            for(uint32_t *m = mem + 1; is_linear_inst(m); ++m)
-                                            {
-                                                if(a64_emulate(kernel, &state, m, m + 1, false, false) != kEmuEnd)
-                                                {
-                                                    break;
-                                                }
-                                                str_uoff_t *stru = (str_uoff_t*)m;
-                                                if(is_str_uoff(stru) && (state.valid & (1 << stru->Rn)) && state.x[stru->Rn] + get_str_uoff(stru) == x0)
-                                                {
-                                                    DBG("Got str at " ADDR, off2addr(kernel, (uintptr_t)stru - (uintptr_t)kernel));
-                                                    if(!(state.valid & (1 << stru->Rt)))
-                                                    {
-                                                        DBG("Store has no valid source register");
-                                                    }
-                                                    else
-                                                    {
-                                                        meta->metavtab = state.x[stru->Rt];
-                                                    }
-                                                    break;
-                                                }
-                                            }
-                                            if(!meta->metavtab)
-                                            {
-                                                WRN("Failed to find metavtab for %s", name);
-                                            }
-                                        }
+                                        add_metaclass(kernel, &metas, &state, mem, want_vtabs);
                                         // Do NOT fall through
                                         goto next;
                                     }
                                     // We only get here on failure:
                                     if(name)
                                     {
-                                        ARRPUSH(namelist, name);
+                                        metaclass_candidate_t *cand;
+                                        ARRNEXT(namelist, cand);
+                                        cand->name = name;
+                                        cand->fncall = fncall;
                                     }
                                 }
                                 next:;
@@ -2703,23 +2952,69 @@ int main(int argc, const char **argv)
         }
     }
 
+    // This is a safety check to make sure we're not missing anything.
     DBG("Got %lu names (probably a ton of dupes)", namelist.idx);
-    qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_strings);
+    qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_candidates);
     for(size_t i = 0; i < namelist.idx; ++i)
     {
-        const char *current = namelist.val[i];
-        if(i > 0 && strcmp(current, namelist.val[i - 1]) == 0)
+        metaclass_candidate_t *current = &namelist.val[i];
+        if(i > 0)
         {
-            continue;
+            // compare_candidates() sorts entries without fncall last, and we set it to NULL if it got us nowhere,
+            // so if we have duplicate names and we either lack a fncall or prev still has its one, we can safely skip.
+            metaclass_candidate_t *prev = &namelist.val[i - 1];
+            if(strcmp(current->name, prev->name) == 0 && (prev->fncall || !current->fncall))
+            {
+                continue;
+            }
         }
         for(size_t j = 0; j < metas.idx; ++j)
         {
-            if(strcmp(current, metas.val[j].name) == 0)
+            if(strcmp(current->name, metas.val[j].name) == 0)
             {
                 goto onward;
             }
         }
-        WRN("Failed to find MetaClass constructor for %s", current);
+        if(current->fncall)
+        {
+            void *sp = malloc(SPSIZE);
+            if(!sp)
+            {
+                ERR("malloc(sp)");
+                return -1;
+            }
+            a64_state_t state;
+            bool success = multi_call_emulate(kernel, current->fncall, current->fncall, &state, sp, 0xf, current->name);
+            if(success)
+            {
+                mach_seg_t *seg = seg4ptr(kernel, current->fncall);
+                kptr_t bladdr = seg->vmaddr + ((uintptr_t)current->fncall - ((uintptr_t)kernel + seg->fileoff));
+                if((state.wide & 0xf) != 0x7)
+                {
+                    WRN("Skipping constructor call with unexpected registers width (%x) at " ADDR, state.wide, bladdr);
+                    // Fall through
+                }
+                else
+                {
+                    DBG("Processing triaged constructor call at " ADDR " (%s)", bladdr, current->name);
+                    add_metaclass(kernel, &metas, &state, current->fncall, want_vtabs);
+                    free(sp);
+                    goto onward;
+                }
+            }
+            free(sp);
+            current->fncall = NULL;
+            // This is annoying now, but we need to make sure we only print one warning per class.
+            if(i + 1 < namelist.idx)
+            {
+                metaclass_candidate_t *next = &namelist.val[i + 1];
+                if(strcmp(current->name, next->name) == 0 && next->fncall)
+                {
+                    goto onward;
+                }
+            }
+        }
+        WRN("Failed to find MetaClass constructor for %s", current->name);
         onward:;
     }
     free(namelist.val);
@@ -3057,7 +3352,7 @@ int main(int argc, const char **argv)
                                     state.qvalid = 0;
                                     state.wide = 1;
                                     state.host = 0;
-                                    if(a64_emulate(kernel, &state, start, mem, false, false) == kEmuEnd)
+                                    if(a64_emulate(kernel, &state, start, mem, false, true, kEmuFnIgnore) == kEmuEnd)
                                     {
                                         if(!(state.valid & (1 << str->Rn)) || !(state.wide & (1 << str->Rn)) || !(state.valid & (1 << str->Rt)) || !(state.wide & (1 << str->Rt)))
                                         {
@@ -3515,7 +3810,6 @@ int main(int argc, const char **argv)
                                 }
                                 else
                                 {
-#define SPSIZE 0x1000
                                     void *sp = malloc(SPSIZE),
                                          *obj = NULL;
                                     if(!sp)
@@ -3529,12 +3823,13 @@ int main(int argc, const char **argv)
                                         state.x[i] = 0;
                                         state.q[i] = 0;
                                     }
+                                    state.q[31]   = 0;
                                     state.x[31]  = (uintptr_t)sp + SPSIZE;
                                     state.valid  = 0xfff80000;
                                     state.qvalid = 0x0000ff00;
                                     state.wide   = 0xfff80000;
                                     state.host   = 0x80000000;
-                                    switch(a64_emulate(kernel, &state, fnstart, (uint32_t*)bl, false, false))
+                                    switch(a64_emulate(kernel, &state, fnstart, (uint32_t*)bl, false, true, kEmuFnIgnore))
                                     {
                                         case kEmuRet:
                                             WRN("Unexpected ret in %s::metaClass::alloc", meta->name);
@@ -3567,7 +3862,7 @@ int main(int argc, const char **argv)
                                                     break;
                                                 }
                                                 uint32_t *m = (uint32_t*)bl;
-                                                if(a64_emulate(kernel, &state, m, m + 1, false, false) != kEmuEnd)
+                                                if(a64_emulate(kernel, &state, m, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
                                                 {
                                                     break;
                                                 }
@@ -3582,7 +3877,7 @@ int main(int argc, const char **argv)
                                                 state.valid |= 0x1;
                                                 state.wide  |= 0x1;
                                                 state.host  |= 0x1;
-                                                if(a64_emulate(kernel, &state, m + 1, end, false, true) != kEmuRet)
+                                                if(a64_emulate(kernel, &state, m + 1, end, false, true, kEmuFnAssumeX0) != kEmuRet)
                                                 {
                                                     break;
                                                 }
@@ -3604,7 +3899,6 @@ int main(int argc, const char **argv)
                                     }
                                     if(obj) free(obj);
                                     free(sp);
-#undef SPSIZE
                                 }
                                 break;
                             }
