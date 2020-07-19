@@ -480,6 +480,8 @@ static bool is_linear_inst(void *ptr)
            is_adrp(ptr) ||
            is_add_imm(ptr) ||
            is_sub_imm(ptr) ||
+           is_add_reg(ptr) ||
+           is_sub_reg(ptr) ||
            is_ldr_imm_uoff(ptr) ||
            is_ldr_lit(ptr) ||
            is_ldp_pre(ptr) ||
@@ -506,13 +508,20 @@ static bool is_linear_inst(void *ptr)
            is_stur(ptr) ||
            is_str_fp_uoff(ptr) ||
            //is_stp_fp_uoff(ptr) ||
+           is_ldrb_imm_uoff(ptr) ||
+           is_ldrh_imm_uoff(ptr) ||
+           is_ldrsb_imm_uoff(ptr) ||
+           is_ldrsh_imm_uoff(ptr) ||
+           is_ldrsw_imm_uoff(ptr) ||
+           is_strb_imm_uoff(ptr) ||
+           is_strh_imm_uoff(ptr) ||
            is_pac(ptr) ||
            is_pacsys(ptr) ||
            is_pacga(ptr) ||
            is_aut(ptr) ||
            is_autsys(ptr) ||
            is_nop(ptr);
-    // TODO: strb, strh, ldrb, ldrh, some floating point instrs (see 10.3.3 kernel)
+    // TODO: some floating point instrs (see 10.3.3 kernel)
 }
 
 typedef struct
@@ -542,10 +551,25 @@ typedef enum
 
 #define SPSIZE 0x1000
 
+static bool check_equal(uint32_t *pos, void *arg)
+{
+    return pos != (uint32_t*)arg;
+}
+
+static bool check_bl(uint32_t *pos, void *arg)
+{
+    if(is_bl((bl_t*)pos))
+    {
+        *(uint32_t**)arg = pos;
+        return false;
+    }
+    return true;
+}
+
 // Best-effort emulation: halt on unknown instructions, keep track of which registers
 // hold known values and only operate on those. Ignore non-static memory unless
 // it is specifically marked as "host memory".
-static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, uint32_t *to, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour)
+static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, bool (*check)(uint32_t*, void*), void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour)
 {
     if(init)
     {
@@ -558,9 +582,8 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
         state->wide = 0;
         state->host = 0;
     }
-    for(; from != to; ++from)
+    for(; check(from, arg); ++from)
     {
-    continue_skip_increment:;
         void *ptr = from;
         kptr_t addr = off2addr(kernel, (uintptr_t)from - (uintptr_t)kernel);
         if(is_nop(ptr) /*|| is_stp_fp_uoff(ptr)*/ || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr))
@@ -602,16 +625,16 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 }
             }
         }
-        else if(is_str_uoff(ptr) || is_stur(ptr))
+        else if(is_str_uoff(ptr) || is_stur(ptr) || is_strb_imm_uoff(ptr) || is_strh_imm_uoff(ptr))
         {
-            uint32_t Rt, Rn, sf;
+            uint32_t Rt, Rn, size;
             int64_t off;
             if(is_str_uoff(ptr))
             {
                 str_uoff_t *str = ptr;
                 Rt = str->Rt;
                 Rn = str->Rn;
-                sf = str->sf;
+                size = 4 << str->sf;
                 off = get_str_uoff(str);
             }
             else if(is_stur(ptr))
@@ -619,8 +642,24 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 stur_t *stur = ptr;
                 Rt = stur->Rt;
                 Rn = stur->Rn;
-                sf = stur->sf;
+                size = 4 << stur->sf;
                 off = get_stur_off(stur);
+            }
+            else if(is_strb_imm_uoff(ptr))
+            {
+                strb_imm_uoff_t *strb = ptr;
+                Rt = strb->Rt;
+                Rn = strb->Rn;
+                size = 1;
+                off = get_strb_imm_uoff(strb);
+            }
+            else if(is_strh_imm_uoff(ptr))
+            {
+                strh_imm_uoff_t *strh = ptr;
+                Rt = strh->Rt;
+                Rn = strh->Rn;
+                size = 2;
+                off = get_strh_imm_uoff(strh);
             }
             else
             {
@@ -635,13 +674,15 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                     return kEmuUnknown;
                 }
                 kptr_t staddr = state->x[Rn] + off;
-                if(sf)
+                switch(size)
                 {
-                    *(uint64_t*)staddr = state->x[Rt];
-                }
-                else
-                {
-                    *(uint32_t*)staddr = (uint32_t)state->x[Rt];
+                    case 1: *(uint8_t *)staddr = (uint8_t )state->x[Rt]; break;
+                    case 2: *(uint16_t*)staddr = (uint16_t)state->x[Rt]; break;
+                    case 4: *(uint32_t*)staddr = (uint32_t)state->x[Rt]; break;
+                    case 8: *(uint64_t*)staddr = (uint64_t)state->x[Rt]; break;
+                    default:
+                        ERR("Bug in a64_emulate: str_uoff with invalid size at " ADDR, addr);
+                        exit(-1);
                 }
             }
         }
@@ -734,9 +775,46 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 state->host = (state->host & ~(1 << add->Rd)) | (((state->host >> add->Rn) & 0x1) << add->Rd);
             }
         }
-        else if(is_ldr_imm_uoff(ptr) || is_ldur(ptr))
+        else if(is_add_reg(ptr) || is_sub_reg(ptr))
         {
-            uint32_t Rt, Rn, sf;
+            add_reg_t *add = ptr;
+            if(!(state->valid & (1 << add->Rn)) || !(state->valid & (1 << add->Rm))) // Unset validity
+            {
+                state->valid &= ~(1 << add->Rd);
+            }
+            else
+            {
+                uint64_t Rm = state->x[add->Rm];
+                switch(add->shift)
+                {
+                    case 0b00: Rm =          Rm << add->imm; break; // LSL
+                    case 0b01: Rm =          Rm >> add->imm; break; // LSR
+                    case 0b10: Rm = (int64_t)Rm >> add->imm; break; // ASR
+                    default:
+                        WRN("Bad add/sub shift at " ADDR, addr);
+                        return kEmuErr;
+                }
+                uint64_t Rd;
+                if(is_add_reg(add))
+                {
+                    Rd = state->x[add->Rn] + Rm;
+                }
+                else
+                {
+                    Rd = state->x[add->Rn] - Rm;
+                }
+                state->x[add->Rd] = add->sf ? Rd : (Rd & 0xffffffffULL);
+                state->valid |= 1 << add->Rd;
+                state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
+                // Weird case: we only wanna keep the host flag if exactly one of the source registers has it.
+                // If both have it, something's gone wrong, but we wanna be able to add immediates that are loaded into a register.
+                state->host = (state->host & ~(1 << add->Rd)) | ((((state->host >> add->Rn) & 0x1) ^ ((state->host >> add->Rm) & 0x1)) << add->Rd);
+            }
+        }
+        else if(is_ldr_imm_uoff(ptr) || is_ldur(ptr) || is_ldrb_imm_uoff(ptr) || is_ldrh_imm_uoff(ptr) || is_ldrsb_imm_uoff(ptr) || is_ldrsh_imm_uoff(ptr) || is_ldrsw_imm_uoff(ptr))
+        {
+            bool sign = false;
+            uint32_t Rt, Rn, sf, size;
             int64_t off;
             if(is_ldr_imm_uoff(ptr))
             {
@@ -744,6 +822,7 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 Rt = ldr->Rt;
                 Rn = ldr->Rn;
                 sf = ldr->sf;
+                size = 4 << ldr->sf;
                 off = get_ldr_imm_uoff(ldr);
             }
             else if(is_ldur(ptr))
@@ -752,7 +831,56 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 Rt = ldur->Rt;
                 Rn = ldur->Rn;
                 sf = ldur->sf;
+                size = 4 << ldur->sf;
                 off = get_ldur_off(ldur);
+            }
+            else if(is_ldrb_imm_uoff(ptr))
+            {
+                ldrb_imm_uoff_t *ldrb = ptr;
+                Rt = ldrb->Rt;
+                Rn = ldrb->Rn;
+                sf = 0;
+                size = 1;
+                off = get_ldrb_imm_uoff(ldrb);
+            }
+            else if(is_ldrh_imm_uoff(ptr))
+            {
+                ldrh_imm_uoff_t *ldrh = ptr;
+                Rt = ldrh->Rt;
+                Rn = ldrh->Rn;
+                sf = 0;
+                size = 2;
+                off = get_ldrh_imm_uoff(ldrh);
+            }
+            else if(is_ldrsb_imm_uoff(ptr))
+            {
+                ldrsb_imm_uoff_t *ldrsb = ptr;
+                Rt = ldrsb->Rt;
+                Rn = ldrsb->Rn;
+                sf = ldrsb->sf;
+                size = 1;
+                off = get_ldrsb_imm_uoff(ldrsb);
+                sign = true;
+            }
+            else if(is_ldrsh_imm_uoff(ptr))
+            {
+                ldrsh_imm_uoff_t *ldrsh = ptr;
+                Rt = ldrsh->Rt;
+                Rn = ldrsh->Rn;
+                sf = ldrsh->sf;
+                size = 2;
+                off = get_ldrsh_imm_uoff(ldrsh);
+                sign = true;
+            }
+            else if(is_ldrsw_imm_uoff(ptr))
+            {
+                ldrsw_imm_uoff_t *ldrsw = ptr;
+                Rt = ldrsw->Rt;
+                Rn = ldrsw->Rn;
+                sf = 1;
+                size = 4;
+                off = get_ldrsw_imm_uoff(ldrsw);
+                sign = true;
             }
             else
             {
@@ -770,7 +898,34 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 {
                     return kEmuErr;
                 }
-                state->x[Rt] = *(kptr_t*)ldr_addr;
+                uint64_t val;
+                switch(size)
+                {
+                    case 1: val = *(uint8_t *)ldr_addr; break;
+                    case 2: val = *(uint16_t*)ldr_addr; break;
+                    case 4: val = *(uint32_t*)ldr_addr; break;
+                    case 8: val = *(uint64_t*)ldr_addr; break;
+                    default:
+                        ERR("Bug in a64_emulate: ldr_uoff with invalid size at " ADDR, addr);
+                        exit(-1);
+                }
+                if(sign)
+                {
+                    switch(size)
+                    {
+                        case 1: val = ((int64_t)val << 56) >> 56; break;
+                        case 2: val = ((int64_t)val << 48) >> 48; break;
+                        case 4: val = ((int64_t)val << 32) >> 32; break;
+                        default:
+                            ERR("Bug in a64_emulate: ldr_uoff with invalid signed size at " ADDR, addr);
+                            exit(-1);
+                    }
+                    if(!sf)
+                    {
+                        val &= 0xffffffff;
+                    }
+                }
+                state->x[Rt] = val;
                 state->valid |= 1 << Rt;
                 state->wide = (state->wide & ~(1 << Rt)) | (sf << Rt);
                 state->host &= ~(1 << Rt);
@@ -961,7 +1116,7 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 state->wide  |=   1 << 30;
                 state->host  &= ~(1 << 30);
                 from = (uint32_t*)((uintptr_t)from + get_bl_off(ptr));
-                goto continue_skip_increment;
+                --from;
             }
             else
             {
@@ -1039,7 +1194,7 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
         else if(is_b(ptr))
         {
             from = (uint32_t*)((uintptr_t)from + get_bl_off(ptr));
-            goto continue_skip_increment;
+            --from;
         }
         else if(is_cbz(ptr) || is_cbnz(ptr))
         {
@@ -1053,7 +1208,23 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
             if((state->x[cbz->Rt] == 0) == is_cbz(cbz))
             {
                 from = (uint32_t*)((uintptr_t)from + get_cbz_off(cbz));
-                goto continue_skip_increment;
+                --from;
+            }
+        }
+        else if(is_tbz(ptr) || is_tbnz(ptr))
+        {
+            tbz_t *tbz = ptr;
+            uint32_t bit = get_tbz_bit(tbz);
+            if(!(state->valid & (1 << tbz->Rt)) || (bit >= 32 && !(state->wide & (1 << tbz->Rt))))
+            {
+                if(warnUnknown) WRN("Cannot decide tbz/tbnz at " ADDR, addr);
+                else            DBG("Cannot decide tbz/tbnz at " ADDR, addr);
+                return kEmuUnknown;
+            }
+            if(((state->x[tbz->Rt] & (1 << bit)) == 0) == is_tbz(tbz))
+            {
+                from = (uint32_t*)((uintptr_t)from + get_tbz_off(tbz));
+                --from;
             }
         }
         else if(is_ret(ptr))
@@ -1075,7 +1246,8 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, u
                 if(state->x[30] != 0)
                 {
                     from = addr2ptr(kernel, state->x[30]);
-                    goto continue_skip_increment;
+                    --from;
+                    continue;
                 }
             }
             return kEmuRet;
@@ -1193,7 +1365,7 @@ static bool multi_call_emulate(void *kernel, uint32_t *fncall, uint32_t *end, a6
     state->qvalid = 0x0000ff00;
     state->wide   = 0xfff80000;
     state->host   = 0x80000000;
-    emu_ret_t ret = a64_emulate(kernel, state, fnstart, end, false, false, kEmuFnEnter);
+    emu_ret_t ret = a64_emulate(kernel, state, fnstart, &check_equal, end, false, false, kEmuFnEnter);
     switch(ret)
     {
         default:
@@ -2062,10 +2234,17 @@ static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t 
     if(want_vtabs)
     {
         kptr_t x0 = state->x[0];
-        for(uint32_t *m = callsite + 1; is_linear_inst(m); ++m)
+        for(uint32_t *m = callsite + 1; is_linear_inst(m) || is_cbz((cbz_t*)m) || is_cbnz((cbz_t*)m) || is_tbz((tbz_t*)m) || is_tbnz((tbz_t*)m); ++m)
         {
-            if(a64_emulate(kernel, state, m, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
+            // Kinda trash, but works... and it's at least a possible path
+            if(is_cbz((cbz_t*)m) || is_cbnz((cbz_t*)m) || is_tbz((tbz_t*)m) || is_tbnz((tbz_t*)m))
             {
+                continue;
+            }
+            emu_ret_t ret = a64_emulate(kernel, state, m, &check_equal, m + 1, false, true, kEmuFnIgnore);
+            if(ret != kEmuEnd)
+            {
+                DBG("a64_emulate returned %u", ret);
                 break;
             }
             str_uoff_t *stru = (str_uoff_t*)m;
@@ -2700,7 +2879,7 @@ int main(int argc, const char **argv)
                                         if(is_bl(bl))
                                         {
                                             a64_state_t state;
-                                            if(a64_emulate(kernel, &state, mem, m, true, true, kEmuFnIgnore) != kEmuEnd)
+                                            if(a64_emulate(kernel, &state, mem, &check_equal, m, true, true, kEmuFnIgnore) != kEmuEnd)
                                             {
                                                 // a64_emulate should've printed error already
                                                 goto skip;
@@ -2884,7 +3063,7 @@ int main(int argc, const char **argv)
                                     --fnstart;
                                 }
                                 a64_state_t state;
-                                if(a64_emulate(kernel, &state, fnstart, mem, true, true, kEmuFnIgnore) == kEmuEnd)
+                                if(a64_emulate(kernel, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
                                 {
                                     const char *name = NULL;
                                     uint32_t *fncall = NULL;
@@ -3352,7 +3531,7 @@ int main(int argc, const char **argv)
                                     state.qvalid = 0;
                                     state.wide = 1;
                                     state.host = 0;
-                                    if(a64_emulate(kernel, &state, start, mem, false, true, kEmuFnIgnore) == kEmuEnd)
+                                    if(a64_emulate(kernel, &state, start, &check_equal, mem, false, true, kEmuFnIgnore) == kEmuEnd)
                                     {
                                         if(!(state.valid & (1 << str->Rn)) || !(state.wide & (1 << str->Rn)) || !(state.valid & (1 << str->Rt)) || !(state.wide & (1 << str->Rt)))
                                         {
@@ -3773,7 +3952,7 @@ int main(int argc, const char **argv)
             metaclass_t *meta = &metas.val[i];
             if((meta->vtab == 0 || meta->vtab == -1) && meta->metavtab && VtabAllocIdx)
             {
-                DBG("Attempting to get vtab via %s::metaClass::alloc", meta->name);
+                DBG("Attempting to get vtab via %s::MetaClass::alloc", meta->name);
                 kptr_t *ovtab = addr2ptr(kernel, meta->metavtab);
                 if(!ovtab)
                 {
@@ -3783,6 +3962,7 @@ int main(int argc, const char **argv)
                 kptr_t fnaddr = kuntag(kbase, x1469, ovtab[VtabAllocIdx], NULL);
                 if(fnaddr != pure_virtual)
                 {
+                    DBG("Got %s::MetaClass::alloc at " ADDR, meta->name, fnaddr);
                     FOREACH_CMD(hdr, cmd)
                     {
                         if(cmd->cmd == MACH_SEGMENT)
@@ -3790,116 +3970,108 @@ int main(int argc, const char **argv)
                             mach_seg_t *seg = (mach_seg_t*)cmd;
                             if(seg->vmaddr <= fnaddr && seg->vmaddr + seg->filesize > fnaddr)
                             {
-                                uint32_t *end = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize),
+                                uint32_t *end     = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize),
                                          *fnstart = (uint32_t*)((uintptr_t)kernel + seg->fileoff + (fnaddr - seg->vmaddr));
-                                bl_t *bl = NULL;
-                                for(uint32_t *m = fnstart; is_linear_inst(m); ++m)
+                                void *sp = malloc(SPSIZE),
+                                     *obj = NULL;
+                                if(!sp)
                                 {
-                                    if(is_bl((bl_t*)m))
-                                    {
-                                        bl = (bl_t*)m;
+                                    ERR("malloc(sp)");
+                                    return -1;
+                                }
+                                uint32_t *m = NULL;
+                                a64_state_t state;
+                                for(size_t i = 0; i < 32; ++i)
+                                {
+                                    state.x[i] = 0;
+                                    state.q[i] = 0;
+                                }
+                                state.x[ 0]  = 0x6174656d656b6166; // "fakemeta", fake "this" ptr
+                                state.x[31]  = (uintptr_t)sp + SPSIZE;
+                                state.valid  = 0xfff80001;
+                                state.qvalid = 0x0000ff00;
+                                state.wide   = 0xfff80001;
+                                state.host   = 0x80000000;
+                                switch(a64_emulate(kernel, &state, fnstart, &check_bl, &m, false, true, kEmuFnIgnore))
+                                {
+                                    case kEmuRet:
+                                        if((state.valid & 0x1) == 0x1 && (state.wide & 0x1) == 0x1 && state.x[0] == 0x0)
+                                        {
+                                            DBG("Ignoring %s::MetaClass::alloc that returns NULL", meta->name);
+                                        }
+                                        else
+                                        {
+                                            WRN("Unexpected ret in %s::MetaClass::alloc", meta->name);
+                                        }
                                         break;
-                                    }
-                                }
-                                if(!bl)
-                                {
-                                    if(meta->vtab == -1)
-                                    {
-                                        WRN("Failed to find call to kalloc/new in %s::metaClass::alloc", meta->name);
-                                    }
-                                }
-                                else
-                                {
-                                    void *sp = malloc(SPSIZE),
-                                         *obj = NULL;
-                                    if(!sp)
-                                    {
-                                        ERR("malloc(sp)");
-                                        return -1;
-                                    }
-                                    a64_state_t state;
-                                    for(size_t i = 0; i < 31; ++i)
-                                    {
-                                        state.x[i] = 0;
-                                        state.q[i] = 0;
-                                    }
-                                    state.q[31]   = 0;
-                                    state.x[31]  = (uintptr_t)sp + SPSIZE;
-                                    state.valid  = 0xfff80000;
-                                    state.qvalid = 0x0000ff00;
-                                    state.wide   = 0xfff80000;
-                                    state.host   = 0x80000000;
-                                    switch(a64_emulate(kernel, &state, fnstart, (uint32_t*)bl, false, true, kEmuFnIgnore))
-                                    {
-                                        case kEmuRet:
-                                            WRN("Unexpected ret in %s::metaClass::alloc", meta->name);
-                                            break;
-                                        case kEmuEnd:
+                                    case kEmuEnd:
+                                        {
+                                            kptr_t allocsz;
+                                            if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && (state.host & 0x1) == 0x1) // kalloc
                                             {
-                                                kptr_t allocsz;
-                                                if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && (state.host & 0x1) == 0x1) // kalloc
-                                                {
-                                                    allocsz = *(kptr_t*)state.x[0];
-                                                }
-                                                else if((state.valid & 0xff) == 0x1 && (state.wide & 0x1) == 0x0) // new
-                                                {
-                                                    allocsz = state.x[0];
-                                                }
-                                                else
-                                                {
-                                                    if(meta->vtab == -1)
-                                                    {
-                                                        WRN("Bad pre-bl state in %s::metaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
-                                                    }
-                                                    break;
-                                                }
-                                                if(allocsz != meta->objsize)
-                                                {
-                                                    if(meta->vtab == -1)
-                                                    {
-                                                        WRN("Alloc has wrong size in %s::metaClass::alloc", meta->name);
-                                                    }
-                                                    break;
-                                                }
-                                                uint32_t *m = (uint32_t*)bl;
-                                                if(a64_emulate(kernel, &state, m, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
-                                                {
-                                                    break;
-                                                }
-                                                obj = malloc(allocsz);
-                                                if(!obj)
-                                                {
-                                                    ERR("malloc(obj)");
-                                                    return -1;
-                                                }
-                                                bzero(obj, allocsz);
-                                                state.x[0] = (uintptr_t)obj;
-                                                state.valid |= 0x1;
-                                                state.wide  |= 0x1;
-                                                state.host  |= 0x1;
-                                                if(a64_emulate(kernel, &state, m + 1, end, false, true, kEmuFnAssumeX0) != kEmuRet)
-                                                {
-                                                    break;
-                                                }
-                                                if(!(state.valid & 0x1) || !(state.wide & 0x1) || !(state.host & 0x1))
-                                                {
-                                                    WRN("Bad end state in %s::metaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
-                                                    break;
-                                                }
-                                                kptr_t vt = *(kptr_t*)state.x[0];
-                                                if(!vt)
-                                                {
-                                                    WRN("Failed to capture vtab via %s::metaClass::alloc", meta->name);
-                                                    break;
-                                                }
-                                                meta->vtab = vt;
+                                                allocsz = *(kptr_t*)state.x[0];
                                             }
-                                        default:
-                                            break;
-                                    }
-                                    if(obj) free(obj);
-                                    free(sp);
+                                            else if((state.valid & 0xff) == 0x1 && (state.wide & 0x1) == 0x0) // new
+                                            {
+                                                allocsz = state.x[0];
+                                            }
+                                            else if((state.valid & 0xff) == 0xf && (state.wide & 0xf) == 0x9) // hell do I know
+                                            {
+                                                allocsz = state.x[1];
+                                            }
+                                            else
+                                            {
+                                                if(meta->vtab == -1)
+                                                {
+                                                    WRN("Bad pre-bl state in %s::MetaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
+                                                }
+                                                break;
+                                            }
+                                            if(allocsz != meta->objsize)
+                                            {
+                                                if(meta->vtab == -1)
+                                                {
+                                                    WRN("Alloc has wrong size in %s::MetaClass::alloc", meta->name);
+                                                }
+                                                break;
+                                            }
+                                            if(a64_emulate(kernel, &state, m, &check_equal, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
+                                            {
+                                                break;
+                                            }
+                                            obj = malloc(allocsz);
+                                            if(!obj)
+                                            {
+                                                ERR("malloc(obj)");
+                                                return -1;
+                                            }
+                                            bzero(obj, allocsz);
+                                            state.x[0] = (uintptr_t)obj;
+                                            state.valid |= 0x1;
+                                            state.wide  |= 0x1;
+                                            state.host  |= 0x1;
+                                            if(a64_emulate(kernel, &state, m + 1, &check_equal, end, false, true, kEmuFnAssumeX0) != kEmuRet)
+                                            {
+                                                break;
+                                            }
+                                            if(!(state.valid & 0x1) || !(state.wide & 0x1) || !(state.host & 0x1))
+                                            {
+                                                WRN("Bad end state in %s::MetaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
+                                                break;
+                                            }
+                                            kptr_t vt = *(kptr_t*)state.x[0];
+                                            if(!vt)
+                                            {
+                                                WRN("Failed to capture vtab via %s::MetaClass::alloc", meta->name);
+                                                break;
+                                            }
+                                            meta->vtab = vt;
+                                        }
+                                    default:
+                                        break;
                                 }
+                                if(obj) free(obj);
+                                free(sp);
                                 break;
                             }
                         }

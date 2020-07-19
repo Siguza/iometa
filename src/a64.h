@@ -37,6 +37,18 @@ typedef struct
 
 typedef struct
 {
+    uint32_t Rd     : 5,
+             Rn     : 5,
+             imm    : 6,
+             Rm     : 5,
+             op2    : 1,
+             shift  : 2,
+             op1    : 7,
+             sf     : 1;
+} add_reg_t, sub_reg_t;
+
+typedef struct
+{
     uint32_t Rt     :  5,
              Rn     :  5,
              imm    : 12,
@@ -140,6 +152,23 @@ typedef struct
     uint32_t Rt     :  5,
              Rn     :  5,
              imm    : 12,
+             op     : 10;
+} ldrb_imm_uoff_t, ldrh_imm_uoff_t, ldrsw_imm_uoff_t, strb_imm_uoff_t, strh_imm_uoff_t;
+
+typedef struct
+{
+    uint32_t Rt     :  5,
+             Rn     :  5,
+             imm    : 12,
+             sf     :  1,
+             op     :  9;
+} ldrsb_imm_uoff_t, ldrsh_imm_uoff_t;
+
+typedef struct
+{
+    uint32_t Rt     :  5,
+             Rn     :  5,
+             imm    : 12,
              op2    :  1,
              opc    :  1,
              op1    :  6,
@@ -177,6 +206,15 @@ typedef struct
              op     :  7,
              sf     :  1;
 } cbz_t;
+
+typedef struct
+{
+    uint32_t Rt     :  5,
+             imm    : 14,
+             bit    :  5,
+             op     :  7,
+             sf     :  1;
+} tbz_t;
 
 typedef struct
 {
@@ -283,6 +321,16 @@ static inline bool is_sub_imm(sub_imm_t *sub)
 static inline uint32_t get_add_sub_imm(add_imm_t *add)
 {
     return add->imm << ((add->shift & 1) ? 12 : 0);
+}
+
+static inline bool is_add_reg(add_reg_t *add)
+{
+    return add->op1 == 0b0001011 && add->op2 == 0;
+}
+
+static inline bool is_sub_reg(sub_reg_t *sub)
+{
+    return sub->op1 == 0b1001011 && sub->op2 == 0;
 }
 
 static inline bool is_ldr_imm_uoff(ldr_imm_uoff_t *ldr)
@@ -410,6 +458,76 @@ static inline int64_t get_stur_off(stur_t *stur)
     return (int64_t)stur->imm;
 }
 
+static inline bool is_ldrb_imm_uoff(ldrb_imm_uoff_t *ldrb)
+{
+    return ldrb->op == 0b0011100101;
+}
+
+static inline uint32_t get_ldrb_imm_uoff(ldrb_imm_uoff_t *ldrb)
+{
+    return ldrb->imm;
+}
+
+static inline bool is_ldrh_imm_uoff(ldrh_imm_uoff_t *ldrh)
+{
+    return ldrh->op == 0b0111100101;
+}
+
+static inline uint32_t get_ldrh_imm_uoff(ldrh_imm_uoff_t *ldrh)
+{
+    return ldrh->imm << 1;
+}
+
+static inline bool is_ldrsb_imm_uoff(ldrsb_imm_uoff_t *ldrsb)
+{
+    return ldrsb->op == 0b001110011;
+}
+
+static inline uint32_t get_ldrsb_imm_uoff(ldrsb_imm_uoff_t *ldrsb)
+{
+    return ldrsb->imm;
+}
+
+static inline bool is_ldrsh_imm_uoff(ldrsh_imm_uoff_t *ldrsh)
+{
+    return ldrsh->op == 0b011110011;
+}
+
+static inline uint32_t get_ldrsh_imm_uoff(ldrsh_imm_uoff_t *ldrsh)
+{
+    return ldrsh->imm << 1;
+}
+
+static inline bool is_ldrsw_imm_uoff(ldrsw_imm_uoff_t *ldrsw)
+{
+    return ldrsw->op == 0b101110011;
+}
+
+static inline uint32_t get_ldrsw_imm_uoff(ldrsw_imm_uoff_t *ldrsw)
+{
+    return ldrsw->imm << 2;
+}
+
+static inline bool is_strb_imm_uoff(strb_imm_uoff_t *strb)
+{
+    return strb->op == 0b0011100100;
+}
+
+static inline uint32_t get_strb_imm_uoff(strb_imm_uoff_t *strb)
+{
+    return strb->imm;
+}
+
+static inline bool is_strh_imm_uoff(strh_imm_uoff_t *strh)
+{
+    return strh->op == 0b0111100100;
+}
+
+static inline uint32_t get_strh_imm_uoff(strh_imm_uoff_t *strh)
+{
+    return strh->imm << 1;
+}
+
 static inline bool is_ldr_fp_uoff(ldr_fp_uoff_t *ldr)
 {
     return ldr->op1 == 0b111101 && ldr->op2 == 0b1;
@@ -468,6 +586,26 @@ static inline bool is_cbnz(cbz_t *cbz)
 static inline int64_t get_cbz_off(cbz_t *cbz)
 {
     return (((int64_t)cbz->imm) << (64 - 19)) >> (64 - 19 - 2);
+}
+
+static inline bool is_tbz(tbz_t *tbz)
+{
+    return tbz->op == 0x36;
+}
+
+static inline bool is_tbnz(tbz_t *tbz)
+{
+    return tbz->op == 0x37;
+}
+
+static inline uint32_t get_tbz_bit(tbz_t *tbz)
+{
+    return (tbz->sf << 5) | tbz->bit;
+}
+
+static inline int64_t get_tbz_off(tbz_t *tbz)
+{
+    return (((int64_t)tbz->imm) << (64 - 14)) >> (64 - 19 - 2);
 }
 
 static inline bool is_mov(mov_t *mov)
