@@ -1181,7 +1181,7 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
             orr_t *orr = ptr;
             if(orr->Rn == 31 || (state->valid & (1 << orr->Rn)))
             {
-                state->x[orr->Rd] = (orr->Rd == 31 ? 0 : state->x[orr->Rd]) | get_orr_imm(orr);
+                state->x[orr->Rd] = (orr->Rn == 31 ? 0 : state->x[orr->Rn]) | get_orr_imm(orr);
                 state->valid |= 1 << orr->Rd;
                 state->wide = (state->wide & ~(1 << orr->Rd)) | (orr->sf << orr->Rd);
                 state->host &= ~(1 << orr->Rd);
