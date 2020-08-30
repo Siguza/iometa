@@ -180,7 +180,8 @@ do \
     (name).val[(name).idx++] = (obj); \
 } while(0)
 
-#define NUM_METACLASSES_EXPECT 0x1000
+#define NUM_KEXTS_EXPECT         0x200
+#define NUM_METACLASSES_EXPECT  0x1000
 
 #define KMOD_MAX_NAME 64
 #pragma pack(4)
@@ -382,6 +383,58 @@ static bool is_part_of_vtab(void *kernel, bool x1469, relocrange_t *locreloc, si
     }
 }
 
+#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!x1469 && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
+
+static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, bool x1469, bool have_plk_text_exec, char **exreloc, size_t nexreloc, kptr_t exreloc_min, const char *sym)
+{
+    kptr_t relocAddr = 0;
+    for(size_t i = 0; i < nexreloc; ++i)
+    {
+        const char *name = exreloc[i];
+        if(name && strcmp(name, sym) == 0)
+        {
+            relocAddr = i * sizeof(kptr_t) + exreloc_min;
+            DBG("Found reloc for %s at " ADDR, sym, relocAddr);
+            break;
+        }
+    }
+    if(relocAddr)
+    {
+        FOREACH_CMD(hdr, cmd)
+        {
+            if(cmd->cmd == MACH_SEGMENT)
+            {
+                mach_seg_t *seg = (mach_seg_t*)cmd;
+                if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                {
+                    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
+                    {
+                        adr_t *adrp = (adr_t*)mem;
+                        ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
+                        br_t *br = (br_t*)(mem + 2);
+                        if
+                        (
+                            is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
+                            adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
+                        )
+                        {
+                            kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
+                            kptr_t addr = alias & ~0xfff;
+                            addr += get_adr_off(adrp);
+                            addr += get_ldr_imm_uoff(ldr);
+                            if(addr == relocAddr)
+                            {
+                                return alias;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static kptr_t kuntag(kptr_t kbase, bool x1469, kptr_t ptr, uint16_t *pac)
 {
     pacptr_t pp;
@@ -471,6 +524,66 @@ static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str
         DBG("strref(%s): " ADDR, str, ref);
         ARRPUSH(*arr, ref);
         off = diff + len;
+    }
+}
+
+static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_t kbase, bool x1469, bool have_plk_text_exec, void *arr, kptr_t func)
+{
+    if(hdr->filetype != MH_KEXT_BUNDLE)
+    {
+        ARRDECL(kptr_t, refs, NUM_KEXTS_EXPECT);
+        struct
+        {
+            size_t size;
+            size_t idx;
+            kptr_t *val;
+        } *aliases = arr;
+        for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
+        {
+            if(kuntag(kbase, x1469, *mem, NULL) == func)
+            {
+                kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
+                DBG("ref: " ADDR, ref);
+                ARRPUSH(refs, ref);
+            }
+        }
+        FOREACH_CMD(hdr, cmd)
+        {
+            if(cmd->cmd == MACH_SEGMENT)
+            {
+                mach_seg_t *seg = (mach_seg_t*)cmd;
+                if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                {
+                    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
+                    {
+                        adr_t *adrp = (adr_t*)mem;
+                        ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
+                        br_t *br = (br_t*)(mem + 2);
+                        if
+                        (
+                            is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
+                            adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
+                        )
+                        {
+                            kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
+                            kptr_t addr = alias & ~0xfff;
+                            addr += get_adr_off(adrp);
+                            addr += get_ldr_imm_uoff(ldr);
+                            for(size_t i = 0; i < refs.idx; ++i)
+                            {
+                                if(addr == refs.val[i])
+                                {
+                                    DBG("alias: " ADDR, alias);
+                                    ARRPUSH(*aliases, alias);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        free(refs.val);
     }
 }
 
@@ -1261,6 +1374,43 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
     return kEmuEnd;
 }
 
+static uint32_t* find_function_start(void *kernel, mach_seg_t *seg, const char *name, uint32_t *fnstart, bool have_stack_frame)
+{
+    while(1)
+    {
+        --fnstart;
+        if(fnstart < (uint32_t*)((uintptr_t)kernel + seg->fileoff))
+        {
+            // If we expect a stack frame, this is fatal.
+            if(have_stack_frame)
+            {
+                WRN("Hit start of segment at " ADDR " for %s", seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), name);
+                return NULL;
+            }
+            // Otherwise ehh whatever.
+            DBG("Hit start of segment at " ADDR " for %s", seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), name);
+            ++fnstart;
+            break;
+        }
+        if(!is_linear_inst(fnstart) || (is_bl((bl_t*)fnstart) && !have_stack_frame))
+        {
+            ++fnstart;
+            break;
+        }
+        stp_t *stp = (stp_t*)fnstart;
+        ldp_t *ldp = (ldp_t*)fnstart;
+        if((is_stp_pre(stp) || is_stp_uoff(stp)) && stp->Rt == 29 && stp->Rt2 == 30)
+        {
+            have_stack_frame = false;
+        }
+        else if((is_ldp_post(ldp) || is_ldp_uoff(ldp)) && ldp->Rt == 29 && ldp->Rt2 == 30)
+        {
+            have_stack_frame = true;
+        }
+    }
+    return fnstart;
+}
+
 // This is a very annoying thing that we only need as a fallback.
 // Certain calls to OSMetaClass::OSMetaClass() do not have x0 generated as an immediate,
 // but passed in from the caller. If these are the only constructor calls for a given class,
@@ -1318,37 +1468,10 @@ static bool multi_call_emulate(void *kernel, uint32_t *fncall, uint32_t *end, a6
         ERR("Bug in multi_call_emulate: fncall at " ADDR " is neither b nor bl", fncalladdr);
         exit(-1);
     }
-    uint32_t *fnstart = fncall;
-    while(1)
+    uint32_t *fnstart = find_function_start(kernel, seg, name, fncall, have_stack_frame);
+    if(!fnstart)
     {
-        --fnstart;
-        if(fnstart < (uint32_t*)((uintptr_t)kernel + seg->fileoff))
-        {
-            WRN("Hit start of segment at " ADDR " for %s", seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), name);
-            // If we expect a stack frame, this is fatal.
-            if(have_stack_frame)
-            {
-                return false;
-            }
-            // Otherwise ehh whatever.
-            ++fnstart;
-            break;
-        }
-        if(!is_linear_inst(fnstart) || (is_bl((bl_t*)fnstart) && !have_stack_frame))
-        {
-            ++fnstart;
-            break;
-        }
-        stp_t *stp = (stp_t*)fnstart;
-        ldp_t *ldp = (ldp_t*)fnstart;
-        if((is_stp_pre(stp) || is_stp_uoff(stp)) && stp->Rt == 29 && stp->Rt2 == 30)
-        {
-            have_stack_frame = false;
-        }
-        else if((is_ldp_post(ldp) || is_ldp_uoff(ldp)) && ldp->Rt == 29 && ldp->Rt2 == 30)
-        {
-            have_stack_frame = true;
-        }
+        return false;
     }
     kptr_t fnaddr = seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff));
     DBG("Function with call " ADDR " starts at " ADDR, fncalladdr, fnaddr);
@@ -2269,6 +2392,195 @@ static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t 
     }
 }
 
+static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool x1469, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
+{
+    const char *name = NULL;
+    uint32_t *fncall = NULL;
+    if((state->valid & 0x2) && (state->wide & 0x2))
+    {
+        name = addr2ptr(kernel, state->x[1]);
+        if(!name)
+        {
+            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, x1469, state->x[1], NULL));
+            ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
+            exit(-1);
+        }
+    }
+    DBG("Constructor candidate for %s", name ? name : "???");
+    if((state->valid & 0xe) != 0xe)
+    {
+        // Check for alt constructor
+        if((state->valid & 0xe) == 0x0)
+        {
+            for(size_t i = 0; i < 32; ++i)
+            {
+                state->x[i] = 0;
+                state->q[i] = 0;
+            }
+            // NOTE: Will have to revise this if the constructors ever diverge in x0-x3
+            state->x[0]  = 0x6174656d656b6166; // "fakemeta"
+            state->x[1]  = 0x656d616e656b6166; // "fakename"
+            state->x[2]  = 0x00727470656b6166; // "fakeptr"
+            state->x[3]  = 0x656b6166; // "fake"
+            state->valid  = 0xf;
+            state->qvalid = 0x0;
+            state->wide   = 0x7;
+            state->host   = 0x0;
+            if(a64_emulate(kernel, state, fnstart, &check_equal, bl, false, true, kEmuFnIgnore) == kEmuEnd)
+            {
+                if((state->valid & 0xf) == 0xf && (state->wide & 0xf) == 0x7 && state->x[0] == 0x6174656d656b6166 && state->x[1] == 0x656d616e656b6166 && state->x[2] == 0x00727470656b6166 && state->x[3] == 0x656b6166)
+                {
+                    kptr_t addr = seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff));
+                    DBG("OSMetaClassAltConstructor: " ADDR, addr);
+                    // We wanna land here even if we already got OSMetaClassAltConstructor off symtab, in order to suppress the warning below.
+                    // But we obviously never wanna store a result or fail on multiple candidates in that case.
+                    if(arg)
+                    {
+                        if(*(kptr_t*)arg)
+                        {
+                            ERR("More than one candidate for OSMetaClassAltConstructor");
+                            exit(-1);
+                        }
+                        *(kptr_t*)arg = addr;
+                    }
+                    // Do NOT fall through
+                    return;
+                }
+            }
+        }
+        WRN("Skipping constructor call without x1-x3 (%x) at " ADDR, state->valid, bladdr);
+        // Fall through
+    }
+    else if((state->valid & 0x1) != 0x1)
+    {
+        DBG("Skipping constructor call without x0 at " ADDR, bladdr);
+        fncall = bl;
+        // Fall through
+    }
+    else if((state->wide & 0xf) != 0x7)
+    {
+        WRN("Skipping constructor call with unexpected register widths (%x) at " ADDR, state->wide, bladdr);
+        // Fall through
+    }
+    else
+    {
+        DBG("Processing constructor call at " ADDR " (%s)", bladdr, name);
+        add_metaclass(kernel, metas, state, bl, want_vtabs);
+        // Do NOT fall through
+        return;
+    }
+    // We only get here on failure:
+    if(name)
+    {
+        struct
+        {
+            size_t size;
+            size_t idx;
+            metaclass_candidate_t *val;
+        } *namelist = names;
+        metaclass_candidate_t *cand;
+        ARRNEXT(*namelist, cand);
+        cand->name = name;
+        cand->fncall = fncall;
+    }
+}
+
+static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool x1469, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
+{
+    const char *name = NULL;
+    if((state->valid & 0x2) && (state->wide & 0x2))
+    {
+        name = addr2ptr(kernel, state->x[1]);
+        if(!name)
+        {
+            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, x1469, state->x[1], NULL));
+            ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
+            exit(-1);
+        }
+    }
+    DBG("Alt constructor candidate for %s", name ? name : "???");
+    if((state->valid & 0x7f) != 0x7f)
+    {
+        WRN("Skipping alt constructor call without x0-x6 (%x) at " ADDR, state->valid, bladdr);
+        // Fall through
+    }
+    else if((state->wide & 0x7f) != 0x37)
+    {
+        WRN("Skipping alt constructor call with unexpected register widths (%x) at " ADDR, state->wide, bladdr);
+        // Fall through
+    }
+    else
+    {
+        DBG("Processing alt constructor call at " ADDR " (%s)", bladdr, name);
+        // NOTE: Will have to revise this if the constructors ever diverge in x0-x3
+        add_metaclass(kernel, metas, state, bl, want_vtabs);
+        // Do NOT fall through
+        return;
+    }
+    // We only get here on failure:
+    if(name)
+    {
+        // For now, always set NULL for alt constructor
+        struct
+        {
+            size_t size;
+            size_t idx;
+            metaclass_candidate_t *val;
+        } *namelist = names;
+        metaclass_candidate_t *cand;
+        ARRNEXT(*namelist, cand);
+        cand->name = name;
+        cand->fncall = NULL;
+    }
+}
+
+typedef void (*constructor_cb_t)(void*, kptr_t, mach_seg_t*, bool, bool, void*, void*, a64_state_t*, uint32_t*, uint32_t*, kptr_t, void*);
+
+static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, bool x1469, bool have_plk_text_exec, bool want_vtabs, void *arr, void *metas, void *names, constructor_cb_t cb, void *arg)
+{
+    struct
+    {
+        size_t size;
+        size_t idx;
+        kptr_t *val;
+    } *aliases = arr;
+    FOREACH_CMD(hdr, cmd)
+    {
+        if(cmd->cmd == MACH_SEGMENT)
+        {
+            mach_seg_t *seg = (mach_seg_t*)cmd;
+            if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+            {
+                STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
+                {
+                    bl_t *bl = (bl_t*)mem;
+                    if(is_bl(bl) || is_b(bl))
+                    {
+                        kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
+                        kptr_t bltarg = bladdr + get_bl_off(bl);
+                        for(size_t i = 0; i < aliases->idx; ++i)
+                        {
+                            if(bltarg == aliases->val[i])
+                            {
+                                uint32_t *fnstart = find_function_start(kernel, seg, "OSMetaClass constructor call", mem, is_bl(bl));
+                                if(fnstart)
+                                {
+                                    a64_state_t state;
+                                    if(a64_emulate(kernel, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
+                                    {
+                                        cb(kernel, kbase, seg, x1469, want_vtabs, metas, names, &state, fnstart, mem, bladdr, arg);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 static void print_help(const char *self)
 {
     fprintf(stderr, "Usage:\n"
@@ -2565,10 +2877,11 @@ int main(int argc, const char **argv)
         if(r != 0) return r;
     }
 
-    ARRDECL(kptr_t, aliases, 0x100);
-    ARRDECL(kptr_t, refs, 0x100);
+    ARRDECL(kptr_t, aliases, NUM_KEXTS_EXPECT);
+    ARRDECL(kptr_t, altaliases, NUM_KEXTS_EXPECT);
 
     kptr_t OSMetaClassConstructor = 0,
+           OSMetaClassAltConstructor = 0,
            OSMetaClassVtab = 0,
            OSObjectVtab = 0,
            OSObjectGetMetaClass = 0,
@@ -2578,7 +2891,6 @@ int main(int argc, const char **argv)
            pure_virtual = 0;
     bool x1469 = false,
          have_plk_text_exec = false;
-#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!x1469 && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
     mach_nlist_t *symtab = NULL;
     mach_dstab_t *dstab  = NULL;
     char *strtab         = NULL;
@@ -2659,22 +2971,16 @@ int main(int argc, const char **argv)
             qsort(bsyms, nsyms, sizeof(*bsyms), &compare_sym_names);
             if(hdr->filetype == MH_KEXT_BUNDLE)
             {
-                OSMetaClassConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j.stub", bsyms, nsyms);
-                if(OSMetaClassConstructor)
-                {
-                    DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
-                }
+                OSMetaClassConstructor    = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j.stub", bsyms, nsyms);
+                OSMetaClassAltConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t.stub", bsyms, nsyms);
             }
             else
             {
-                OSMetaClassConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j",   bsyms, nsyms);
-                OSMetaClassVtab        = find_sym_by_name("__ZTV11OSMetaClass",             bsyms, nsyms);
-                OSObjectVtab           = find_sym_by_name("__ZTV8OSObject",                 bsyms, nsyms);
-                OSObjectGetMetaClass   = find_sym_by_name("__ZNK8OSObject12getMetaClassEv", bsyms, nsyms);
-                if(OSMetaClassConstructor)
-                {
-                    DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
-                }
+                OSMetaClassConstructor    = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j",                                bsyms, nsyms);
+                OSMetaClassAltConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t", bsyms, nsyms);
+                OSMetaClassVtab           = find_sym_by_name("__ZTV11OSMetaClass",                                          bsyms, nsyms);
+                OSObjectVtab              = find_sym_by_name("__ZTV8OSObject",                                              bsyms, nsyms);
+                OSObjectGetMetaClass      = find_sym_by_name("__ZNK8OSObject12getMetaClassEv",                              bsyms, nsyms);
                 if(OSMetaClassVtab)
                 {
                     OSMetaClassVtab += 2 * sizeof(kptr_t);
@@ -2689,6 +2995,14 @@ int main(int argc, const char **argv)
                 {
                     DBG("OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
                 }
+            }
+            if(OSMetaClassConstructor)
+            {
+                DBG("OSMetaClassConstructor: " ADDR, OSMetaClassConstructor);
+            }
+            if(OSMetaClassAltConstructor)
+            {
+                DBG("OSMetaClassAltConstructor: " ADDR, OSMetaClassAltConstructor);
             }
         }
         else if(cmd->cmd == LC_DYSYMTAB)
@@ -2749,59 +3063,14 @@ int main(int argc, const char **argv)
     }
     if(!OSMetaClassConstructor)
     {
-        DBG("Failed to find OSMetaClass::OSMetaClass symbol, falling back to binary matching.");
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
-            kptr_t relocAddr = 0;
-            for(size_t i = 0; i < nexreloc; ++i)
-            {
-                const char *name = exreloc[i];
-                if(name && strcmp(name, "__ZN11OSMetaClassC2EPKcPKS_j") == 0)
-                {
-                    relocAddr = i * sizeof(kptr_t) + exreloc_min;
-                    DBG("Found reloc for __ZN11OSMetaClassC2EPKcPKS_j at " ADDR, relocAddr);
-                    break;
-                }
-            }
-            if(relocAddr)
-            {
-                FOREACH_CMD(hdr, cmd)
-                {
-                    if(cmd->cmd == MACH_SEGMENT)
-                    {
-                        mach_seg_t *seg = (mach_seg_t*)cmd;
-                        if(seg->filesize > 0 && SEG_IS_EXEC(seg))
-                        {
-                            STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
-                            {
-                                adr_t *adrp = (adr_t*)mem;
-                                ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
-                                br_t *br = (br_t*)(mem + 2);
-                                if
-                                (
-                                    is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
-                                    adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
-                                )
-                                {
-                                    kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
-                                    kptr_t addr = alias & ~0xfff;
-                                    addr += get_adr_off(adrp);
-                                    addr += get_ldr_imm_uoff(ldr);
-                                    if(addr == relocAddr)
-                                    {
-                                        OSMetaClassConstructor = alias;
-                                        goto gotit;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            gotit:;
-            }
+            DBG("Failed to find OSMetaClassConstructor symbol, trying relocation instead.");
+            OSMetaClassConstructor = find_stub_for_reloc(kernel, hdr, x1469, have_plk_text_exec, exreloc, nexreloc, exreloc_min, "__ZN11OSMetaClassC2EPKcPKS_j");
         }
         else
         {
+            DBG("Failed to find OSMetaClassConstructor symbol, falling back to binary matching.");
 #define NSTRREF 3
             const char *strs[NSTRREF] = { "IORegistryEntry", "IOService", "IOUserClient" };
             struct
@@ -2943,7 +3212,7 @@ int main(int argc, const char **argv)
             }
             if(constrCandCurr.idx > 1)
             {
-                ERR("Found more than one possible OSMetaClass::OSMetaClass.");
+                ERR("Found more than one possible OSMetaClassConstructor.");
                 return -1;
             }
             else if(constrCandCurr.idx == 1)
@@ -2963,172 +3232,24 @@ int main(int argc, const char **argv)
         }
         if(!OSMetaClassConstructor)
         {
-            ERR("Failed to find OSMetaClass::OSMetaClass.");
+            ERR("Failed to find OSMetaClassConstructor.");
             return -1;
         }
-        DBG("OSMetaClass::OSMetaClass: " ADDR, OSMetaClassConstructor);
+        DBG("OSMetaClassConstructor: " ADDR, OSMetaClassConstructor);
     }
     ARRPUSH(aliases, OSMetaClassConstructor);
 
-    if(hdr->filetype != MH_KEXT_BUNDLE)
-    {
-        for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
-        {
-            if(kuntag(kbase, x1469, *mem, NULL) == OSMetaClassConstructor)
-            {
-                kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
-                DBG("ref: " ADDR, ref);
-                ARRPUSH(refs, ref);
-            }
-        }
-        FOREACH_CMD(hdr, cmd)
-        {
-            if(cmd->cmd == MACH_SEGMENT)
-            {
-                mach_seg_t *seg = (mach_seg_t*)cmd;
-                if(seg->filesize > 0 && SEG_IS_EXEC(seg))
-                {
-                    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
-                    {
-                        adr_t *adrp = (adr_t*)mem;
-                        ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
-                        br_t *br = (br_t*)(mem + 2);
-                        if
-                        (
-                            is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
-                            adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
-                        )
-                        {
-                            kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
-                            kptr_t addr = alias & ~0xfff;
-                            addr += get_adr_off(adrp);
-                            addr += get_ldr_imm_uoff(ldr);
-                            for(size_t i = 0; i < refs.idx; ++i)
-                            {
-                                if(addr == refs.val[i])
-                                {
-                                    DBG("alias: " ADDR, alias);
-                                    ARRPUSH(aliases, alias);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    find_imports(kernel, kernelsize, hdr, kbase, x1469, have_plk_text_exec, &aliases, OSMetaClassConstructor);
 
     ARRDECL(metaclass_t, metas, NUM_METACLASSES_EXPECT);
     ARRDECL(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
 
-    FOREACH_CMD(hdr, cmd)
+    find_constructor_calls(kernel, hdr, kbase, x1469, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, &constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
+    if(OSMetaClassAltConstructor)
     {
-        if(cmd->cmd == MACH_SEGMENT)
-        {
-            mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(seg->filesize > 0 && SEG_IS_EXEC(seg))
-            {
-                STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
-                {
-                    bl_t *bl = (bl_t*)mem;
-                    if(is_bl(bl))
-                    {
-                        kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
-                        kptr_t bltarg = bladdr + get_bl_off(bl);
-                        for(size_t i = 0; i < aliases.idx; ++i)
-                        {
-                            if(bltarg == aliases.val[i])
-                            {
-                                uint32_t *fnstart = mem - 1;
-                                bool unknown = false;
-                                while(1)
-                                {
-                                    if(fnstart < (uint32_t*)((uintptr_t)kernel + seg->fileoff))
-                                    {
-                                        WRN("Hit start of segment at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), bladdr);
-                                        goto next;
-                                    }
-                                    stp_t *stp = (stp_t*)fnstart;
-                                    if((is_stp_pre(stp) || is_stp_uoff(stp)) && stp->Rt == 29 && stp->Rt2 == 30)
-                                    {
-                                        break;
-                                    }
-                                    if(!is_linear_inst(fnstart))
-                                    {
-                                        unknown = true;
-                                        ++fnstart;
-                                        break;
-                                    }
-                                    --fnstart;
-                                }
-                                a64_state_t state;
-                                if(a64_emulate(kernel, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
-                                {
-                                    const char *name = NULL;
-                                    uint32_t *fncall = NULL;
-                                    if((state.valid & 0x2) && (state.wide & 0x2))
-                                    {
-                                        name = addr2ptr(kernel, state.x[1]);
-                                        if(!name)
-                                        {
-                                            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state.x[1], kuntag(kbase, x1469, state.x[1], NULL));
-                                            ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
-                                            return -1;
-                                        }
-                                    }
-                                    DBG("Constructor candidate for %s", name ? name : "???");
-                                    if((state.valid & 0x1) != 0x1)
-                                    {
-                                        if(unknown)
-                                        {
-                                            WRN("Hit unknown instruction at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)(fnstart - 1) - ((uintptr_t)kernel + seg->fileoff)), bladdr);
-                                        }
-                                        else
-                                        {
-                                            DBG("Skipping constructor call without x0 at " ADDR, bladdr);
-                                            fncall = mem;
-                                        }
-                                        // Fall through
-                                    }
-                                    else if((state.valid & 0xe) != 0xe)
-                                    {
-                                        if(unknown)
-                                        {
-                                            WRN("Hit unknown instruction at " ADDR " for " ADDR, seg->vmaddr + ((uintptr_t)(fnstart - 1) - ((uintptr_t)kernel + seg->fileoff)), bladdr);
-                                        }
-                                        WRN("Skipping constructor call without x1-x3 (%x) at " ADDR, state.valid, bladdr);
-                                        // Fall through
-                                    }
-                                    else if((state.wide & 0xf) != 0x7)
-                                    {
-                                        WRN("Skipping constructor call with unexpected registers width (%x) at " ADDR, state.wide, bladdr);
-                                        // Fall through
-                                    }
-                                    else
-                                    {
-                                        DBG("Processing constructor call at " ADDR " (%s)", bladdr, name);
-                                        add_metaclass(kernel, &metas, &state, mem, want_vtabs);
-                                        // Do NOT fall through
-                                        goto next;
-                                    }
-                                    // We only get here on failure:
-                                    if(name)
-                                    {
-                                        metaclass_candidate_t *cand;
-                                        ARRNEXT(namelist, cand);
-                                        cand->name = name;
-                                        cand->fncall = fncall;
-                                    }
-                                }
-                                next:;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        ARRPUSH(altaliases, OSMetaClassAltConstructor);
+        find_imports(kernel, kernelsize, hdr, kbase, x1469, have_plk_text_exec, &altaliases, OSMetaClassAltConstructor);
+        find_constructor_calls(kernel, hdr, kbase, x1469, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, &alt_constructor_cb, NULL);
     }
 
     // This is a safety check to make sure we're not missing anything.
