@@ -2499,9 +2499,14 @@ static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool
         }
     }
     DBG("Alt constructor candidate for %s", name ? name : "???");
-    if((state->valid & 0x7f) != 0x7f)
+    if((state->valid & 0x7e) != 0x7e)
     {
-        WRN("Skipping alt constructor call without x0-x6 (%x) at " ADDR, state->valid, bladdr);
+        WRN("Skipping alt constructor call without x1-x6 (%x) at " ADDR, state->valid, bladdr);
+        // Fall through
+    }
+    else if((state->valid & 0x1) != 0x1)
+    {
+        DBG("Skipping alt constructor call without x0 (%x) at " ADDR, state->valid, bladdr);
         // Fall through
     }
     else if((state->wide & 0x7f) != 0x37)
