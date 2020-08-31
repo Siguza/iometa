@@ -58,11 +58,6 @@ How this works:
 #include <strings.h>            // bzero
 #include <sys/mman.h>           // mmap
 #include <sys/stat.h>           // fstat
-#include <mach/machine.h>       // CPU_TYPE_ARM64
-#include <mach-o/fat.h>
-#include <mach-o/loader.h>
-#include <mach-o/nlist.h>
-#include <mach-o/reloc.h>
 #include <CoreFoundation/CoreFoundation.h>
 
 extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, CFOptionFlags options, CFStringRef *errorString);
@@ -90,20 +85,164 @@ static const char *colorGray   = "\x1b[90m",
 
 #define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
 
-#define ADDR                        "0x%016llx"
-#define MACH_MAGIC                  MH_MAGIC_64
-#define MACH_SEGMENT                LC_SEGMENT_64
-typedef struct fat_header           fat_hdr_t;
-typedef struct fat_arch             fat_arch_t;
-typedef struct mach_header_64       mach_hdr_t;
-typedef struct load_command         mach_lc_t;
-typedef struct segment_command_64   mach_seg_t;
-typedef struct section_64           mach_sec_t;
-typedef struct symtab_command       mach_stab_t;
-typedef struct dysymtab_command     mach_dstab_t;
-typedef struct nlist_64             mach_nlist_t;
-typedef struct relocation_info      mach_reloc_t;
-typedef uint64_t                    kptr_t;
+// Apple notation
+#define VM_PROT_READ                       0x1
+#define VM_PROT_WRITE                      0x2
+#define VM_PROT_EXECUTE                    0x4
+#define CPU_TYPE_ARM64              0x0100000c
+#define FAT_CIGAM                   0xbebafeca
+#define MH_MAGIC_64                 0xfeedfacf
+#define MH_EXECUTE                  0x00000002
+#define MH_KEXT_BUNDLE              0x0000000b
+#define MH_FILESET                  0x0000000c
+#define LC_SYMTAB                   0x00000002
+#define LC_DYSYMTAB                 0x0000000b
+#define LC_SEGMENT_64               0x00000019
+#define LC_UUID                     0x0000001b
+#define LC_DYLD_CHAINED_FIXUPS      0x80000034
+#define LC_FILESET_ENTRY            0x80000035
+#define N_STAB                            0xe0
+#define N_TYPE                            0x0e
+#define N_EXT                             0x01
+#define N_UNDF                             0x0
+struct fat_header
+{
+    uint32_t magic;
+    uint32_t nfat_arch;
+};
+struct fat_arch
+{
+    uint32_t cputype;
+    uint32_t cpusubtype;
+    uint32_t offset;
+    uint32_t size;
+    uint32_t align;
+};
+struct mach_header_64
+{
+    uint32_t magic;
+    uint32_t cputype;
+    uint32_t cpusubtype;
+    uint32_t filetype;
+    uint32_t ncmds;
+    uint32_t sizeofcmds;
+    uint32_t flags;
+    uint32_t reserved;
+};
+struct load_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+};
+struct segment_command_64
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    char     segname[16];
+    uint64_t vmaddr;
+    uint64_t vmsize;
+    uint64_t fileoff;
+    uint64_t filesize;
+    uint32_t maxprot;
+    uint32_t initprot;
+    uint32_t nsects;
+    uint32_t flags;
+};
+struct section_64
+{
+    char     sectname[16];
+    char     segname[16];
+    uint64_t addr;
+    uint64_t size;
+    uint32_t offset;
+    uint32_t align;
+    uint32_t reloff;
+    uint32_t nreloc;
+    uint32_t flags;
+    uint32_t reserved1;
+    uint32_t reserved2;
+    uint32_t reserved3;
+};
+struct symtab_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint32_t symoff;
+    uint32_t nsyms;
+    uint32_t stroff;
+    uint32_t strsize;
+};
+struct dysymtab_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint32_t ilocalsym;
+    uint32_t nlocalsym;
+    uint32_t iextdefsym;
+    uint32_t nextdefsym;
+    uint32_t iundefsym;
+    uint32_t nundefsym;
+    uint32_t tocoff;
+    uint32_t ntoc;
+    uint32_t modtaboff;
+    uint32_t nmodtab;
+    uint32_t extrefsymoff;
+    uint32_t nextrefsyms;
+    uint32_t indirectsymoff;
+    uint32_t nindirectsyms;
+    uint32_t extreloff;
+    uint32_t nextrel;
+    uint32_t locreloff;
+    uint32_t nlocrel;
+};
+struct uuid_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint8_t  uuid[16];
+};
+struct fileset_entry_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint64_t vmaddr;
+    uint64_t fileoff;
+    uint32_t nameoff;
+};
+struct nlist_64
+{
+    uint32_t n_strx;
+    uint8_t  n_type;
+    uint8_t  n_sect;
+    uint16_t n_desc;
+    uint64_t n_value;
+};
+struct relocation_info
+{
+   int32_t  r_address;
+   uint32_t r_symbolnum : 24,
+            r_pcrel     :  1,
+            r_length    :  2,
+            r_extern    :  1,
+            r_type      :  4;
+};
+
+// My aliases
+#define ADDR                            "0x%016llx"
+#define MACH_MAGIC                      MH_MAGIC_64
+#define MACH_SEGMENT                    LC_SEGMENT_64
+typedef struct fat_header               fat_hdr_t;
+typedef struct fat_arch                 fat_arch_t;
+typedef struct mach_header_64           mach_hdr_t;
+typedef struct load_command             mach_lc_t;
+typedef struct segment_command_64       mach_seg_t;
+typedef struct section_64               mach_sec_t;
+typedef struct symtab_command           mach_stab_t;
+typedef struct dysymtab_command         mach_dstab_t;
+typedef struct fileset_entry_command    mach_fileent_t;
+typedef struct nlist_64                 mach_nlist_t;
+typedef struct relocation_info          mach_reloc_t;
+typedef uint64_t                        kptr_t;
 
 #define FOREACH_CMD(_hdr, _cmd) \
 for( \
@@ -362,13 +501,13 @@ static int compare_addrs(const void *a, const void *b)
     return adda < addb ? -1 : 1;
 }
 
-static bool is_part_of_vtab(void *kernel, bool x1469, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, kptr_t exreloc_min, kptr_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+static bool is_part_of_vtab(void *kernel, bool chainedFixup, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, kptr_t exreloc_min, kptr_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
 {
     if(idx == 0)
     {
         return true;
     }
-    if(x1469)
+    if(chainedFixup)
     {
         return ((pacptr_t*)vtab)[idx - 1].next * sizeof(uint32_t) == sizeof(kptr_t);
     }
@@ -383,9 +522,9 @@ static bool is_part_of_vtab(void *kernel, bool x1469, relocrange_t *locreloc, si
     }
 }
 
-#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!x1469 && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
+#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!chainedFixup && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
 
-static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, bool x1469, bool have_plk_text_exec, char **exreloc, size_t nexreloc, kptr_t exreloc_min, const char *sym)
+static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, bool chainedFixup, bool have_plk_text_exec, char **exreloc, size_t nexreloc, kptr_t exreloc_min, const char *sym)
 {
     kptr_t relocAddr = 0;
     for(size_t i = 0; i < nexreloc; ++i)
@@ -435,11 +574,11 @@ static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, bool x1469, boo
     return 0;
 }
 
-static kptr_t kuntag(kptr_t kbase, bool x1469, kptr_t ptr, uint16_t *pac)
+static kptr_t kuntag(kptr_t kbase, bool chainedFixup, kptr_t ptr, uint16_t *pac)
 {
     pacptr_t pp;
     pp.ptr = ptr;
-    if(x1469)
+    if(chainedFixup)
     {
         if(pp.auth)
         {
@@ -527,7 +666,7 @@ static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str
     }
 }
 
-static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_t kbase, bool x1469, bool have_plk_text_exec, void *arr, kptr_t func)
+static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_t kbase, bool chainedFixup, bool have_plk_text_exec, void *arr, kptr_t func)
 {
     if(hdr->filetype != MH_KEXT_BUNDLE)
     {
@@ -540,7 +679,7 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
         } *aliases = arr;
         for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
         {
-            if(kuntag(kbase, x1469, *mem, NULL) == func)
+            if(kuntag(kbase, chainedFixup, *mem, NULL) == func)
             {
                 kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                 DBG("ref: " ADDR, ref);
@@ -1697,18 +1836,20 @@ out:;
     return retval;
 }
 
-static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdrp)
+static int validate_fat(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const char *name)
 {
-    void *kernel = *kernelp;
-    size_t kernelsize = *kernelsizep;
+    void *macho = *machop;
+    size_t machosize = *machosizep;
+    mach_hdr_t *hdr = *hdrp;
 
-    if(kernelsize < sizeof(mach_hdr_t))
+    if(machosize < sizeof(mach_hdr_t))
     {
-        ERR("File is too short to be a Mach-O.");
+        if(name) ERR("Embedded file is too short to be a Mach-O (%s).", name);
+        else     ERR("File is too short to be a Mach-O.");
         return -1;
     }
 
-    fat_hdr_t *fat = kernel;
+    fat_hdr_t *fat = (fat_hdr_t*)hdr;
     if(fat->magic == FAT_CIGAM)
     {
         bool found = false;
@@ -1719,48 +1860,74 @@ static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdr
             {
                 uint32_t offset = SWAP32(arch[i].offset);
                 uint32_t newsize = SWAP32(arch[i].size);
-                if(offset > kernelsize || newsize > kernelsize - offset)
+                if(offset > machosize || newsize > machosize - offset)
                 {
-                    ERR("Fat arch out of bounds.");
+                    if(name) ERR("Embedded fat arch out of bounds (%s).", name);
+                    else     ERR("Fat arch out of bounds.");
                     return -1;
                 }
                 if(newsize < sizeof(mach_hdr_t))
                 {
-                    ERR("Fat arch is too short to contain a Mach-O.");
+                    if(name) ERR("Embedded fat arch is too short to contain a Mach-O (%s).", name);
+                    else     ERR("Fat arch is too short to contain a Mach-O.");
                     return -1;
                 }
-                kernel = (void*)((uintptr_t)kernel + offset);
-                kernelsize = newsize;
+                macho = (void*)((uintptr_t)hdr + offset);
+                machosize = newsize;
+                hdr = macho;
                 found = true;
                 break;
             }
         }
         if(!found)
         {
-            ERR("No arm64 slice in fat binary.");
+            if(name) ERR("No arm64 slice in embedded fat binary (%s).", name);
+            else     ERR("No arm64 slice in fat binary.");
             return -1;
+        }
+        *machop     = macho;
+        *machosizep = machosize;
+        *hdrp       = hdr;
+    }
+    return 0;
+}
+
+static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const char *name)
+{
+    void *macho = *machop;
+    size_t machosize = *machosizep;
+    mach_hdr_t *hdr = *hdrp;
+    if(!name)
+    {
+        int r = validate_fat(&macho, &machosize, &hdr, name);
+        if(r != 0)
+        {
+            return r;
         }
     }
 
-    mach_hdr_t *hdr = (mach_hdr_t*)kernel;
     if(hdr->magic != MACH_MAGIC)
     {
-        ERR("Wrong magic: 0x%08x", hdr->magic);
+        if(name) ERR("Wrong embedded magic: 0x%08x (%s)", hdr->magic, name);
+        else     ERR("Wrong magic: 0x%08x", hdr->magic);
         return -1;
     }
     if(hdr->cputype != CPU_TYPE_ARM64)
     {
-        ERR("Wrong architecture, only arm64 is supported.");
+        if(name) ERR("Wrong embedded architecture, only arm64 is supported (%s).", name);
+        else     ERR("Wrong architecture, only arm64 is supported.");
         return -1;
     }
-    if(hdr->filetype != MH_EXECUTE && hdr->filetype != MH_KEXT_BUNDLE)
+    if(hdr->filetype != MH_EXECUTE && hdr->filetype != MH_KEXT_BUNDLE && (name != NULL || hdr->filetype != MH_FILESET))
     {
-        ERR("Wrong Mach-O type: 0x%x", hdr->filetype);
+        if(name) ERR("Wrong embedded Mach-O type: 0x%x (%s)", hdr->filetype, name);
+        else     ERR("Wrong Mach-O type: 0x%x", hdr->filetype);
         return -1;
     }
-    if(hdr->sizeofcmds > kernelsize - sizeof(mach_hdr_t))
+    if(hdr->sizeofcmds > machosize - sizeof(mach_hdr_t))
     {
-        ERR("Mach-O header out of bounds.");
+        if(name) ERR("Embedded Mach-O header out of bounds (%s).", name);
+        else     ERR("Mach-O header out of bounds.");
         return -1;
     }
     // TODO: replace header & weed out invalid load commands?
@@ -1769,17 +1936,19 @@ static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdr
         if(cmd->cmd == MACH_SEGMENT)
         {
             mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(seg->fileoff > kernelsize || seg->filesize > kernelsize - seg->fileoff)
+            if(seg->fileoff > machosize || seg->filesize > machosize - seg->fileoff)
             {
-                ERR("Mach-O segment out of bounds: %s", seg->segname);
+                if(name) ERR("Embedded Mach-O segment out of bounds: %s (%s)", seg->segname, name);
+                else     ERR("Mach-O segment out of bounds: %s", seg->segname);
                 return -1;
             }
             mach_sec_t *secs = (mach_sec_t*)(seg + 1);
             for(size_t h = 0; h < seg->nsects; ++h)
             {
-                if(secs[h].offset > kernelsize || secs[h].size > kernelsize - secs[h].offset)
+                if(secs[h].offset > machosize || secs[h].size > machosize - secs[h].offset)
                 {
-                    ERR("Mach-O section out of bounds: %s.%s", secs[h].segname, secs[h].sectname);
+                    if(name) ERR("Embedded Mach-O section out of bounds: %s.%s (%s)", secs[h].segname, secs[h].sectname, name);
+                    else     ERR("Mach-O section out of bounds: %s.%s", secs[h].segname, secs[h].sectname);
                     return -1;
                 }
             }
@@ -1787,21 +1956,23 @@ static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdr
         else if(cmd->cmd == LC_SYMTAB)
         {
             mach_stab_t *stab = (mach_stab_t*)cmd;
-            if(stab->stroff > kernelsize || stab->symoff > kernelsize || stab->nsyms > (kernelsize - stab->symoff) / sizeof(mach_nlist_t))
+            if(stab->stroff > machosize || stab->symoff > machosize || stab->nsyms > (machosize - stab->symoff) / sizeof(mach_nlist_t))
             {
-                ERR("Mach-O symtab out of bounds.");
+                if(name) ERR("Embedded Mach-O symtab out of bounds (%s).", name);
+                else     ERR("Mach-O symtab out of bounds.");
                 return -1;
             }
-            mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
+            mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)macho + stab->symoff);
             for(size_t i = 0; i < stab->nsyms; ++i)
             {
                 if((symtab[i].n_type & N_TYPE) == N_UNDF || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT))) // XXX: eliminate check for verification?
                 {
                     continue;
                 }
-                if(symtab[i].n_un.n_strx > kernelsize - stab->stroff)
+                if(symtab[i].n_strx > machosize - stab->stroff)
                 {
-                    ERR("Mach-O symbol out of bounds.");
+                    if(name) ERR("Embedded Mach-O symbol out of bounds (%s).", name);
+                    else     ERR("Mach-O symbol out of bounds.");
                     return -1;
                 }
             }
@@ -1811,19 +1982,33 @@ static int validate_kernel(void **kernelp, size_t *kernelsizep, mach_hdr_t **hdr
             mach_dstab_t *dstab = (mach_dstab_t*)cmd;
             if(hdr->filetype == MH_KEXT_BUNDLE) // XXX: get rid of this too?
             {
-                if(dstab->extreloff > kernelsize || dstab->nextrel > (kernelsize - dstab->extreloff) / sizeof(mach_reloc_t))
+                if(dstab->extreloff > machosize || dstab->nextrel > (machosize - dstab->extreloff) / sizeof(mach_reloc_t))
                 {
-                    ERR("Mach-O dsymtab out of bounds.");
+                    if(name) ERR("Embedded Mach-O dsymtab out of bounds (%s).", name);
+                    else     ERR("Mach-O dsymtab out of bounds.");
                     return -1;
                 }
                 // TODO: verify dstab entries as well
             }
         }
+        else if(cmd->cmd == LC_FILESET_ENTRY)
+        {
+            if(name)
+            {
+                ERR("Embedded Mach-O has further embedded Mach-Os (%s).", name);
+                return -1;
+            }
+            mach_fileent_t *ent = (mach_fileent_t*)cmd;
+            if(ent->fileoff >= machosize || ent->nameoff >= ent->cmdsize)
+            {
+                ERR("Mach-O file entry out of bounds.");
+                return -1;
+            }
+        }
     }
-
-    *kernelp     = kernel;
-    *kernelsizep = kernelsize;
-    *hdrp        = hdr;
+    *machop     = macho;
+    *machosizep = machosize;
+    *hdrp       = hdr;
     return 0;
 }
 
@@ -2392,7 +2577,7 @@ static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t 
     }
 }
 
-static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool x1469, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
+static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool chainedFixup, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
 {
     const char *name = NULL;
     uint32_t *fncall = NULL;
@@ -2401,7 +2586,7 @@ static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool x14
         name = addr2ptr(kernel, state->x[1]);
         if(!name)
         {
-            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, x1469, state->x[1], NULL));
+            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, chainedFixup, state->x[1], NULL));
             ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
             exit(-1);
         }
@@ -2485,7 +2670,7 @@ static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool x14
     }
 }
 
-static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool x1469, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
+static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool chainedFixup, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
 {
     const char *name = NULL;
     if((state->valid & 0x2) && (state->wide & 0x2))
@@ -2493,7 +2678,7 @@ static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool
         name = addr2ptr(kernel, state->x[1]);
         if(!name)
         {
-            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, x1469, state->x[1], NULL));
+            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, chainedFixup, state->x[1], NULL));
             ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
             exit(-1);
         }
@@ -2541,7 +2726,7 @@ static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool
 
 typedef void (*constructor_cb_t)(void*, kptr_t, mach_seg_t*, bool, bool, void*, void*, a64_state_t*, uint32_t*, uint32_t*, kptr_t, void*);
 
-static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, bool x1469, bool have_plk_text_exec, bool want_vtabs, void *arr, void *metas, void *names, constructor_cb_t cb, void *arg)
+static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, bool chainedFixup, bool have_plk_text_exec, bool want_vtabs, void *arr, void *metas, void *names, constructor_cb_t cb, void *arg)
 {
     struct
     {
@@ -2573,7 +2758,7 @@ static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, 
                                     a64_state_t state;
                                     if(a64_emulate(kernel, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
                                     {
-                                        cb(kernel, kbase, seg, x1469, want_vtabs, metas, names, &state, fnstart, mem, bladdr, arg);
+                                        cb(kernel, kbase, seg, chainedFixup, want_vtabs, metas, names, &state, fnstart, mem, bladdr, arg);
                                     }
                                 }
                                 break;
@@ -2861,10 +3046,10 @@ int main(int argc, const char **argv)
 
     void *kernel = NULL;
     size_t kernelsize = 0;
-    mach_hdr_t *hdr = NULL;
     r = map_file(argv[aoff++], PROT_READ, &kernel, &kernelsize);
     if(r != 0) return r;
-    r = validate_kernel(&kernel, &kernelsize, &hdr);
+    mach_hdr_t *hdr = kernel;
+    r = validate_macho(&kernel, &kernelsize, &hdr, NULL);
     if(r != 0) return r;
 
     struct
@@ -2892,9 +3077,9 @@ int main(int argc, const char **argv)
            OSObjectGetMetaClass = 0,
            kbase = 0,
            plk_base = 0,
-           initcode = 0,
+           //initcode = 0,
            pure_virtual = 0;
-    bool x1469 = false,
+    bool chainedFixup = false,
          have_plk_text_exec = false;
     mach_nlist_t *symtab = NULL;
     mach_dstab_t *dstab  = NULL;
@@ -2914,7 +3099,7 @@ int main(int argc, const char **argv)
             {
                 kbase = seg->vmaddr;
             }
-            if(strcmp("__TEXT_EXEC", seg->segname) == 0)
+            /*if(strcmp("__TEXT_EXEC", seg->segname) == 0)
             {
                 mach_sec_t *secs = (mach_sec_t*)(seg + 1);
                 for(size_t i = 0; i < seg->nsects; ++i)
@@ -2925,7 +3110,7 @@ int main(int argc, const char **argv)
                         break;
                     }
                 }
-            }
+            }*/
             if(strcmp("__PRELINK_TEXT", seg->segname) == 0)
             {
                 plk_base = seg->vmaddr;
@@ -2933,6 +3118,18 @@ int main(int argc, const char **argv)
             else if(strcmp("__PLK_TEXT_EXEC", seg->segname) == 0)
             {
                 have_plk_text_exec = true;
+            }
+            else if(strcmp("__TEXT", seg->segname) == 0)
+            {
+                mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+                for(size_t i = 0; i < seg->nsects; ++i)
+                {
+                    if(strcmp("__thread_starts", secs[i].sectname) == 0)
+                    {
+                        chainedFixup = secs[i].size > 0;
+                        break;
+                    }
+                }
             }
         }
         else if(cmd->cmd == LC_SYMTAB)
@@ -2966,7 +3163,7 @@ int main(int argc, const char **argv)
                     continue;
                 }
                 bsyms[sidx].addr = symtab[i].n_value;
-                bsyms[sidx].name = &strtab[symtab[i].n_un.n_strx];
+                bsyms[sidx].name = &strtab[symtab[i].n_strx];
                 DBG("Symbol: " ADDR " %s", bsyms[sidx].addr, bsyms[sidx].name);
                 ++sidx;
             }
@@ -3030,7 +3227,7 @@ int main(int argc, const char **argv)
                         ERR("External relocation entry %lu at " ADDR " is not 8 bytes.", i, addr);
                         return -1;
                     }
-                    DBG("Exreloc " ADDR ": %s", addr, &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx]);
+                    DBG("Exreloc " ADDR ": %s", addr, &strtab[symtab[reloc[i].r_symbolnum].n_strx]);
                     if(addr < exreloc_min)
                     {
                         exreloc_min = addr;
@@ -3055,15 +3252,28 @@ int main(int argc, const char **argv)
                     bzero(exreloc, relocsize);
                     for(size_t i = 0; i < dstab->nextrel; ++i)
                     {
-                        exreloc[(kbase + reloc[i].r_address - exreloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_un.n_strx];
+                        exreloc[(kbase + reloc[i].r_address - exreloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_strx];
                     }
                 }
             }
-            // This is the one defining difference
-            if(dstab->locreloff == 0 && dstab->nlocrel == 0)
+        }
+        else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
+        {
+            chainedFixup = true;
+        }
+        else if(cmd->cmd == LC_FILESET_ENTRY)
+        {
+            mach_fileent_t *ent = (mach_fileent_t*)cmd;
+            void *macho = kernel;
+            size_t machosize = kernelsize;
+            mach_hdr_t *mh = (void*)((uintptr_t)kernel + ent->fileoff);
+            const char *name = (const char*)((uintptr_t)ent + ent->nameoff);
+            int r = validate_macho(&macho, &machosize, &mh, name);
+            if(r != 0)
             {
-                x1469 = true;
+                return r;
             }
+            DBG("Processing kext header of %s", name);
         }
     }
     if(!OSMetaClassConstructor)
@@ -3071,7 +3281,7 @@ int main(int argc, const char **argv)
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
             DBG("Failed to find OSMetaClassConstructor symbol, trying relocation instead.");
-            OSMetaClassConstructor = find_stub_for_reloc(kernel, hdr, x1469, have_plk_text_exec, exreloc, nexreloc, exreloc_min, "__ZN11OSMetaClassC2EPKcPKS_j");
+            OSMetaClassConstructor = find_stub_for_reloc(kernel, hdr, chainedFixup, have_plk_text_exec, exreloc, nexreloc, exreloc_min, "__ZN11OSMetaClassC2EPKcPKS_j");
         }
         else
         {
@@ -3244,17 +3454,17 @@ int main(int argc, const char **argv)
     }
     ARRPUSH(aliases, OSMetaClassConstructor);
 
-    find_imports(kernel, kernelsize, hdr, kbase, x1469, have_plk_text_exec, &aliases, OSMetaClassConstructor);
+    find_imports(kernel, kernelsize, hdr, kbase, chainedFixup, have_plk_text_exec, &aliases, OSMetaClassConstructor);
 
     ARRDECL(metaclass_t, metas, NUM_METACLASSES_EXPECT);
     ARRDECL(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
 
-    find_constructor_calls(kernel, hdr, kbase, x1469, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, &constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
+    find_constructor_calls(kernel, hdr, kbase, chainedFixup, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, &constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
     if(OSMetaClassAltConstructor)
     {
         ARRPUSH(altaliases, OSMetaClassAltConstructor);
-        find_imports(kernel, kernelsize, hdr, kbase, x1469, have_plk_text_exec, &altaliases, OSMetaClassAltConstructor);
-        find_constructor_calls(kernel, hdr, kbase, x1469, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, &alt_constructor_cb, NULL);
+        find_imports(kernel, kernelsize, hdr, kbase, chainedFixup, have_plk_text_exec, &altaliases, OSMetaClassAltConstructor);
+        find_constructor_calls(kernel, hdr, kbase, chainedFixup, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, &alt_constructor_cb, NULL);
     }
 
     // This is a safety check to make sure we're not missing anything.
@@ -3354,7 +3564,7 @@ int main(int argc, const char **argv)
     if(want_vtabs)
     {
         ARRDECLEMPTY(relocrange_t, locreloc);
-        if(!x1469)
+        if(!chainedFixup)
         {
             size_t nlocrel = 0,
                    relidx  = 0;
@@ -3367,7 +3577,7 @@ int main(int argc, const char **argv)
                 reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->locreloff);
                 nlocrel += dstab->nlocrel;
             }
-            if(hdr->filetype != MH_KEXT_BUNDLE)
+            if(hdr->filetype == MH_EXECUTE)
             {
                 if(!plk_base)
                 {
@@ -3773,7 +3983,7 @@ int main(int argc, const char **argv)
             }
             for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
             {
-                if(kuntag(kbase, x1469, ovtab[i], NULL) == OSObjectGetMetaClass)
+                if(kuntag(kbase, chainedFixup, ovtab[i], NULL) == OSObjectGetMetaClass)
                 {
                     VtabGetMetaClassIdx = i;
                     DBG("VtabGetMetaClassIdx: 0x%lx", VtabGetMetaClassIdx);
@@ -3955,7 +4165,7 @@ int main(int argc, const char **argv)
                 }
                 for(size_t i = 0; ovtab[i] != 0; ++i)
                 {
-                    if(kuntag(kbase, x1469, ovtab[i], NULL) == pure_virtual)
+                    if(kuntag(kbase, chainedFixup, ovtab[i], NULL) == pure_virtual)
                     {
                         VtabAllocIdx = i;
                         DBG("VtabAllocIdx: 0x%lx", VtabAllocIdx);
@@ -4037,7 +4247,7 @@ int main(int argc, const char **argv)
                                                 {
                                                     STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassIdx + 2, seg2->filesize - (VtabGetMetaClassIdx + 2) * sizeof(kptr_t), 1)
                                                     {
-                                                        if(kuntag(kbase, x1469, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
+                                                        if(kuntag(kbase, chainedFixup, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
                                                         {
                                                             kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
                                                             if(meta->vtab == 0)
@@ -4085,7 +4295,7 @@ int main(int argc, const char **argv)
                     ERR("Metavtab of %s lies outside all segments.", meta->name);
                     return -1;
                 }
-                kptr_t fnaddr = kuntag(kbase, x1469, ovtab[VtabAllocIdx], NULL);
+                kptr_t fnaddr = kuntag(kbase, chainedFixup, ovtab[VtabAllocIdx], NULL);
                 if(fnaddr != pure_virtual)
                 {
                     DBG("Got %s::MetaClass::alloc at " ADDR, meta->name, fnaddr);
@@ -4157,7 +4367,7 @@ int main(int argc, const char **argv)
                                             {
                                                 if(meta->vtab == -1)
                                                 {
-                                                    WRN("Alloc has wrong size in %s::MetaClass::alloc", meta->name);
+                                                    WRN("Alloc has wrong size in %s::MetaClass::alloc (0x%llx vs 0x%x)", meta->name, allocsz, meta->objsize);
                                                 }
                                                 break;
                                             }
@@ -4292,7 +4502,7 @@ int main(int argc, const char **argv)
                     goto done;
                 }
                 size_t nmeth = 0;
-                while(is_part_of_vtab(kernel, x1469, locreloc.val, locreloc.idx, exreloc, exreloc_min, exreloc_max, mvtab, meta->vtab, nmeth))
+                while(is_part_of_vtab(kernel, chainedFixup, locreloc.val, locreloc.idx, exreloc, exreloc_min, exreloc_max, mvtab, meta->vtab, nmeth))
                 {
                     ++nmeth;
                 }
@@ -4355,7 +4565,7 @@ int main(int argc, const char **argv)
                     }
                     else
                     {
-                        func = kuntag(kbase, x1469, mvtab[idx], &pac);
+                        func = kuntag(kbase, chainedFixup, mvtab[idx], &pac);
                         cxx_sym = find_sym_by_addr(func, asyms, nsyms);
                         overrides = !pent || func != pent->addr;
                     }
@@ -4595,7 +4805,7 @@ int main(int argc, const char **argv)
                 {
                     if(kmod_start->size == kmod_info->size + sizeof(kptr_t))
                     {
-                        mach_hdr_t *exhdr = addr2ptr(kernel, kuntag(kbase, x1469, start_ptr[kmod_num], NULL));
+                        mach_hdr_t *exhdr = addr2ptr(kernel, kuntag(kbase, chainedFixup, start_ptr[kmod_num], NULL));
                         if(exhdr && exhdr->ncmds == 2)
                         {
                             mach_seg_t *exseg = (mach_seg_t*)(exhdr + 1);
@@ -4604,7 +4814,7 @@ int main(int argc, const char **argv)
                             if
                             (
                                 exseg->cmd == MACH_SEGMENT && exuuid->cmd == LC_UUID &&
-                                strcmp("__TEXT_EXEC", exseg->segname) == 0 && exseg->nsects == 1 && strcmp("__text", exsec->sectname) == 0 && // XXX kuntag(kbase, x1469, exsec->addr, NULL) == initcode &&
+                                strcmp("__TEXT_EXEC", exseg->segname) == 0 && exseg->nsects == 1 && strcmp("__text", exsec->sectname) == 0 && // XXX kuntag(kbase, chainedFixup, exsec->addr, NULL) == initcode &&
                                 exuuid->uuid[0x0] == 0 && exuuid->uuid[0x1] == 0 && exuuid->uuid[0x2] == 0 && exuuid->uuid[0x3] == 0 &&
                                 exuuid->uuid[0x4] == 0 && exuuid->uuid[0x5] == 0 && exuuid->uuid[0x6] == 0 && exuuid->uuid[0x7] == 0 &&
                                 exuuid->uuid[0x8] == 0 && exuuid->uuid[0x9] == 0 && exuuid->uuid[0xa] == 0 && exuuid->uuid[0xb] == 0 &&
@@ -4633,8 +4843,8 @@ int main(int argc, const char **argv)
                 }
                 for(size_t i = 0; i < kmod_num; ++i)
                 {
-                    kptr_t iaddr = kuntag(kbase, x1469, info_ptr[i],  NULL);
-                    kptr_t haddr = kuntag(kbase, x1469, start_ptr[i], NULL);
+                    kptr_t iaddr = kuntag(kbase, chainedFixup, info_ptr[i],  NULL);
+                    kptr_t haddr = kuntag(kbase, chainedFixup, start_ptr[i], NULL);
                     kmod_info_t *kmod = addr2ptr(kernel, iaddr);
                     mach_hdr_t  *khdr = addr2ptr(kernel, haddr);
                     if(!kmod)
@@ -4659,7 +4869,7 @@ int main(int argc, const char **argv)
                             mach_seg_t *kseg = (mach_seg_t*)kcmd;
                             if(strcmp("__TEXT_EXEC", kseg->segname) == 0)
                             {
-                                kptr_t vmaddr = kuntag(kbase, x1469, kseg->vmaddr, NULL);
+                                kptr_t vmaddr = kuntag(kbase, chainedFixup, kseg->vmaddr, NULL);
                                 DBG("%s __TEXT_EXEC at " ADDR, kmod->name, vmaddr);
                                 for(size_t j = 0; j < metas.idx; ++j)
                                 {
