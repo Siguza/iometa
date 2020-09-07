@@ -1651,6 +1651,39 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
     return kEmuEnd;
 }
 
+// This is quite possibly the trickiest part: finding the start of the function.
+// At first glance it seems simple: just find the function prologue. But how do you
+// actually detect the first instruction of the prologue? On arm64e kernels there
+// should be a "pacibsp", but on arm64? Is "sub sp, sp, 0x..." or a pre-index store
+// enough? But either way, there are functions that just rearrange some args and
+// then do a tail call - these functions have no stack frame whatsoever. And
+// at some point clang also started what I call "late stack frames" which only
+// happen after some early-exit conditions have been passed already, so the prologue
+// is no longer guaranteed to constitute the start of the function.
+// The other approach would be to just seek backwards as long as we hit "linear"
+// instructions, as that would at least constitute one *possible* call path.
+// The nasty issue with that are "noreturn" functions like panic and __stack_chk_fail.
+// Those are excruciatingly often ordered right before the following function like so:
+//
+//      ldp x29, x30, [sp, 0x10]
+//      add sp, sp, 0x20
+//      ret
+//      adrp x0, 0x...
+//      add x0, x0, 0x...
+//      bl sym.panic
+//      sub sp, sp, 0x20
+//      stp x29, x30, [sp, 0x10]
+//      add x29, sp, 0x10
+//
+// Without more information on the function called by such a "bl", we simply don't know
+// whether that function can/will return or not. There is but one assumption we can make:
+// We can assume function calls are only made inside stack frames, because "bl" will
+// otherwise corrupt x30. So we simply keep track of whether we have a stack frame
+// (or more precisely, whether x30 was stashed away) by looking out for "ldp/stp x29, x30"
+// when seeking backwards. As long as we're inside a stack frame, "bl" are assumed to be
+// part of the function, once we leave it, they are no longer considered to be "linear".
+// We also always start seeking backwards from a function call, and in the case of "bl"
+// we assume we have a stack frame, in the case of "b" we assume we do not.
 static uint32_t* find_function_start(void *kernel, mach_seg_t *seg, const char *name, uint32_t *fnstart, bool have_stack_frame)
 {
     while(1)
@@ -1697,39 +1730,6 @@ static bool multi_call_emulate(void *kernel, uint32_t *fncall, uint32_t *end, a6
     mach_seg_t *seg = seg4ptr(kernel, fncall);
     kptr_t fncalladdr = seg->vmaddr + ((uintptr_t)fncall - ((uintptr_t)kernel + seg->fileoff));
 
-    // This is quite possibly the trickiest part: finding the start of the function.
-    // At first glance it seems simple: just find the function prologue. But how do you
-    // actually detect the first instruction of the prologue? On arm64e kernels there
-    // should be a "pacibsp", but on arm64? Is "sub sp, sp, 0x..." or a pre-index store
-    // enough? But either way, there are functions that just rearrange some args and
-    // then do a tail call - these functions have no stack frame whatsoever. And
-    // at some point clang also started what I call "late stack frames" which only
-    // happen after some early-exit conditions have been passed already, so the prologue
-    // is no longer guaranteed to constitute the start of the function.
-    // The other approach would be to just seek backwards as long as we hit "linear"
-    // instructions, as that would at least constitute one *possible* call path.
-    // The nasty issue with that are "noreturn" functions like panic and __stack_chk_fail.
-    // Those are excruciatingly often ordered right before the following function like so:
-    //
-    //      ldp x29, x30, [sp, 0x10]
-    //      add sp, sp, 0x20
-    //      ret
-    //      adrp x0, 0x...
-    //      add x0, x0, 0x...
-    //      bl sym.panic
-    //      sub sp, sp, 0x20
-    //      stp x29, x30, [sp, 0x10]
-    //      add x29, sp, 0x10
-    //
-    // Without more information on the function called by such a "bl", we simply don't know
-    // whether that function can/will return or not. There is but one assumption we can make:
-    // We can assume function calls are only made inside stack frames, because "bl" will
-    // otherwise corrupt x30. So we simply keep track of whether we have a stack frame
-    // (or more precisely, whether x30 was stashed away) by looking out for "ldp/stp x29, x30"
-    // when seeking backwards. As long as we're inside a stack frame, "bl" are assumed to be
-    // part of the function, once we leave it, they are no longer considered to be "linear".
-    // We also always start seeking backwards from a function call, and in the case of "bl"
-    // we assume we have a stack frame, in the case of "b" we assume we do not.
     bool have_stack_frame;
     bl_t *bl = (bl_t*)fncall;
     if(is_bl(bl))
