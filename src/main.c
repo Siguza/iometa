@@ -283,7 +283,7 @@ typedef enum
     DYLD_CHAINED_PTR_NONE                       = 0,
     DYLD_CHAINED_PTR_ARM64E                     = 1,
     DYLD_CHAINED_PTR_64_KERNEL_CACHE            = 8,
-} fixup_type_t;
+} fixup_kind_t;
 
 #define FOREACH_CMD(_hdr, _cmd) \
 for( \
@@ -488,18 +488,29 @@ typedef union
     {
         int64_t lo  : 51,
                 hi  : 13;
-    };
+    } raw;
     struct
     {
         kptr_t off  : 32,
-               pac  : 16,
+               div  : 16,
                tag  :  1,
                dkey :  1,
                bkey :  1,
                next : 11,
                bind :  1,
                auth :  1;
-    };
+    } pac;
+    struct
+    {
+        kptr_t target : 30,
+               cache  :  2,
+               div    : 16,
+               tag    :  1,
+               dkey   :  1,
+               bkey   :  1,
+               next   : 12,
+               auth   :  1;
+    } cache;
 } pacptr_t;
 
 typedef struct
@@ -542,9 +553,9 @@ static int compare_addrs(const void *a, const void *b)
     return adda < addb ? -1 : 1;
 }
 
-#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!chainedFixup && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
+#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (fixupKind != DYLD_CHAINED_PTR_NONE && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
 
-static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, bool chainedFixup, bool have_plk_text_exec, char **exreloc, size_t nexreloc, kptr_t exreloc_min, const char *sym)
+static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fixupKind, bool have_plk_text_exec, char **exreloc, size_t nexreloc, kptr_t exreloc_min, const char *sym)
 {
     kptr_t relocAddr = 0;
     for(size_t i = 0; i < nexreloc; ++i)
@@ -594,18 +605,31 @@ static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, bool chainedFix
     return 0;
 }
 
-static kptr_t kuntag(kptr_t kbase, bool chainedFixup, kptr_t ptr, uint16_t *pac)
+static kptr_t kuntag(kptr_t kbase, fixup_kind_t fixupKind, kptr_t ptr, uint16_t *pac)
 {
     pacptr_t pp;
     pp.ptr = ptr;
-    if(chainedFixup)
+    if(fixupKind == DYLD_CHAINED_PTR_ARM64E)
     {
-        if(pp.auth)
+        if(pp.pac.auth)
         {
-            if(pac) *pac = pp.tag ? pp.pac : 0;
-            return kbase + pp.off;
+            if(pac) *pac = pp.pac.tag ? pp.pac.div : 0;
+            return kbase + pp.pac.off;
         }
-        pp.ptr = (kptr_t)pp.lo;
+        pp.ptr = (kptr_t)pp.raw.lo;
+    }
+    else if(fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE)
+    {
+        if(pp.cache.auth)
+        {
+            if(pp.cache.cache == 0)
+            {
+                if(pac) *pac = pp.cache.tag ? pp.cache.div : 0;
+                return kbase + pp.cache.target;
+            }
+            pp.raw.lo = 0;
+        }
+        pp.ptr = (kptr_t)pp.raw.lo;
     }
     if(pac) *pac = 0;
     return pp.ptr;
@@ -723,15 +747,17 @@ static bool is_fixup_start(void *kernel, void *ptr)
     return false;
 }
 
-static bool is_part_of_vtab(void *kernel, bool chainedFixup, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, kptr_t exreloc_min, kptr_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+static bool is_part_of_vtab(void *kernel, fixup_kind_t fixupKind, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, kptr_t exreloc_min, kptr_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
 {
     if(idx == 0)
     {
         return true;
     }
-    if(chainedFixup)
+    if(fixupKind != DYLD_CHAINED_PTR_NONE)
     {
-        size_t skip = ((pacptr_t*)vtab)[idx - 1].next * sizeof(uint32_t);
+        pacptr_t *pp = (pacptr_t*)&vtab[idx - 1];
+        uint64_t off = fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE ? pp->cache.next : pp->pac.next;
+        size_t skip = off * sizeof(uint32_t);
         if(skip == sizeof(kptr_t))
         {
             return true;
@@ -778,7 +804,7 @@ static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str
     }
 }
 
-static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_t kbase, bool chainedFixup, bool have_plk_text_exec, void *arr, kptr_t func)
+static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_t kbase, fixup_kind_t fixupKind, bool have_plk_text_exec, void *arr, kptr_t func)
 {
     if(hdr->filetype != MH_KEXT_BUNDLE)
     {
@@ -791,7 +817,7 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
         } *aliases = arr;
         for(kptr_t *mem = kernel, *end = (kptr_t*)((uintptr_t)kernel + kernelsize); mem < end; ++mem)
         {
-            if(kuntag(kbase, chainedFixup, *mem, NULL) == func)
+            if(kuntag(kbase, fixupKind, *mem, NULL) == func)
             {
                 kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                 DBG("ref: " ADDR, ref);
@@ -2113,7 +2139,7 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
                 }
                 if(strcmp("__TEXT", seg->segname) == 0 && strcmp("__thread_starts", secs[h].sectname) == 0)
                 {
-                    if(secs[h].size % 4 != 0)
+                    if(secs[h].size % sizeof(uint32_t) != 0)
                     {
                         if(name) ERR("Embedded Mach-O chained fixup section has bad size: 0x%llx (%s)", secs[h].size, name);
                         else     ERR("Mach-O chained fixup section has bad size: 0x%llx", secs[h].size);
@@ -2187,6 +2213,15 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
                 ERR("Mach-O file entry out of bounds.");
                 return -1;
             }
+            void *embedded = macho;
+            size_t embeddedsize = machosize;
+            mach_hdr_t *mh = (void*)((uintptr_t)macho + ent->fileoff);
+            const char *name = (const char*)((uintptr_t)ent + ent->nameoff);
+            int r = validate_macho(&embedded, &embeddedsize, &mh, name);
+            if(r != 0)
+            {
+                return r;
+            }
         }
         else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
         {
@@ -2259,7 +2294,7 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
                     {
                         continue;
                     }
-                    if(idx % 4 != 0)
+                    if(idx % sizeof(uint32_t) != 0)
                     {
                         ERR("Mach-O fixup chain misaligned: 0x%x (%u, %u)", idx, i, j);
                         return -1;
@@ -2844,7 +2879,7 @@ static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t 
     }
 }
 
-static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool chainedFixup, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
+static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
 {
     const char *name = NULL;
     uint32_t *fncall = NULL;
@@ -2853,7 +2888,7 @@ static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool cha
         name = addr2ptr(kernel, state->x[1]);
         if(!name)
         {
-            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, chainedFixup, state->x[1], NULL));
+            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, fixupKind, state->x[1], NULL));
             ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
             exit(-1);
         }
@@ -2937,7 +2972,7 @@ static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool cha
     }
 }
 
-static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool chainedFixup, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
+static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
 {
     const char *name = NULL;
     if((state->valid & 0x2) && (state->wide & 0x2))
@@ -2945,7 +2980,7 @@ static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool
         name = addr2ptr(kernel, state->x[1]);
         if(!name)
         {
-            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, chainedFixup, state->x[1], NULL));
+            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, fixupKind, state->x[1], NULL));
             ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
             exit(-1);
         }
@@ -2991,9 +3026,9 @@ static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, bool
     }
 }
 
-typedef void (*constructor_cb_t)(void*, kptr_t, mach_seg_t*, bool, bool, void*, void*, a64_state_t*, uint32_t*, uint32_t*, kptr_t, void*);
+typedef void (*constructor_cb_t)(void*, kptr_t, mach_seg_t*, fixup_kind_t, bool, void*, void*, a64_state_t*, uint32_t*, uint32_t*, kptr_t, void*);
 
-static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, bool chainedFixup, bool have_plk_text_exec, bool want_vtabs, void *arr, void *metas, void *names, constructor_cb_t cb, void *arg)
+static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, fixup_kind_t fixupKind, bool have_plk_text_exec, bool want_vtabs, void *arr, void *metas, void *names, constructor_cb_t cb, void *arg)
 {
     struct
     {
@@ -3025,7 +3060,7 @@ static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, 
                                     a64_state_t state;
                                     if(a64_emulate(kernel, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
                                     {
-                                        cb(kernel, kbase, seg, chainedFixup, want_vtabs, metas, names, &state, fnstart, mem, bladdr, arg);
+                                        cb(kernel, kbase, seg, fixupKind, want_vtabs, metas, names, &state, fnstart, mem, bladdr, arg);
                                     }
                                 }
                                 break;
@@ -3345,13 +3380,14 @@ int main(int argc, const char **argv)
            kbase = 0,
            plk_base = 0,
            pure_virtual = 0;
-    bool chainedFixup = false,
-         have_plk_text_exec = false;
+    fixup_kind_t fixupKind = DYLD_CHAINED_PTR_NONE;
+    bool have_plk_text_exec = false;
     mach_nlist_t *symtab = NULL;
     mach_dstab_t *dstab  = NULL;
     char *strtab         = NULL;
     size_t nsyms         = 0,
-           nexreloc      = 0;
+           nexreloc      = 0,
+           nsetentries   = 0;
     sym_t *asyms         = NULL,
           *bsyms         = NULL;
     char **exreloc      = NULL;
@@ -3380,7 +3416,10 @@ int main(int argc, const char **argv)
                 {
                     if(strcmp("__thread_starts", secs[i].sectname) == 0)
                     {
-                        chainedFixup = secs[i].size > 0;
+                        if(secs[i].size > 0)
+                        {
+                            fixupKind = DYLD_CHAINED_PTR_ARM64E;
+                        }
                         break;
                     }
                 }
@@ -3448,20 +3487,14 @@ int main(int argc, const char **argv)
         }
         else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
         {
-            chainedFixup = true;
+            fixupKind = DYLD_CHAINED_PTR_64_KERNEL_CACHE;
         }
         else if(cmd->cmd == LC_FILESET_ENTRY)
         {
+            ++nsetentries;
             mach_fileent_t *ent = (mach_fileent_t*)cmd;
-            void *macho = kernel;
-            size_t machosize = kernelsize;
             mach_hdr_t *mh = (void*)((uintptr_t)kernel + ent->fileoff);
             const char *name = (const char*)((uintptr_t)ent + ent->nameoff);
-            int r = validate_macho(&macho, &machosize, &mh, name);
-            if(r != 0)
-            {
-                return r;
-            }
             DBG("Processing embedded header of %s", name);
             FOREACH_CMD(mh, lc)
             {
@@ -3472,6 +3505,7 @@ int main(int argc, const char **argv)
                         return -1;
                     }
                 }
+                // TODO: LC_DYSYMTAB
             }
         }
     }
@@ -3530,7 +3564,7 @@ int main(int argc, const char **argv)
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
             DBG("Failed to find OSMetaClassConstructor symbol, trying relocation instead.");
-            OSMetaClassConstructor = find_stub_for_reloc(kernel, hdr, chainedFixup, have_plk_text_exec, exreloc, nexreloc, exreloc_min, "__ZN11OSMetaClassC2EPKcPKS_j");
+            OSMetaClassConstructor = find_stub_for_reloc(kernel, hdr, fixupKind, have_plk_text_exec, exreloc, nexreloc, exreloc_min, "__ZN11OSMetaClassC2EPKcPKS_j");
         }
         else
         {
@@ -3703,17 +3737,17 @@ int main(int argc, const char **argv)
     }
     ARRPUSH(aliases, OSMetaClassConstructor);
 
-    find_imports(kernel, kernelsize, hdr, kbase, chainedFixup, have_plk_text_exec, &aliases, OSMetaClassConstructor);
+    find_imports(kernel, kernelsize, hdr, kbase, fixupKind, have_plk_text_exec, &aliases, OSMetaClassConstructor);
 
     ARRDECL(metaclass_t, metas, NUM_METACLASSES_EXPECT);
     ARRDECL(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
 
-    find_constructor_calls(kernel, hdr, kbase, chainedFixup, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, &constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
+    find_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, &constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
     if(OSMetaClassAltConstructor)
     {
         ARRPUSH(altaliases, OSMetaClassAltConstructor);
-        find_imports(kernel, kernelsize, hdr, kbase, chainedFixup, have_plk_text_exec, &altaliases, OSMetaClassAltConstructor);
-        find_constructor_calls(kernel, hdr, kbase, chainedFixup, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, &alt_constructor_cb, NULL);
+        find_imports(kernel, kernelsize, hdr, kbase, fixupKind, have_plk_text_exec, &altaliases, OSMetaClassAltConstructor);
+        find_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, &alt_constructor_cb, NULL);
     }
 
     // This is a safety check to make sure we're not missing anything.
@@ -3813,7 +3847,7 @@ int main(int argc, const char **argv)
     if(want_vtabs)
     {
         ARRDECLEMPTY(relocrange_t, locreloc);
-        if(!chainedFixup)
+        if(fixupKind == DYLD_CHAINED_PTR_NONE)
         {
             size_t nlocrel = 0,
                    relidx  = 0;
@@ -4232,7 +4266,7 @@ int main(int argc, const char **argv)
             }
             for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
             {
-                if(kuntag(kbase, chainedFixup, ovtab[i], NULL) == OSObjectGetMetaClass)
+                if(kuntag(kbase, fixupKind, ovtab[i], NULL) == OSObjectGetMetaClass)
                 {
                     VtabGetMetaClassIdx = i;
                     DBG("VtabGetMetaClassIdx: 0x%lx", VtabGetMetaClassIdx);
@@ -4414,7 +4448,7 @@ int main(int argc, const char **argv)
                 }
                 for(size_t i = 0; ovtab[i] != 0; ++i)
                 {
-                    if(kuntag(kbase, chainedFixup, ovtab[i], NULL) == pure_virtual)
+                    if(kuntag(kbase, fixupKind, ovtab[i], NULL) == pure_virtual)
                     {
                         VtabAllocIdx = i;
                         DBG("VtabAllocIdx: 0x%lx", VtabAllocIdx);
@@ -4496,7 +4530,7 @@ int main(int argc, const char **argv)
                                                 {
                                                     STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassIdx + 2, seg2->filesize - (VtabGetMetaClassIdx + 2) * sizeof(kptr_t), 1)
                                                     {
-                                                        if(kuntag(kbase, chainedFixup, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
+                                                        if(kuntag(kbase, fixupKind, *mem2, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
                                                         {
                                                             kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
                                                             if(meta->vtab == 0)
@@ -4544,7 +4578,7 @@ int main(int argc, const char **argv)
                     ERR("Metavtab of %s lies outside all segments.", meta->name);
                     return -1;
                 }
-                kptr_t fnaddr = kuntag(kbase, chainedFixup, ovtab[VtabAllocIdx], NULL);
+                kptr_t fnaddr = kuntag(kbase, fixupKind, ovtab[VtabAllocIdx], NULL);
                 if(fnaddr != pure_virtual)
                 {
                     DBG("Got %s::MetaClass::alloc at " ADDR, meta->name, fnaddr);
@@ -4751,7 +4785,7 @@ int main(int argc, const char **argv)
                     goto done;
                 }
                 size_t nmeth = 0;
-                while(is_part_of_vtab(kernel, chainedFixup, locreloc.val, locreloc.idx, exreloc, exreloc_min, exreloc_max, mvtab, meta->vtab, nmeth))
+                while(is_part_of_vtab(kernel, fixupKind, locreloc.val, locreloc.idx, exreloc, exreloc_min, exreloc_max, mvtab, meta->vtab, nmeth))
                 {
                     ++nmeth;
                 }
@@ -4814,7 +4848,7 @@ int main(int argc, const char **argv)
                     }
                     else
                     {
-                        func = kuntag(kbase, chainedFixup, mvtab[idx], &pac);
+                        func = kuntag(kbase, fixupKind, mvtab[idx], &pac);
                         cxx_sym = find_sym_by_addr(func, asyms, nsyms);
                         overrides = !pent || func != pent->addr;
                     }
@@ -5007,7 +5041,101 @@ int main(int argc, const char **argv)
             }
             __kernel__ = kmod->name;
         }
-        else
+        else if(hdr->filetype == MH_FILESET)
+        {
+            if(filt_bundle && !bundleList)
+            {
+                bundleList = malloc(nsetentries * sizeof(*bundleList));
+                if(!bundleList)
+                {
+                    ERRNO("malloc(bundleList)");
+                    return -1;
+                }
+            }
+            FOREACH_CMD(hdr, cmd)
+            {
+                if(cmd->cmd == LC_FILESET_ENTRY)
+                {
+                    mach_fileent_t *ent = (mach_fileent_t*)cmd;
+                    mach_hdr_t *mh = (void*)((uintptr_t)kernel + ent->fileoff);
+                    const char *name = (const char*)((uintptr_t)ent + ent->nameoff);
+                    kptr_t iaddr = 0;
+                    FOREACH_CMD(mh, lc)
+                    {
+                        if(lc->cmd == LC_SYMTAB)
+                        {
+                            mach_stab_t *stab = (mach_stab_t*)lc;
+                            mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
+                            char *strtab = (char*)((uintptr_t)kernel + stab->stroff);
+                            for(size_t i = 0; i < stab->nsyms; ++i)
+                            {
+                                if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
+                                {
+                                    continue;
+                                }
+                                if(strcmp("_kmod_info", &strtab[symtab[i].n_strx]) == 0)
+                                {
+                                    iaddr = symtab[i].n_value;
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    if(!iaddr)
+                    {
+                        WRN("No kmod_info for %s", name);
+                        continue;
+                    }
+                    kmod_info_t *kmod = addr2ptr(kernel, iaddr);
+                    if(!kmod)
+                    {
+                        WRN("Failed to translate kext kmod address " ADDR, iaddr);
+                        continue;
+                    }
+                    const char *str = kmod->name;
+                    if(strcmp("com.apple.kernel", name) == 0 && strcmp("invalid", str) == 0)
+                    {
+                        str = __kernel__;
+                    }
+                    if(bundleList)
+                    {
+                        bundleList[bundleIdx++] = str;
+                    }
+                    FOREACH_CMD(mh, lc)
+                    {
+                        if(lc->cmd == MACH_SEGMENT)
+                        {
+                            mach_seg_t *kseg = (mach_seg_t*)lc;
+                            if(strcmp("__TEXT_EXEC", kseg->segname) == 0)
+                            {
+                                kptr_t vmaddr = kseg->vmaddr;
+                                DBG("%s __TEXT_EXEC at " ADDR, str, vmaddr);
+                                for(size_t j = 0; j < metas.idx; ++j)
+                                {
+                                    metaclass_t *meta = &metas.val[j];
+                                    if(meta->callsite >= vmaddr && meta->callsite < vmaddr + kseg->vmsize)
+                                    {
+                                        meta->bundle = str;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for(size_t i = 0; i < metas.idx; ++i)
+            {
+                metaclass_t *meta = &metas.val[i];
+                if(!meta->bundle)
+                {
+                    ERR("Metaclass without a bundle: %s (" ADDR ")", meta->name, meta->callsite);
+                    return -1;
+                }
+            }
+            haveBundles = true;
+        }
+        else if(hdr->filetype == MH_EXECUTE)
         {
             DBG("Looking for kmod info...");
             mach_sec_t *kmod_info  = NULL,
@@ -5054,7 +5182,7 @@ int main(int argc, const char **argv)
                 {
                     if(kmod_start->size == kmod_info->size + sizeof(kptr_t))
                     {
-                        mach_hdr_t *exhdr = addr2ptr(kernel, kuntag(kbase, chainedFixup, start_ptr[kmod_num], NULL));
+                        mach_hdr_t *exhdr = addr2ptr(kernel, kuntag(kbase, fixupKind, start_ptr[kmod_num], NULL));
                         if(exhdr && exhdr->ncmds == 2)
                         {
                             mach_seg_t *exseg = (mach_seg_t*)(exhdr + 1);
@@ -5092,8 +5220,8 @@ int main(int argc, const char **argv)
                 }
                 for(size_t i = 0; i < kmod_num; ++i)
                 {
-                    kptr_t iaddr = kuntag(kbase, chainedFixup, info_ptr[i],  NULL);
-                    kptr_t haddr = kuntag(kbase, chainedFixup, start_ptr[i], NULL);
+                    kptr_t iaddr = kuntag(kbase, fixupKind, info_ptr[i],  NULL);
+                    kptr_t haddr = kuntag(kbase, fixupKind, start_ptr[i], NULL);
                     kmod_info_t *kmod = addr2ptr(kernel, iaddr);
                     mach_hdr_t  *khdr = addr2ptr(kernel, haddr);
                     if(!kmod)
@@ -5118,7 +5246,7 @@ int main(int argc, const char **argv)
                             mach_seg_t *kseg = (mach_seg_t*)kcmd;
                             if(strcmp("__TEXT_EXEC", kseg->segname) == 0)
                             {
-                                kptr_t vmaddr = kuntag(kbase, chainedFixup, kseg->vmaddr, NULL);
+                                kptr_t vmaddr = kuntag(kbase, fixupKind, kseg->vmaddr, NULL);
                                 DBG("%s __TEXT_EXEC at " ADDR, kmod->name, vmaddr);
                                 for(size_t j = 0; j < metas.idx; ++j)
                                 {
@@ -5169,7 +5297,7 @@ int main(int argc, const char **argv)
                     }
                 }
             }
-            if(hdr->filetype != MH_KEXT_BUNDLE)
+            if(hdr->filetype == MH_EXECUTE)
             {
                 if(!prelink_info) prelink_info = get_prelink_info(hdr);
                 if(!prelink_info) return -1;
@@ -5280,7 +5408,10 @@ int main(int argc, const char **argv)
                 ERR("Failed to find kext info.");
                 return -1;
             }
-            bundleList[bundleIdx++] = __kernel__;
+            if(hdr->filetype != MH_FILESET)
+            {
+                bundleList[bundleIdx++] = __kernel__;
+            }
             // Exact match
             for(size_t i = 0; i < bundleIdx; ++i)
             {
