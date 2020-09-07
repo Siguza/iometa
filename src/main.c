@@ -534,6 +534,141 @@ typedef struct
              _reserved : 16;
 } opt_t;
 
+static int map_file(const char *file, int prot, void **addrp, size_t *lenp)
+{
+    int retval = -1;
+
+    int fd = open(file, O_RDONLY);
+    if(fd == -1)
+    {
+        ERRNO("open(%s)", file);
+        goto out;
+    }
+
+    struct stat s;
+    if(fstat(fd, &s) != 0)
+    {
+        ERRNO("fstat(%s)", file);
+        goto out;
+    }
+
+    size_t len = s.st_size;
+    void *addr = mmap(NULL, len + 1, prot, MAP_PRIVATE, fd, 0); // +1 so that space afterwards is zero-filled
+    if(addr == MAP_FAILED)
+    {
+        ERRNO("mmap(%s)", file);
+        goto out;
+    }
+
+    if(addrp) *addrp = addr;
+    if(lenp)  *lenp = len;
+    retval = 0;
+
+out:;
+    // Always close fd - mapped mem will live on
+    if(fd != 0)
+    {
+        close(fd);
+    }
+    return retval;
+}
+
+static int compare_candidates(const void *a, const void *b)
+{
+    const metaclass_candidate_t *x = (const metaclass_candidate_t*)a,
+                                *y = (const metaclass_candidate_t*)b;
+    int r = strcmp(x->name, y->name);
+    return r != 0 ? r : !x->fncall - !y->fncall;
+}
+
+static int compare_names(const void *a, const void *b)
+{
+    const metaclass_t *x = *(const metaclass_t**)a,
+                      *y = *(const metaclass_t**)b;
+    int r;
+    if(!x->name || !y->name)
+    {
+        r = !!x->name - !!y->name;
+    }
+    else
+    {
+        r = strcmp(x->name, y->name);
+    }
+    return r;
+}
+
+static int compare_bundles(const void *a, const void *b)
+{
+    const metaclass_t *x = *(const metaclass_t**)a,
+                      *y = *(const metaclass_t**)b;
+    int r;
+    if(!x->bundle || !y->bundle)
+    {
+        r = !!x->bundle - !!y->bundle;
+    }
+    else
+    {
+        r = strcmp(x->bundle, y->bundle);
+    }
+    return r != 0 ? r : compare_names(a, b);
+}
+
+static int compare_sym_addrs(const void *a, const void *b)
+{
+    kptr_t adda = ((const sym_t*)a)->addr,
+           addb = ((const sym_t*)b)->addr;
+    if(adda == addb) return 0;
+    return adda < addb ? -1 : 1;
+}
+
+static int compare_sym_names(const void *a, const void *b)
+{
+    const sym_t *syma = a,
+                *symb = b;
+    return strcmp(syma->name, symb->name);
+}
+
+static int compare_sym_addr(const void *a, const void *b)
+{
+    kptr_t adda = *(const kptr_t*)a,
+           addb = ((const sym_t*)b)->addr;
+    if(adda == addb) return 0;
+    return adda < addb ? -1 : 1;
+}
+
+static int compare_sym_name(const void *a, const void *b)
+{
+    const char *name = a;
+    const sym_t *sym = b;
+    return strcmp(name, sym->name);
+}
+
+static int compare_symclass(const void *a, const void *b)
+{
+    const symmap_class_t *cla = a,
+                         *clb = b;
+    return strcmp(cla->name, clb->name);
+}
+
+static int compare_symclass_name(const void *a, const void *b)
+{
+    const char *key = a;
+    const symmap_class_t *cls = b;
+    return strcmp(key, cls->name);
+}
+
+static const char* find_sym_by_addr(kptr_t addr, sym_t *asyms, size_t nsyms)
+{
+    sym_t *sym = bsearch(&addr, asyms, nsyms, sizeof(*asyms), &compare_sym_addr);
+    return sym ? sym->name : NULL;
+}
+
+static kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms)
+{
+    sym_t *sym = bsearch(name, bsyms, nsyms, sizeof(*bsyms), &compare_sym_name);
+    return sym ? sym->addr : 0;
+}
+
 static int compare_range(const void *a, const void *b)
 {
     const relocrange_t *range = b;
@@ -555,21 +690,12 @@ static int compare_addrs(const void *a, const void *b)
 
 #define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (fixupKind == DYLD_CHAINED_PTR_NONE && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
 
-static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fixupKind, bool have_plk_text_exec, char **exreloc, size_t nexreloc, kptr_t exreloc_min, const char *sym)
+static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fixupKind, bool have_plk_text_exec, sym_t *exreloc, size_t nexreloc, const char *sym)
 {
-    kptr_t relocAddr = 0;
-    for(size_t i = 0; i < nexreloc; ++i)
-    {
-        const char *name = exreloc[i];
-        if(name && strcmp(name, sym) == 0)
-        {
-            relocAddr = i * sizeof(kptr_t) + exreloc_min;
-            DBG("Found reloc for %s at " ADDR, sym, relocAddr);
-            break;
-        }
-    }
+    kptr_t relocAddr = find_sym_by_name(sym, exreloc, nexreloc);
     if(relocAddr)
     {
+        DBG("Found reloc for %s at " ADDR, sym, relocAddr);
         FOREACH_CMD(hdr, cmd)
         {
             if(cmd->cmd == MACH_SEGMENT)
@@ -747,7 +873,7 @@ static bool is_fixup_start(void *kernel, void *ptr)
     return false;
 }
 
-static bool is_part_of_vtab(void *kernel, fixup_kind_t fixupKind, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, kptr_t exreloc_min, kptr_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+static bool is_part_of_vtab(void *kernel, fixup_kind_t fixupKind, relocrange_t *locreloc, size_t nlocreloc, sym_t *exreloc, size_t nexreloc, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
 {
     if(idx == 0)
     {
@@ -772,7 +898,8 @@ static bool is_part_of_vtab(void *kernel, fixup_kind_t fixupKind, relocrange_t *
     else
     {
         kptr_t val = vtabaddr + sizeof(kptr_t) * idx;
-        if(val >= exreloc_min && val < exreloc_max && exreloc[(val - exreloc_min) / sizeof(kptr_t)] != NULL)
+        const char *sym = find_sym_by_addr(val, exreloc, nexreloc);
+        if(sym)
         {
             return true;
         }
@@ -1809,132 +1936,6 @@ static bool multi_call_emulate(void *kernel, uint32_t *fncall, uint32_t *end, a6
     return false;
 }
 
-#if 0
-static int compare_strings(const void *a, const void *b)
-{
-    return strcmp(*(char * const*)a, *(char * const*)b);
-}
-#endif
-
-static int compare_candidates(const void *a, const void *b)
-{
-    const metaclass_candidate_t *x = (const metaclass_candidate_t*)a,
-                                *y = (const metaclass_candidate_t*)b;
-    int r = strcmp(x->name, y->name);
-    return r != 0 ? r : !x->fncall - !y->fncall;
-}
-
-static int compare_names(const void *a, const void *b)
-{
-    const metaclass_t *x = *(const metaclass_t**)a,
-                      *y = *(const metaclass_t**)b;
-    int r;
-    if(!x->name || !y->name)
-    {
-        r = !!x->name - !!y->name;
-    }
-    else
-    {
-        r = strcmp(x->name, y->name);
-    }
-    return r;
-}
-
-static int compare_bundles(const void *a, const void *b)
-{
-    const metaclass_t *x = *(const metaclass_t**)a,
-                      *y = *(const metaclass_t**)b;
-    int r;
-    if(!x->bundle || !y->bundle)
-    {
-        r = !!x->bundle - !!y->bundle;
-    }
-    else
-    {
-        r = strcmp(x->bundle, y->bundle);
-    }
-    return r != 0 ? r : compare_names(a, b);
-}
-
-#if 0
-static int compare_inheritance(const void *a, const void *b)
-{
-    const metaclass_t *x = *(const metaclass_t**)a,
-                      *y = *(const metaclass_t**)b;
-    for(const metaclass_t *p = y->parentP; p; p = p->parentP)
-    {
-        if(x == p)
-        {
-            return -1;
-        }
-    }
-    for(const metaclass_t *p = x->parentP; p; p = p->parentP)
-    {
-        if(y == p)
-        {
-            return 1;
-        }
-    }
-    return 0;
-}
-#endif
-
-static int compare_sym_addrs(const void *a, const void *b)
-{
-    kptr_t adda = ((const sym_t*)a)->addr,
-           addb = ((const sym_t*)b)->addr;
-    if(adda == addb) return 0;
-    return adda < addb ? -1 : 1;
-}
-
-static int compare_sym_names(const void *a, const void *b)
-{
-    const sym_t *syma = a,
-                *symb = b;
-    return strcmp(syma->name, symb->name);
-}
-
-static int compare_sym_addr(const void *a, const void *b)
-{
-    kptr_t adda = *(const kptr_t*)a,
-           addb = ((const sym_t*)b)->addr;
-    if(adda == addb) return 0;
-    return adda < addb ? -1 : 1;
-}
-
-static int compare_sym_name(const void *a, const void *b)
-{
-    const char *name = a;
-    const sym_t *sym = b;
-    return strcmp(name, sym->name);
-}
-
-static int compare_symclass(const void *a, const void *b)
-{
-    const symmap_class_t *cla = a,
-                         *clb = b;
-    return strcmp(cla->name, clb->name);
-}
-
-static int compare_symclass_name(const void *a, const void *b)
-{
-    const char *key = a;
-    const symmap_class_t *cls = b;
-    return strcmp(key, cls->name);
-}
-
-static const char* find_sym_by_addr(kptr_t addr, sym_t *asyms, size_t nsyms)
-{
-    sym_t *sym = bsearch(&addr, asyms, nsyms, sizeof(*asyms), &compare_sym_addr);
-    return sym ? sym->name : NULL;
-}
-
-static kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms)
-{
-    sym_t *sym = bsearch(name, bsyms, nsyms, sizeof(*bsyms), &compare_sym_name);
-    return sym ? sym->addr : 0;
-}
-
 static bool extract_symbols(void *kernel, mach_stab_t *stab, sym_t **symp, size_t *nsymp)
 {
     mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
@@ -1975,43 +1976,32 @@ static bool extract_symbols(void *kernel, mach_stab_t *stab, sym_t **symp, size_
     return true;
 }
 
-static int map_file(const char *file, int prot, void **addrp, size_t *lenp)
+static bool extract_reloc(void *kernel, kptr_t kbase, mach_dstab_t *dstab, mach_nlist_t *symtab, char *strtab, sym_t **exrelocp, size_t *nexrelocp)
 {
-    int retval = -1;
-
-    int fd = open(file, O_RDONLY);
-    if(fd == -1)
+    if(dstab->nextrel > 0)
     {
-        ERRNO("open(%s)", file);
-        goto out;
+        sym_t *exreloc = *exrelocp;
+        size_t nexreloc = *nexrelocp;
+        mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->extreloff);
+        exreloc = realloc(exreloc, (nexreloc + dstab->nextrel) * sizeof(sym_t));
+        if(!exreloc)
+        {
+            ERRNO("malloc(exreloc)");
+            return false;
+        }
+        for(size_t i = 0; i < dstab->nextrel; ++i)
+        {
+            kptr_t addr = kbase + reloc[i].r_address;
+            const char *name = &strtab[symtab[reloc[i].r_symbolnum].n_strx];
+            DBG("Exreloc " ADDR ": %s", addr, name);
+            exreloc[nexreloc].addr = addr;
+            exreloc[nexreloc].name = name;
+            ++nexreloc;
+        }
+        *exrelocp = exreloc;
+        *nexrelocp = nexreloc;
     }
-
-    struct stat s;
-    if(fstat(fd, &s) != 0)
-    {
-        ERRNO("fstat(%s)", file);
-        goto out;
-    }
-
-    size_t len = s.st_size;
-    void *addr = mmap(NULL, len + 1, prot, MAP_PRIVATE, fd, 0); // +1 so that space afterwards is zero-filled
-    if(addr == MAP_FAILED)
-    {
-        ERRNO("mmap(%s)", file);
-        goto out;
-    }
-
-    if(addrp) *addrp = addr;
-    if(lenp)  *lenp = len;
-    retval = 0;
-
-out:;
-    // Always close fd - mapped mem will live on
-    if(fd != 0)
-    {
-        close(fd);
-    }
-    return retval;
+    return true;
 }
 
 static int validate_fat(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const char *name)
@@ -2198,7 +2188,23 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
                 else     ERR("Mach-O dsymtab out of bounds.");
                 return -1;
             }
-            // TODO: verify dstab entries as well
+            mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)macho + dstab->extreloff);
+            for(size_t i = 0; i < dstab->nextrel; ++i)
+            {
+                if(!reloc[i].r_extern)
+                {
+                    if(name) ERR("Embedded Mach-O external relocation entry %lu at 0x%x does not have external bit set (%s).", i, reloc[i].r_address, name);
+                    else     ERR("Mach-O external relocation entry %lu at 0x%x does not have external bit set.", i, reloc[i].r_address);
+                    return -1;
+                }
+                if(reloc[i].r_length != 0x3)
+                {
+                    if(name) ERR("Embedded Mach-O external relocation entry %lu at 0x%x is not 8 bytes (%s).", i, reloc[i].r_address, name);
+                    else     ERR("Mach-O external relocation entry %lu at 0x%x is not 8 bytes.", i, reloc[i].r_address);
+                    return -1;
+                }
+            }
+            // TODO: verify locreloc
         }
         else if(cmd->cmd == LC_FILESET_ENTRY)
         {
@@ -3383,15 +3389,15 @@ int main(int argc, const char **argv)
     fixup_kind_t fixupKind = DYLD_CHAINED_PTR_NONE;
     bool have_plk_text_exec = false;
     mach_nlist_t *symtab = NULL;
-    mach_dstab_t *dstab  = NULL;
     char *strtab         = NULL;
+    mach_dstab_t *dstab  = NULL;
     size_t nsyms         = 0,
            nexreloc      = 0,
            nsetentries   = 0;
     sym_t *asyms         = NULL,
-          *bsyms         = NULL;
-    char **exreloc      = NULL;
-    kptr_t exreloc_min = ~0, exreloc_max = 0;
+          *bsyms         = NULL,
+          *exrelocA      = NULL,
+          *exrelocB      = NULL;
     FOREACH_CMD(hdr, cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
@@ -3437,51 +3443,13 @@ int main(int argc, const char **argv)
         }
         else if(cmd->cmd == LC_DYSYMTAB)
         {
-            dstab = (mach_dstab_t*)cmd;
             // Imports for kexts
             if(hdr->filetype == MH_KEXT_BUNDLE)
             {
-                mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->extreloff);
-                for(size_t i = 0; i < dstab->nextrel; ++i)
+                dstab = (mach_dstab_t*)cmd;
+                if(!extract_reloc(kernel, kbase, dstab, symtab, strtab, &exrelocA, &nexreloc))
                 {
-                    kptr_t addr = kbase + reloc[i].r_address;
-                    if(!reloc[i].r_extern)
-                    {
-                        ERR("External relocation entry %lu at " ADDR " does not have external bit set.", i, addr);
-                        return -1;
-                    }
-                    if(reloc[i].r_length != 0x3)
-                    {
-                        ERR("External relocation entry %lu at " ADDR " is not 8 bytes.", i, addr);
-                        return -1;
-                    }
-                    DBG("Exreloc " ADDR ": %s", addr, &strtab[symtab[reloc[i].r_symbolnum].n_strx]);
-                    if(addr < exreloc_min)
-                    {
-                        exreloc_min = addr;
-                    }
-                    if(addr > exreloc_max)
-                    {
-                        exreloc_max = addr;
-                    }
-                }
-                if(exreloc_min < exreloc_max)
-                {
-                    DBG("exreloc range: " ADDR "-" ADDR, exreloc_min, exreloc_max);
-                    exreloc_max += sizeof(kptr_t);
-                    nexreloc = (exreloc_max - exreloc_min) / sizeof(kptr_t);
-                    size_t relocsize = sizeof(char*) * nexreloc;
-                    exreloc = malloc(relocsize);
-                    if(!exreloc)
-                    {
-                        ERRNO("malloc(exreloc)");
-                        return -1;
-                    }
-                    bzero(exreloc, relocsize);
-                    for(size_t i = 0; i < dstab->nextrel; ++i)
-                    {
-                        exreloc[(kbase + reloc[i].r_address - exreloc_min) / sizeof(kptr_t)] = &strtab[symtab[reloc[i].r_symbolnum].n_strx];
-                    }
+                    return -1;
                 }
             }
         }
@@ -3496,16 +3464,28 @@ int main(int argc, const char **argv)
             mach_hdr_t *mh = (void*)((uintptr_t)kernel + ent->fileoff);
             const char *name = (const char*)((uintptr_t)ent + ent->nameoff);
             DBG("Processing embedded header of %s", name);
+            // Redefine these in scope only for this entry
+            mach_nlist_t *symtab = NULL;
+            char *strtab         = NULL;
             FOREACH_CMD(mh, lc)
             {
                 if(lc->cmd == LC_SYMTAB)
                 {
-                    if(!extract_symbols(kernel, (mach_stab_t*)lc, &asyms, &nsyms))
+                    mach_stab_t *stab = (mach_stab_t*)lc;
+                    symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
+                    strtab = (char*)((uintptr_t)kernel + stab->stroff);
+                    if(!extract_symbols(kernel, stab, &asyms, &nsyms))
                     {
                         return -1;
                     }
                 }
-                // TODO: LC_DYSYMTAB
+                else if(lc->cmd == LC_DYSYMTAB)
+                {
+                    if(!extract_reloc(kernel, kbase, (mach_dstab_t*)lc, symtab, strtab, &exrelocA, &nexreloc))
+                    {
+                        return -1;
+                    }
+                }
             }
         }
     }
@@ -3559,12 +3539,26 @@ int main(int argc, const char **argv)
         }
     }
 
+    DBG("Got %lu exreloc entries", nexreloc);
+    if(nexreloc > 0)
+    {
+        exrelocB = malloc(sizeof(sym_t) * nexreloc);
+        if(!exrelocB)
+        {
+            ERRNO("malloc(exreloc)");
+            return -1;
+        }
+        memcpy(exrelocB, exrelocA, nexreloc * sizeof(sym_t));
+        qsort(exrelocA, nexreloc, sizeof(*exrelocA), &compare_sym_addrs);
+        qsort(exrelocB, nexreloc, sizeof(*exrelocB), &compare_sym_names);
+    }
+
     if(!OSMetaClassConstructor)
     {
         if(hdr->filetype == MH_KEXT_BUNDLE)
         {
             DBG("Failed to find OSMetaClassConstructor symbol, trying relocation instead.");
-            OSMetaClassConstructor = find_stub_for_reloc(kernel, hdr, fixupKind, have_plk_text_exec, exreloc, nexreloc, exreloc_min, "__ZN11OSMetaClassC2EPKcPKS_j");
+            OSMetaClassConstructor = find_stub_for_reloc(kernel, hdr, fixupKind, have_plk_text_exec, exrelocB, nexreloc, "__ZN11OSMetaClassC2EPKcPKS_j");
         }
         else
         {
@@ -4657,7 +4651,7 @@ int main(int argc, const char **argv)
                     goto done;
                 }
                 size_t nmeth = 0;
-                while(is_part_of_vtab(kernel, fixupKind, locreloc.val, locreloc.idx, exreloc, exreloc_min, exreloc_max, mvtab, meta->vtab, nmeth))
+                while(is_part_of_vtab(kernel, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, mvtab, meta->vtab, nmeth))
                 {
                     ++nmeth;
                 }
@@ -4710,13 +4704,14 @@ int main(int argc, const char **argv)
                     bool structor      = false,
                          authoritative = false,
                          placeholder   = false,
-                         overrides     = false;
+                         overrides     = false,
+                         is_in_exreloc = false;
 
                     kptr_t koff = meta->vtab + sizeof(kptr_t) * idx;
-                    bool is_in_exreloc = koff >= exreloc_min && koff < exreloc_max && exreloc[(koff - exreloc_min) / sizeof(kptr_t)] != NULL;
-                    if(is_in_exreloc)
+                    cxx_sym = find_sym_by_addr(koff, exrelocA, nexreloc);
+                    if(cxx_sym)
                     {
-                        cxx_sym = exreloc[(koff - exreloc_min) / sizeof(kptr_t)];
+                        is_in_exreloc = true;
                     }
                     else
                     {
