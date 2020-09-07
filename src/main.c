@@ -553,7 +553,7 @@ static int compare_addrs(const void *a, const void *b)
     return adda < addb ? -1 : 1;
 }
 
-#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (fixupKind != DYLD_CHAINED_PTR_NONE && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
+#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (fixupKind == DYLD_CHAINED_PTR_NONE && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
 
 static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fixupKind, bool have_plk_text_exec, char **exreloc, size_t nexreloc, kptr_t exreloc_min, const char *sym)
 {
