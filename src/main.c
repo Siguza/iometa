@@ -104,7 +104,7 @@ static const char *colorGray   = "\x1b[90m",
 #define N_STAB                            0xe0
 #define N_TYPE                            0x0e
 #define N_EXT                             0x01
-#define N_UNDF                             0x0
+#define N_SECT                            0x0e
 struct fat_header
 {
     uint32_t magic;
@@ -195,6 +195,13 @@ struct dysymtab_command
     uint32_t locreloff;
     uint32_t nlocrel;
 };
+struct linkedit_data_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint32_t dataoff;
+    uint32_t datasize;
+};
 struct uuid_command
 {
     uint32_t cmd;
@@ -226,23 +233,57 @@ struct relocation_info
             r_extern    :  1,
             r_type      :  4;
 };
+struct dyld_chained_fixups_header
+{
+    uint32_t fixups_version;
+    uint32_t starts_offset;
+    uint32_t imports_offset;
+    uint32_t symbols_offset;
+    uint32_t imports_count;
+    uint32_t imports_format;
+    uint32_t symbols_format;
+};
+struct dyld_chained_starts_in_image
+{
+    uint32_t seg_count;
+    uint32_t seg_info_offset[];
+};
+struct dyld_chained_starts_in_segment
+{
+    uint32_t size;
+    uint16_t page_size;
+    uint16_t pointer_format;
+    uint64_t segment_offset;
+    uint32_t max_valid_pointer;
+    uint16_t page_count;
+    uint16_t page_start[];
+};
 
 // My aliases
-#define ADDR                            "0x%016llx"
-#define MACH_MAGIC                      MH_MAGIC_64
-#define MACH_SEGMENT                    LC_SEGMENT_64
-typedef struct fat_header               fat_hdr_t;
-typedef struct fat_arch                 fat_arch_t;
-typedef struct mach_header_64           mach_hdr_t;
-typedef struct load_command             mach_lc_t;
-typedef struct segment_command_64       mach_seg_t;
-typedef struct section_64               mach_sec_t;
-typedef struct symtab_command           mach_stab_t;
-typedef struct dysymtab_command         mach_dstab_t;
-typedef struct fileset_entry_command    mach_fileent_t;
-typedef struct nlist_64                 mach_nlist_t;
-typedef struct relocation_info          mach_reloc_t;
-typedef uint64_t                        kptr_t;
+#define ADDR                                    "0x%016llx"
+#define MACH_MAGIC                              MH_MAGIC_64
+#define MACH_SEGMENT                            LC_SEGMENT_64
+typedef struct fat_header                       fat_hdr_t;
+typedef struct fat_arch                         fat_arch_t;
+typedef struct mach_header_64                   mach_hdr_t;
+typedef struct load_command                     mach_lc_t;
+typedef struct segment_command_64               mach_seg_t;
+typedef struct section_64                       mach_sec_t;
+typedef struct symtab_command                   mach_stab_t;
+typedef struct dysymtab_command                 mach_dstab_t;
+typedef struct fileset_entry_command            mach_fileent_t;
+typedef struct nlist_64                         mach_nlist_t;
+typedef struct relocation_info                  mach_reloc_t;
+typedef struct dyld_chained_fixups_header       fixup_hdr_t;
+typedef struct dyld_chained_starts_in_image     fixup_seg_t;
+typedef struct dyld_chained_starts_in_segment   fixup_starts_t;
+typedef uint64_t                                kptr_t;
+typedef enum
+{
+    DYLD_CHAINED_PTR_NONE                       = 0,
+    DYLD_CHAINED_PTR_ARM64E                     = 1,
+    DYLD_CHAINED_PTR_64_KERNEL_CACHE            = 8,
+} fixup_type_t;
 
 #define FOREACH_CMD(_hdr, _cmd) \
 for( \
@@ -501,27 +542,6 @@ static int compare_addrs(const void *a, const void *b)
     return adda < addb ? -1 : 1;
 }
 
-static bool is_part_of_vtab(void *kernel, bool chainedFixup, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, kptr_t exreloc_min, kptr_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
-{
-    if(idx == 0)
-    {
-        return true;
-    }
-    if(chainedFixup)
-    {
-        return ((pacptr_t*)vtab)[idx - 1].next * sizeof(uint32_t) == sizeof(kptr_t);
-    }
-    else
-    {
-        kptr_t val = vtabaddr + sizeof(kptr_t) * idx;
-        if(val >= exreloc_min && val < exreloc_max && exreloc[(val - exreloc_min) / sizeof(kptr_t)] != NULL)
-        {
-            return true;
-        }
-        return bsearch(&val, locreloc, nlocreloc, sizeof(*locreloc), &compare_range) != NULL;
-    }
-}
-
 #define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (!chainedFixup && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
 
 static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, bool chainedFixup, bool have_plk_text_exec, char **exreloc, size_t nexreloc, kptr_t exreloc_min, const char *sym)
@@ -640,6 +660,98 @@ static mach_seg_t* seg4ptr(void *kernel, void *ptr)
     }
     ERR("Failed to find segment for ptr 0x%llx", (uint64_t)ptr);
     exit(-1);
+}
+
+static bool is_fixup_start(void *kernel, void *ptr)
+{
+    uint32_t off = (uintptr_t)ptr - (uintptr_t)kernel;
+    FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
+    {
+        if(cmd->cmd == MACH_SEGMENT)
+        {
+            mach_seg_t *seg = (mach_seg_t*)cmd;
+            if(strcmp("__TEXT", seg->segname) == 0)
+            {
+                mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+                for(size_t i = 0; i < seg->nsects; ++i)
+                {
+                    if(strcmp("__thread_starts", secs[i].sectname) == 0)
+                    {
+                        uint32_t *start = (uint32_t*)((uintptr_t)kernel + secs[i].offset),
+                                 *end   = (uint32_t*)((uintptr_t)start  + secs[i].size);
+                        if(end > start)
+                        {
+                            ++start; // TODO: verify this
+                            for(; start < end; ++start)
+                            {
+                                if(*start == 0xffffffff)
+                                {
+                                    break;
+                                }
+                                if(*start == off)
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
+        {
+            struct linkedit_data_command *data = (struct linkedit_data_command*)cmd;
+            fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)kernel + data->dataoff);
+            fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
+            for(uint32_t i = 0; i < segs->seg_count; ++i)
+            {
+                if(segs->seg_info_offset[i] == 0)
+                {
+                    continue;
+                }
+                fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
+                if(off < starts->segment_offset || (off - starts->segment_offset) / starts->page_size >= starts->page_count)
+                {
+                    continue;
+                }
+                uint16_t idx = starts->page_start[(off - starts->segment_offset) / starts->page_size];
+                return idx == (off - starts->segment_offset) % starts->page_size;
+            }
+        }
+    }
+    return false;
+}
+
+static bool is_part_of_vtab(void *kernel, bool chainedFixup, relocrange_t *locreloc, size_t nlocreloc, char **exreloc, kptr_t exreloc_min, kptr_t exreloc_max, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+{
+    if(idx == 0)
+    {
+        return true;
+    }
+    if(chainedFixup)
+    {
+        size_t skip = ((pacptr_t*)vtab)[idx - 1].next * sizeof(uint32_t);
+        if(skip == sizeof(kptr_t))
+        {
+            return true;
+        }
+        if(skip != 0)
+        {
+            return false;
+        }
+        // If skip is == 0, it's possible that a new fixup chain starts right here
+        return is_fixup_start(kernel, &vtab[idx]);
+    }
+    else
+    {
+        kptr_t val = vtabaddr + sizeof(kptr_t) * idx;
+        if(val >= exreloc_min && val < exreloc_max && exreloc[(val - exreloc_min) / sizeof(kptr_t)] != NULL)
+        {
+            return true;
+        }
+        return bsearch(&val, locreloc, nlocreloc, sizeof(*locreloc), &compare_range) != NULL;
+    }
 }
 
 static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str)
@@ -1797,6 +1909,46 @@ static kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms)
     return sym ? sym->addr : 0;
 }
 
+static bool extract_symbols(void *kernel, mach_stab_t *stab, sym_t **symp, size_t *nsymp)
+{
+    mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
+    char *strtab = (char*)((uintptr_t)kernel + stab->stroff);
+    size_t nsyms = *nsymp;
+    for(size_t i = 0; i < stab->nsyms; ++i)
+    {
+        if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
+        {
+            continue;
+        }
+        ++nsyms;
+    }
+    if(nsyms == *nsymp)
+    {
+        return true;
+    }
+    sym_t *syms = realloc(*symp, sizeof(sym_t) * nsyms);
+    if(!syms)
+    {
+        ERRNO("malloc(syms)");
+        return false;
+    }
+    size_t idx = *nsymp;
+    for(size_t i = 0; i < stab->nsyms; ++i)
+    {
+        if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
+        {
+            continue;
+        }
+        syms[idx].addr = symtab[i].n_value;
+        syms[idx].name = &strtab[symtab[i].n_strx];
+        DBG("Symbol: " ADDR " %s", syms[idx].addr, syms[idx].name);
+        ++idx;
+    }
+    *symp = syms;
+    *nsymp = nsyms;
+    return true;
+}
+
 static int map_file(const char *file, int prot, void **addrp, size_t *lenp)
 {
     int retval = -1;
@@ -1930,9 +2082,17 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
         else     ERR("Mach-O header out of bounds.");
         return -1;
     }
+    mach_nlist_t *symtab = NULL;
+    char         *strtab = NULL;
     // TODO: replace header & weed out invalid load commands?
     FOREACH_CMD(hdr, cmd)
     {
+        if(cmd->cmdsize > hdr->sizeofcmds - ((uintptr_t)cmd - (uintptr_t)(hdr + 1)))
+        {
+            if(name) ERR("Embedded Mach-O load command out of bounds (%s).", name);
+            else     ERR("Mach-O load command out of bounds.");
+            return -1;
+        }
         if(cmd->cmd == MACH_SEGMENT)
         {
             mach_seg_t *seg = (mach_seg_t*)cmd;
@@ -1951,6 +2111,25 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
                     else     ERR("Mach-O section out of bounds: %s.%s", secs[h].segname, secs[h].sectname);
                     return -1;
                 }
+                if(strcmp("__TEXT", seg->segname) == 0 && strcmp("__thread_starts", secs[h].sectname) == 0)
+                {
+                    if(secs[h].size % 4 != 0)
+                    {
+                        if(name) ERR("Embedded Mach-O chained fixup section has bad size: 0x%llx (%s)", secs[h].size, name);
+                        else     ERR("Mach-O chained fixup section has bad size: 0x%llx", secs[h].size);
+                        return -1;
+                    }
+                    if(secs[h].size > 0)
+                    {
+                        uint32_t gran = *(uint32_t*)((uintptr_t)macho + secs[h].offset);
+                        if(gran != 0)
+                        {
+                            if(name) ERR("Embedded Mach-O chained fixup has bad granularity: 0x%x (%s)", gran, name);
+                            else     ERR("Mach-O chained fixup has bad granularity: 0x%x", gran);
+                            return -1;
+                        }
+                    }
+                }
             }
         }
         else if(cmd->cmd == LC_SYMTAB)
@@ -1962,10 +2141,11 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
                 else     ERR("Mach-O symtab out of bounds.");
                 return -1;
             }
-            mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)macho + stab->symoff);
+            symtab = (mach_nlist_t*)((uintptr_t)macho + stab->symoff);
+            strtab = (char*)((uintptr_t)macho + stab->stroff);
             for(size_t i = 0; i < stab->nsyms; ++i)
             {
-                if((symtab[i].n_type & N_TYPE) == N_UNDF || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT))) // XXX: eliminate check for verification?
+                if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT))) // XXX: eliminate check for verification?
                 {
                     continue;
                 }
@@ -1979,17 +2159,20 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
         }
         else if(cmd->cmd == LC_DYSYMTAB)
         {
-            mach_dstab_t *dstab = (mach_dstab_t*)cmd;
-            if(hdr->filetype == MH_KEXT_BUNDLE) // XXX: get rid of this too?
+            if(!symtab || !strtab)
             {
-                if(dstab->extreloff > machosize || dstab->nextrel > (machosize - dstab->extreloff) / sizeof(mach_reloc_t))
-                {
-                    if(name) ERR("Embedded Mach-O dsymtab out of bounds (%s).", name);
-                    else     ERR("Mach-O dsymtab out of bounds.");
-                    return -1;
-                }
-                // TODO: verify dstab entries as well
+                if(name) ERR("Embedded Mach-O dsymtab without symtab/strtab (%s).", name);
+                else     ERR("Mach-O dsymtab without symtab/strtab.");
+                return -1;
             }
+            mach_dstab_t *dstab = (mach_dstab_t*)cmd;
+            if(dstab->extreloff > machosize || dstab->nextrel > (machosize - dstab->extreloff) / sizeof(mach_reloc_t))
+            {
+                if(name) ERR("Embedded Mach-O dsymtab out of bounds (%s).", name);
+                else     ERR("Mach-O dsymtab out of bounds.");
+                return -1;
+            }
+            // TODO: verify dstab entries as well
         }
         else if(cmd->cmd == LC_FILESET_ENTRY)
         {
@@ -2003,6 +2186,90 @@ static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, 
             {
                 ERR("Mach-O file entry out of bounds.");
                 return -1;
+            }
+        }
+        else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
+        {
+            if(name)
+            {
+                ERR("Embedded Mach-O has chained fixup load command (%s).", name);
+                return -1;
+            }
+            struct linkedit_data_command *data = (struct linkedit_data_command*)cmd;
+            if(data->datasize < sizeof(fixup_hdr_t))
+            {
+                ERR("Mach-O chained fixup data too small to hold fixup chain header.");
+                return -1;
+            }
+            if(data->dataoff >= machosize || data->datasize >= machosize - data->dataoff)
+            {
+                ERR("Mach-O chained fixup data out of bounds.");
+                return -1;
+            }
+            uintptr_t max = (uintptr_t)macho + data->dataoff + data->datasize;
+            fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)macho + data->dataoff);
+            if(fixup->fixups_version != 0)
+            {
+                ERR("Unsupported chained fixup version: %u", fixup->fixups_version);
+                return -1;
+            }
+            fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
+            if((uintptr_t)segs > max - sizeof(*segs) || segs->seg_count > (max - (uintptr_t)segs->seg_info_offset) / sizeof(segs->seg_info_offset[0]))
+            {
+                ERR("Mach-O chained fixup segments out of bounds.");
+                return -1;
+            }
+            for(uint32_t i = 0; i < segs->seg_count; ++i)
+            {
+                if(segs->seg_info_offset[i] == 0)
+                {
+                    continue;
+                }
+                fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
+                if((uintptr_t)starts > max - sizeof(*starts) || starts->size < sizeof(*starts))
+                {
+                    ERR("Mach-O chained fixup starts out of bounds (%u).", i);
+                    return -1;
+                }
+                uintptr_t end = (uintptr_t)starts + starts->size;
+                if(end > max || (uintptr_t)&starts->page_start[starts->page_count] > end)
+                {
+                    ERR("Mach-O chained fixup starts out of bounds (%u).", i);
+                    return -1;
+                }
+                if(starts->page_size != 0x1000 && starts->page_size != 0x4000)
+                {
+                    ERR("Mach-O chained fixup starts has bad page size: 0x%x (%u)", starts->page_size, i);
+                    return -1;
+                }
+                if(starts->pointer_format != DYLD_CHAINED_PTR_64_KERNEL_CACHE)
+                {
+                    ERR("Unsupported chained fixup pointer format: 0x%x (%u)", starts->pointer_format, i);
+                    return -1;
+                }
+                if(starts->segment_offset > machosize || starts->page_count > (machosize - starts->segment_offset) / starts->page_size)
+                {
+                    ERR("Mach-O chained fixup starts describes a region out of bounds (%u).", i);
+                    return -1;
+                }
+                for(uint16_t j = 0; j < starts->page_count; ++j)
+                {
+                    uint16_t idx = starts->page_start[j];
+                    if(idx == 0xffff)
+                    {
+                        continue;
+                    }
+                    if(idx % 4 != 0)
+                    {
+                        ERR("Mach-O fixup chain misaligned: 0x%x (%u, %u)", idx, i, j);
+                        return -1;
+                    }
+                    if(idx >= starts->page_size)
+                    {
+                        ERR("Mach-O fixup chain out of bounds: 0x%x (%u, %u)", idx, i, j);
+                        return -1;
+                    }
+                }
             }
         }
     }
@@ -3077,7 +3344,6 @@ int main(int argc, const char **argv)
            OSObjectGetMetaClass = 0,
            kbase = 0,
            plk_base = 0,
-           //initcode = 0,
            pure_virtual = 0;
     bool chainedFixup = false,
          have_plk_text_exec = false;
@@ -3099,18 +3365,6 @@ int main(int argc, const char **argv)
             {
                 kbase = seg->vmaddr;
             }
-            /*if(strcmp("__TEXT_EXEC", seg->segname) == 0)
-            {
-                mach_sec_t *secs = (mach_sec_t*)(seg + 1);
-                for(size_t i = 0; i < seg->nsects; ++i)
-                {
-                    if(strcmp("initcode", secs[i].sectname) == 0)
-                    {
-                        initcode = secs[i].addr;
-                        break;
-                    }
-                }
-            }*/
             if(strcmp("__PRELINK_TEXT", seg->segname) == 0)
             {
                 plk_base = seg->vmaddr;
@@ -3137,74 +3391,9 @@ int main(int argc, const char **argv)
             mach_stab_t *stab = (mach_stab_t*)cmd;
             symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
             strtab = (char*)((uintptr_t)kernel + stab->stroff);
-            for(size_t i = 0; i < stab->nsyms; ++i)
+            if(!extract_symbols(kernel, stab, &asyms, &nsyms))
             {
-                if((symtab[i].n_type & N_TYPE) == N_UNDF || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
-                {
-                    continue;
-                }
-                ++nsyms;
-            }
-            asyms = malloc(sizeof(*asyms) * nsyms);
-            if(asyms)
-            {
-                bsyms = malloc(sizeof(*bsyms) * nsyms);
-            }
-            if(!asyms || !bsyms)
-            {
-                ERRNO("malloc(syms)");
                 return -1;
-            }
-            size_t sidx = 0;
-            for(size_t i = 0; i < stab->nsyms; ++i)
-            {
-                if((symtab[i].n_type & N_TYPE) == N_UNDF || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
-                {
-                    continue;
-                }
-                bsyms[sidx].addr = symtab[i].n_value;
-                bsyms[sidx].name = &strtab[symtab[i].n_strx];
-                DBG("Symbol: " ADDR " %s", bsyms[sidx].addr, bsyms[sidx].name);
-                ++sidx;
-            }
-            DBG("Got %lu symbols", sidx);
-            memcpy(asyms, bsyms, nsyms * sizeof(*bsyms));
-            qsort(asyms, nsyms, sizeof(*asyms), &compare_sym_addrs);
-            qsort(bsyms, nsyms, sizeof(*bsyms), &compare_sym_names);
-            if(hdr->filetype == MH_KEXT_BUNDLE)
-            {
-                OSMetaClassConstructor    = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j.stub", bsyms, nsyms);
-                OSMetaClassAltConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t.stub", bsyms, nsyms);
-            }
-            else
-            {
-                OSMetaClassConstructor    = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j",                                bsyms, nsyms);
-                OSMetaClassAltConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t", bsyms, nsyms);
-                OSMetaClassVtab           = find_sym_by_name("__ZTV11OSMetaClass",                                          bsyms, nsyms);
-                OSObjectVtab              = find_sym_by_name("__ZTV8OSObject",                                              bsyms, nsyms);
-                OSObjectGetMetaClass      = find_sym_by_name("__ZNK8OSObject12getMetaClassEv",                              bsyms, nsyms);
-                if(OSMetaClassVtab)
-                {
-                    OSMetaClassVtab += 2 * sizeof(kptr_t);
-                    DBG("OSMetaClassVtab: " ADDR, OSMetaClassVtab);
-                }
-                if(OSObjectVtab)
-                {
-                    OSObjectVtab += 2 * sizeof(kptr_t);
-                    DBG("OSObjectVtab: " ADDR, OSObjectVtab);
-                }
-                if(OSObjectGetMetaClass)
-                {
-                    DBG("OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
-                }
-            }
-            if(OSMetaClassConstructor)
-            {
-                DBG("OSMetaClassConstructor: " ADDR, OSMetaClassConstructor);
-            }
-            if(OSMetaClassAltConstructor)
-            {
-                DBG("OSMetaClassAltConstructor: " ADDR, OSMetaClassAltConstructor);
             }
         }
         else if(cmd->cmd == LC_DYSYMTAB)
@@ -3273,9 +3462,69 @@ int main(int argc, const char **argv)
             {
                 return r;
             }
-            DBG("Processing kext header of %s", name);
+            DBG("Processing embedded header of %s", name);
+            FOREACH_CMD(mh, lc)
+            {
+                if(lc->cmd == LC_SYMTAB)
+                {
+                    if(!extract_symbols(kernel, (mach_stab_t*)lc, &asyms, &nsyms))
+                    {
+                        return -1;
+                    }
+                }
+            }
         }
     }
+
+    DBG("Got %lu symbols", nsyms);
+    if(nsyms > 0)
+    {
+        bsyms = malloc(sizeof(sym_t) * nsyms);
+        if(!bsyms)
+        {
+            ERRNO("malloc(syms)");
+            return -1;
+        }
+        memcpy(bsyms, asyms, nsyms * sizeof(sym_t));
+        qsort(asyms, nsyms, sizeof(*asyms), &compare_sym_addrs);
+        qsort(bsyms, nsyms, sizeof(*bsyms), &compare_sym_names);
+        if(hdr->filetype == MH_KEXT_BUNDLE)
+        {
+            OSMetaClassConstructor    = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j.stub", bsyms, nsyms);
+            OSMetaClassAltConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t.stub", bsyms, nsyms);
+        }
+        else
+        {
+            OSMetaClassConstructor    = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_j",                                bsyms, nsyms);
+            OSMetaClassAltConstructor = find_sym_by_name("__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t", bsyms, nsyms);
+            OSMetaClassVtab           = find_sym_by_name("__ZTV11OSMetaClass",                                          bsyms, nsyms);
+            OSObjectVtab              = find_sym_by_name("__ZTV8OSObject",                                              bsyms, nsyms);
+            OSObjectGetMetaClass      = find_sym_by_name("__ZNK8OSObject12getMetaClassEv",                              bsyms, nsyms);
+            if(OSMetaClassVtab)
+            {
+                OSMetaClassVtab += 2 * sizeof(kptr_t);
+                DBG("OSMetaClassVtab: " ADDR, OSMetaClassVtab);
+            }
+            if(OSObjectVtab)
+            {
+                OSObjectVtab += 2 * sizeof(kptr_t);
+                DBG("OSObjectVtab: " ADDR, OSObjectVtab);
+            }
+            if(OSObjectGetMetaClass)
+            {
+                DBG("OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
+            }
+        }
+        if(OSMetaClassConstructor)
+        {
+            DBG("OSMetaClassConstructor: " ADDR, OSMetaClassConstructor);
+        }
+        if(OSMetaClassAltConstructor)
+        {
+            DBG("OSMetaClassAltConstructor: " ADDR, OSMetaClassAltConstructor);
+        }
+    }
+
     if(!OSMetaClassConstructor)
     {
         if(hdr->filetype == MH_KEXT_BUNDLE)
@@ -4814,7 +5063,7 @@ int main(int argc, const char **argv)
                             if
                             (
                                 exseg->cmd == MACH_SEGMENT && exuuid->cmd == LC_UUID &&
-                                strcmp("__TEXT_EXEC", exseg->segname) == 0 && exseg->nsects == 1 && strcmp("__text", exsec->sectname) == 0 && // XXX kuntag(kbase, chainedFixup, exsec->addr, NULL) == initcode &&
+                                strcmp("__TEXT_EXEC", exseg->segname) == 0 && exseg->nsects == 1 && strcmp("__text", exsec->sectname) == 0 &&
                                 exuuid->uuid[0x0] == 0 && exuuid->uuid[0x1] == 0 && exuuid->uuid[0x2] == 0 && exuuid->uuid[0x3] == 0 &&
                                 exuuid->uuid[0x4] == 0 && exuuid->uuid[0x5] == 0 && exuuid->uuid[0x6] == 0 && exuuid->uuid[0x7] == 0 &&
                                 exuuid->uuid[0x8] == 0 && exuuid->uuid[0x9] == 0 && exuuid->uuid[0xa] == 0 && exuuid->uuid[0xb] == 0 &&
