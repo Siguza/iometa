@@ -1,6 +1,6 @@
 # iometa
 
-Extracts C++ class runtime information from an arm64 iOS kernel.  
+Extracts C++ class runtime information from an arm64 Darwin kernel.  
 Class names, inheritance, vtables, methods, etc.
 
 ### Building
