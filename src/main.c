@@ -765,10 +765,10 @@ int main(int argc, const char **argv)
         }
         else if(cmd->cmd == LC_DYSYMTAB)
         {
+            dstab = (mach_dstab_t*)cmd;
             // Imports for kexts
             if(hdr->filetype == MH_KEXT_BUNDLE)
             {
-                dstab = (mach_dstab_t*)cmd;
                 if(!macho_extract_reloc(kernel, kbase, dstab, symtab, strtab, &exrelocA, &nexreloc))
                 {
                     return -1;

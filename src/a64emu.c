@@ -62,7 +62,6 @@ bool is_linear_inst(void *ptr)
            is_aut(ptr) ||
            is_autsys(ptr) ||
            is_nop(ptr);
-    // TODO: some floating point instrs (see 10.3.3 kernel)
 }
 
 // This is quite possibly the trickiest part: finding the start of the function.
