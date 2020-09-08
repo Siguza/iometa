@@ -3095,7 +3095,7 @@ static void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
     }
 }
 
-static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t *callsite, bool want_vtabs)
+static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t *callsite, bool want_vtabs, sym_t *bsyms, size_t nsyms)
 {
     struct
     {
@@ -3127,33 +3127,65 @@ static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t 
     meta->reserved = 0;
     if(want_vtabs)
     {
-        kptr_t x0 = state->x[0];
-        for(uint32_t *m = callsite + 1; is_linear_inst(m) || is_cbz((cbz_t*)m) || is_cbnz((cbz_t*)m) || is_tbz((tbz_t*)m) || is_tbnz((tbz_t*)m); ++m)
+        if(nsyms > 0)
         {
-            // Kinda trash, but works... and it's at least a possible path
-            if(is_cbz((cbz_t*)m) || is_cbnz((cbz_t*)m) || is_tbz((tbz_t*)m) || is_tbnz((tbz_t*)m))
+            char buf[512];
+            uint32_t len = strlen(name);
+            if(snprintf(buf, sizeof(buf), "__ZTV%u%s", len, name) >= sizeof(buf))
             {
-                continue;
+                WRN("Class name too big for buffer: %s", name);
             }
-            emu_ret_t ret = a64_emulate(kernel, state, m, &check_equal, m + 1, false, true, kEmuFnIgnore);
-            if(ret != kEmuEnd)
+            else
             {
-                DBG("a64_emulate returned %u", ret);
-                break;
-            }
-            str_uoff_t *stru = (str_uoff_t*)m;
-            if(is_str_uoff(stru) && (state->valid & (1 << stru->Rn)) && state->x[stru->Rn] + get_str_uoff(stru) == x0)
-            {
-                DBG("Got str at " ADDR, off2addr(kernel, (uintptr_t)stru - (uintptr_t)kernel));
-                if(!(state->valid & (1 << stru->Rt)))
+                meta->vtab = find_sym_by_name(buf, bsyms, nsyms);
+                if(meta->vtab)
                 {
-                    DBG("Store has no valid source register");
+                    meta->vtab += 2 * sizeof(kptr_t);
+                }
+                if(snprintf(buf, sizeof(buf), "__ZTVN%u%s9MetaClassE", len, name) >= sizeof(buf))
+                {
+                    WRN("MetaClass name too big for buffer: %s", name);
                 }
                 else
                 {
-                    meta->metavtab = state->x[stru->Rt];
+                    meta->metavtab = find_sym_by_name(buf, bsyms, nsyms);
+                    if(meta->metavtab)
+                    {
+                        meta->metavtab += 2 * sizeof(kptr_t);
+                    }
                 }
-                break;
+            }
+        }
+        if(!meta->metavtab)
+        {
+            kptr_t x0 = state->x[0];
+            for(uint32_t *m = callsite + 1; is_linear_inst(m) || is_cbz((cbz_t*)m) || is_cbnz((cbz_t*)m) || is_tbz((tbz_t*)m) || is_tbnz((tbz_t*)m); ++m)
+            {
+                // Kinda trash, but works... and it's at least a possible path
+                if(is_cbz((cbz_t*)m) || is_cbnz((cbz_t*)m) || is_tbz((tbz_t*)m) || is_tbnz((tbz_t*)m))
+                {
+                    continue;
+                }
+                emu_ret_t ret = a64_emulate(kernel, state, m, &check_equal, m + 1, false, true, kEmuFnIgnore);
+                if(ret != kEmuEnd)
+                {
+                    DBG("a64_emulate returned %u", ret);
+                    break;
+                }
+                str_uoff_t *stru = (str_uoff_t*)m;
+                if(is_str_uoff(stru) && (state->valid & (1 << stru->Rn)) && state->x[stru->Rn] + get_str_uoff(stru) == x0)
+                {
+                    DBG("Got str at " ADDR, off2addr(kernel, (uintptr_t)stru - (uintptr_t)kernel));
+                    if(!(state->valid & (1 << stru->Rt)))
+                    {
+                        DBG("Store has no valid source register");
+                    }
+                    else
+                    {
+                        meta->metavtab = state->x[stru->Rt];
+                    }
+                    break;
+                }
             }
         }
         if(!meta->metavtab)
@@ -3163,7 +3195,7 @@ static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t 
     }
 }
 
-static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
+static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, sym_t *bsyms, size_t nsyms, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
 {
     const char *name = NULL;
     uint32_t *fncall = NULL;
@@ -3236,7 +3268,7 @@ static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_ki
     else
     {
         DBG("Processing constructor call at " ADDR " (%s)", bladdr, name);
-        add_metaclass(kernel, metas, state, bl, want_vtabs);
+        add_metaclass(kernel, metas, state, bl, want_vtabs, bsyms, nsyms);
         // Do NOT fall through
         return;
     }
@@ -3256,7 +3288,7 @@ static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_ki
     }
 }
 
-static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
+static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, sym_t *bsyms, size_t nsyms, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
 {
     const char *name = NULL;
     if((state->valid & 0x2) && (state->wide & 0x2))
@@ -3289,7 +3321,7 @@ static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixu
     {
         DBG("Processing alt constructor call at " ADDR " (%s)", bladdr, name);
         // NOTE: Will have to revise this if the constructors ever diverge in x0-x3
-        add_metaclass(kernel, metas, state, bl, want_vtabs);
+        add_metaclass(kernel, metas, state, bl, want_vtabs, bsyms, nsyms);
         // Do NOT fall through
         return;
     }
@@ -3310,9 +3342,9 @@ static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixu
     }
 }
 
-typedef void (*constructor_cb_t)(void*, kptr_t, mach_seg_t*, fixup_kind_t, bool, void*, void*, a64_state_t*, uint32_t*, uint32_t*, kptr_t, void*);
+typedef void (*constructor_cb_t)(void*, kptr_t, mach_seg_t*, fixup_kind_t, bool, void*, void*, sym_t*, size_t, a64_state_t*, uint32_t*, uint32_t*, kptr_t, void*);
 
-static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, fixup_kind_t fixupKind, bool have_plk_text_exec, bool want_vtabs, void *arr, void *metas, void *names, constructor_cb_t cb, void *arg)
+static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, fixup_kind_t fixupKind, bool have_plk_text_exec, bool want_vtabs, void *arr, void *metas, void *names, sym_t *bsyms, size_t nsyms, constructor_cb_t cb, void *arg)
 {
     struct
     {
@@ -3344,7 +3376,7 @@ static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, 
                                     a64_state_t state;
                                     if(a64_emulate(kernel, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
                                     {
-                                        cb(kernel, kbase, seg, fixupKind, want_vtabs, metas, names, &state, fnstart, mem, bladdr, arg);
+                                        cb(kernel, kbase, seg, fixupKind, want_vtabs, metas, names, bsyms, nsyms, &state, fnstart, mem, bladdr, arg);
                                     }
                                 }
                                 break;
@@ -4014,12 +4046,12 @@ int main(int argc, const char **argv)
     ARRDECL(metaclass_t, metas, NUM_METACLASSES_EXPECT);
     ARRDECL(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
 
-    find_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, &constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
+    find_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, bsyms, nsyms, &constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
     if(OSMetaClassAltConstructor)
     {
         ARRPUSH(altaliases, OSMetaClassAltConstructor);
         find_imports(kernel, kernelsize, hdr, kbase, fixupKind, have_plk_text_exec, &altaliases, OSMetaClassAltConstructor);
-        find_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, &alt_constructor_cb, NULL);
+        find_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, bsyms, nsyms, &alt_constructor_cb, NULL);
     }
 
     // This is a safety check to make sure we're not missing anything.
@@ -4067,7 +4099,7 @@ int main(int argc, const char **argv)
                 else
                 {
                     DBG("Processing triaged constructor call at " ADDR " (%s)", bladdr, current->name);
-                    add_metaclass(kernel, &metas, &state, current->fncall, want_vtabs);
+                    add_metaclass(kernel, &metas, &state, current->fncall, want_vtabs, bsyms, nsyms);
                     free(sp);
                     goto onward;
                 }
@@ -4607,7 +4639,7 @@ int main(int argc, const char **argv)
             }
         }
 
-        ARRDECL(kptr_t, candidates, 0x100);
+        //ARRDECL(kptr_t, candidates, 0x100);
         FOREACH_CMD(hdr, cmd)
         {
             if(cmd->cmd == MACH_SEGMENT)
@@ -4660,95 +4692,139 @@ int main(int argc, const char **argv)
                                     if(meta->addr == addr)
                                     {
                                         DBG("Got func " ADDR " referencing MetaClass %s", func, meta->name);
-                                        candidates.idx = 0;
-                                        if(fixupKind == DYLD_CHAINED_PTR_ARM64E)
+                                        //candidates.idx = 0;
+                                        if(!meta->vtab)
                                         {
-                                            FOREACH_CMD(hdr, lc)
+                                            if(fixupKind == DYLD_CHAINED_PTR_ARM64E)
                                             {
-                                                if(lc->cmd == MACH_SEGMENT)
+                                                FOREACH_CMD(hdr, lc)
                                                 {
-                                                    mach_seg_t *seg = (mach_seg_t*)lc;
-                                                    if(strcmp("__TEXT", seg->segname) == 0)
+                                                    if(lc->cmd == MACH_SEGMENT)
                                                     {
-                                                        mach_sec_t *secs = (mach_sec_t*)(seg + 1);
-                                                        for(size_t i = 0; i < seg->nsects; ++i)
+                                                        mach_seg_t *seg = (mach_seg_t*)lc;
+                                                        if(strcmp("__TEXT", seg->segname) == 0)
                                                         {
-                                                            if(strcmp("__thread_starts", secs[i].sectname) == 0)
+                                                            mach_sec_t *secs = (mach_sec_t*)(seg + 1);
+                                                            for(size_t i = 0; i < seg->nsects; ++i)
                                                             {
-                                                                uint32_t *start = (uint32_t*)((uintptr_t)kernel + secs[i].offset),
-                                                                         *end   = (uint32_t*)((uintptr_t)start  + secs[i].size);
-                                                                if(end > start)
+                                                                if(strcmp("__thread_starts", secs[i].sectname) == 0)
                                                                 {
-                                                                    ++start;
-                                                                    for(; start < end; ++start)
+                                                                    uint32_t *start = (uint32_t*)((uintptr_t)kernel + secs[i].offset),
+                                                                             *end   = (uint32_t*)((uintptr_t)start  + secs[i].size);
+                                                                    if(end > start)
                                                                     {
-                                                                        if(*start == 0xffffffff)
+                                                                        ++start;
+                                                                        for(; start < end; ++start)
                                                                         {
-                                                                            break;
-                                                                        }
-                                                                        kptr_t *mem2 = addr2ptr(kernel, kbase + *start);
-                                                                        size_t skip = 0;
-                                                                        do
-                                                                        {
-                                                                            if(kuntag(kbase, fixupKind, *mem2, NULL, &skip) == func)
+                                                                            if(*start == 0xffffffff)
                                                                             {
-                                                                                kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
-                                                                                if(meta->vtab == 0)
-                                                                                {
-                                                                                    meta->vtab = ref;
-                                                                                }
-                                                                                else
-                                                                                {
-                                                                                    if(meta->vtab != -1)
-                                                                                    {
-                                                                                        DBG("More than one vtab for %s: " ADDR, meta->name, meta->vtab);
-                                                                                        ARRPUSH(candidates, meta->vtab);
-                                                                                        meta->vtab = -1;
-                                                                                    }
-                                                                                    DBG("More than one vtab for %s: " ADDR, meta->name, ref);
-                                                                                    ARRPUSH(candidates, ref);
-                                                                                }
+                                                                                break;
                                                                             }
-                                                                            mem2 = (kptr_t*)((uintptr_t)mem2 + skip);
-                                                                        } while(skip > 0);
+                                                                            kptr_t *mem2 = addr2ptr(kernel, kbase + *start);
+                                                                            size_t skip = 0;
+                                                                            do
+                                                                            {
+                                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, &skip) == func)
+                                                                                {
+                                                                                    kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
+                                                                                    if(meta->vtab == 0)
+                                                                                    {
+                                                                                        meta->vtab = ref;
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        if(meta->vtab != -1)
+                                                                                        {
+                                                                                            DBG("More than one vtab for %s: " ADDR, meta->name, meta->vtab);
+                                                                                            //ARRPUSH(candidates, meta->vtab);
+                                                                                            meta->vtab = -1;
+                                                                                        }
+                                                                                        DBG("More than one vtab for %s: " ADDR, meta->name, ref);
+                                                                                        //ARRPUSH(candidates, ref);
+                                                                                    }
+                                                                                }
+                                                                                mem2 = (kptr_t*)((uintptr_t)mem2 + skip);
+                                                                            } while(skip > 0);
+                                                                        }
                                                                     }
+                                                                    break;
                                                                 }
-                                                                break;
                                                             }
+                                                            break;
                                                         }
-                                                        break;
                                                     }
                                                 }
                                             }
-                                        }
-                                        else if(fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE)
-                                        {
-                                            FOREACH_CMD(hdr, lc)
+                                            else if(fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE)
                                             {
-                                                if(lc->cmd == LC_DYLD_CHAINED_FIXUPS)
+                                                FOREACH_CMD(hdr, lc)
                                                 {
-                                                    struct linkedit_data_command *data = (struct linkedit_data_command*)lc;
-                                                    fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)kernel + data->dataoff);
-                                                    fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
-                                                    for(uint32_t i = 0; i < segs->seg_count; ++i)
+                                                    if(lc->cmd == LC_DYLD_CHAINED_FIXUPS)
                                                     {
-                                                        if(segs->seg_info_offset[i] == 0)
+                                                        struct linkedit_data_command *data = (struct linkedit_data_command*)lc;
+                                                        fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)kernel + data->dataoff);
+                                                        fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
+                                                        for(uint32_t i = 0; i < segs->seg_count; ++i)
                                                         {
-                                                            continue;
-                                                        }
-                                                        fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
-                                                        for(uint16_t j = 0; j < starts->page_count; ++j)
-                                                        {
-                                                            uint16_t idx = starts->page_start[j];
-                                                            if(idx == 0xffff)
+                                                            if(segs->seg_info_offset[i] == 0)
                                                             {
                                                                 continue;
                                                             }
-                                                            kptr_t *mem2 = (kptr_t*)((uintptr_t)kernel + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx);
-                                                            size_t skip = 0;
-                                                            do
+                                                            fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
+                                                            for(uint16_t j = 0; j < starts->page_count; ++j)
                                                             {
-                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, &skip) == func)
+                                                                uint16_t idx = starts->page_start[j];
+                                                                if(idx == 0xffff)
+                                                                {
+                                                                    continue;
+                                                                }
+                                                                kptr_t *mem2 = (kptr_t*)((uintptr_t)kernel + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx);
+                                                                size_t skip = 0;
+                                                                do
+                                                                {
+                                                                    if(kuntag(kbase, fixupKind, *mem2, NULL, &skip) == func)
+                                                                    {
+                                                                        kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
+                                                                        if(meta->vtab == 0)
+                                                                        {
+                                                                            meta->vtab = ref;
+                                                                        }
+                                                                        else
+                                                                        {
+                                                                            if(meta->vtab != -1)
+                                                                            {
+                                                                                DBG("More than one vtab for %s: " ADDR, meta->name, meta->vtab);
+                                                                                //ARRPUSH(candidates, meta->vtab);
+                                                                                meta->vtab = -1;
+                                                                            }
+                                                                            DBG("More than one vtab for %s: " ADDR, meta->name, ref);
+                                                                            //ARRPUSH(candidates, ref);
+                                                                        }
+                                                                    }
+                                                                    mem2 += skip / sizeof(uint32_t);
+                                                                } while(skip > 0);
+                                                            }
+                                                        }
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                            else
+                                            {
+                                                FOREACH_CMD(hdr, lc)
+                                                {
+                                                    if(lc->cmd == MACH_SEGMENT)
+                                                    {
+                                                        mach_seg_t *seg2 = (mach_seg_t*)lc;
+                                                        if
+                                                        (
+                                                            seg2->filesize > (VtabGetMetaClassIdx + 2) * sizeof(kptr_t) &&
+                                                            (strcmp("__DATA", seg2->segname) == 0 || strcmp("__DATA_CONST", seg2->segname) == 0 || strcmp("__PRELINK_DATA", seg2->segname) == 0 || strcmp("__PLK_DATA_CONST", seg2->segname) == 0)
+                                                        )
+                                                        {
+                                                            STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassIdx + 2, seg2->filesize - (VtabGetMetaClassIdx + 2) * sizeof(kptr_t), 1)
+                                                            {
+                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
                                                                 {
                                                                     kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
                                                                     if(meta->vtab == 0)
@@ -4760,53 +4836,12 @@ int main(int argc, const char **argv)
                                                                         if(meta->vtab != -1)
                                                                         {
                                                                             DBG("More than one vtab for %s: " ADDR, meta->name, meta->vtab);
-                                                                            ARRPUSH(candidates, meta->vtab);
+                                                                            //ARRPUSH(candidates, meta->vtab);
                                                                             meta->vtab = -1;
                                                                         }
                                                                         DBG("More than one vtab for %s: " ADDR, meta->name, ref);
-                                                                        ARRPUSH(candidates, ref);
+                                                                        //ARRPUSH(candidates, ref);
                                                                     }
-                                                                }
-                                                                mem2 += skip / sizeof(uint32_t);
-                                                            } while(skip > 0);
-                                                        }
-                                                    }
-                                                }
-                                                break;
-                                            }
-                                        }
-                                        else
-                                        {
-                                            FOREACH_CMD(hdr, lc)
-                                            {
-                                                if(lc->cmd == MACH_SEGMENT)
-                                                {
-                                                    mach_seg_t *seg2 = (mach_seg_t*)lc;
-                                                    if
-                                                    (
-                                                        seg2->filesize > (VtabGetMetaClassIdx + 2) * sizeof(kptr_t) &&
-                                                        (strcmp("__DATA", seg2->segname) == 0 || strcmp("__DATA_CONST", seg2->segname) == 0 || strcmp("__PRELINK_DATA", seg2->segname) == 0 || strcmp("__PLK_DATA_CONST", seg2->segname) == 0)
-                                                    )
-                                                    {
-                                                        STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassIdx + 2, seg2->filesize - (VtabGetMetaClassIdx + 2) * sizeof(kptr_t), 1)
-                                                        {
-                                                            if(kuntag(kbase, fixupKind, *mem2, NULL, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
-                                                            {
-                                                                kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
-                                                                if(meta->vtab == 0)
-                                                                {
-                                                                    meta->vtab = ref;
-                                                                }
-                                                                else
-                                                                {
-                                                                    if(meta->vtab != -1)
-                                                                    {
-                                                                        DBG("More than one vtab for %s: " ADDR, meta->name, meta->vtab);
-                                                                        ARRPUSH(candidates, meta->vtab);
-                                                                        meta->vtab = -1;
-                                                                    }
-                                                                    DBG("More than one vtab for %s: " ADDR, meta->name, ref);
-                                                                    ARRPUSH(candidates, ref);
                                                                 }
                                                             }
                                                         }
@@ -4823,9 +4858,9 @@ int main(int argc, const char **argv)
                 }
             }
         }
-        free(candidates.val);
+        /*free(candidates.val);
         candidates.val = NULL;
-        candidates.size = candidates.idx = 0;
+        candidates.size = candidates.idx = 0;*/
 
         for(size_t i = 0; i < metas.idx; ++i)
         {
