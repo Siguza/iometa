@@ -48,320 +48,26 @@ How this works:
 10. Finally we do some filtering and sorting, and print our findings.
 #endif
 
-#include <errno.h>
-#include <fcntl.h>              // open
 #include <stdbool.h>
 #include <stdint.h>             // uintptr_t
 #include <stdio.h>              // fprintf, stderr
 #include <stdlib.h>             // malloc, realloc, qsort, bsearch, exit
-#include <string.h>             // strerror, strcmp, strstr, memcpy, memmem
+#include <string.h>             // strcmp, strstr, memcpy, memmem
 #include <strings.h>            // bzero
-#include <sys/mman.h>           // mmap
-#include <sys/stat.h>           // fstat
+#include <sys/mman.h>           // PROT_READ, PROT_WRITE
 #include <CoreFoundation/CoreFoundation.h>
 
 extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, CFOptionFlags options, CFStringRef *errorString);
 
 #include "a64.h"
+#include "a64emu.h"
 #include "cxx.h"
+#include "macho.h"
+#include "meta.h"
+#include "symmap.h"
+#include "util.h"
 
-static bool debug = false;
-static const char *colorGray   = "\x1b[90m",
-                  *colorRed    = "\x1b[1;91m",
-                  *colorYellow = "\x1b[1;93m",
-                  *colorBlue   = "\x1b[1;94m",
-                  *colorPink   = "\x1b[1;95m",
-                  *colorCyan   = "\x1b[1;96m",
-                  *colorReset  = "\x1b[0m";
-
-#define LOG(str, args...)   do { fprintf(stderr, str "\n", ##args); } while(0)
-#define DBG(str, args...)   do { if(debug) LOG("%s[DBG] " str "%s", colorPink, ##args, colorReset); } while(0)
-#define WRN(str, args...)   LOG("%s[WRN] " str "%s", colorYellow, ##args, colorReset)
-#define ERR(str, args...)   LOG("%s[ERR] " str "%s", colorRed, ##args, colorReset)
-#define ERRNO(str, args...) ERR(str ": %s", ##args, strerror(errno))
-
-#define STRINGIFX(x) #x
-#define STRINGIFY(x) STRINGIFX(x)
-
-#define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
-
-// Apple notation
-#define VM_PROT_READ                       0x1
-#define VM_PROT_WRITE                      0x2
-#define VM_PROT_EXECUTE                    0x4
-#define CPU_TYPE_ARM64              0x0100000c
-#define FAT_CIGAM                   0xbebafeca
-#define MH_MAGIC_64                 0xfeedfacf
-#define MH_EXECUTE                  0x00000002
-#define MH_KEXT_BUNDLE              0x0000000b
-#define MH_FILESET                  0x0000000c
-#define LC_SYMTAB                   0x00000002
-#define LC_DYSYMTAB                 0x0000000b
-#define LC_SEGMENT_64               0x00000019
-#define LC_UUID                     0x0000001b
-#define LC_DYLD_CHAINED_FIXUPS      0x80000034
-#define LC_FILESET_ENTRY            0x80000035
-#define N_STAB                            0xe0
-#define N_TYPE                            0x0e
-#define N_EXT                             0x01
-#define N_SECT                            0x0e
-struct fat_header
-{
-    uint32_t magic;
-    uint32_t nfat_arch;
-};
-struct fat_arch
-{
-    uint32_t cputype;
-    uint32_t cpusubtype;
-    uint32_t offset;
-    uint32_t size;
-    uint32_t align;
-};
-struct mach_header_64
-{
-    uint32_t magic;
-    uint32_t cputype;
-    uint32_t cpusubtype;
-    uint32_t filetype;
-    uint32_t ncmds;
-    uint32_t sizeofcmds;
-    uint32_t flags;
-    uint32_t reserved;
-};
-struct load_command
-{
-    uint32_t cmd;
-    uint32_t cmdsize;
-};
-struct segment_command_64
-{
-    uint32_t cmd;
-    uint32_t cmdsize;
-    char     segname[16];
-    uint64_t vmaddr;
-    uint64_t vmsize;
-    uint64_t fileoff;
-    uint64_t filesize;
-    uint32_t maxprot;
-    uint32_t initprot;
-    uint32_t nsects;
-    uint32_t flags;
-};
-struct section_64
-{
-    char     sectname[16];
-    char     segname[16];
-    uint64_t addr;
-    uint64_t size;
-    uint32_t offset;
-    uint32_t align;
-    uint32_t reloff;
-    uint32_t nreloc;
-    uint32_t flags;
-    uint32_t reserved1;
-    uint32_t reserved2;
-    uint32_t reserved3;
-};
-struct symtab_command
-{
-    uint32_t cmd;
-    uint32_t cmdsize;
-    uint32_t symoff;
-    uint32_t nsyms;
-    uint32_t stroff;
-    uint32_t strsize;
-};
-struct dysymtab_command
-{
-    uint32_t cmd;
-    uint32_t cmdsize;
-    uint32_t ilocalsym;
-    uint32_t nlocalsym;
-    uint32_t iextdefsym;
-    uint32_t nextdefsym;
-    uint32_t iundefsym;
-    uint32_t nundefsym;
-    uint32_t tocoff;
-    uint32_t ntoc;
-    uint32_t modtaboff;
-    uint32_t nmodtab;
-    uint32_t extrefsymoff;
-    uint32_t nextrefsyms;
-    uint32_t indirectsymoff;
-    uint32_t nindirectsyms;
-    uint32_t extreloff;
-    uint32_t nextrel;
-    uint32_t locreloff;
-    uint32_t nlocrel;
-};
-struct linkedit_data_command
-{
-    uint32_t cmd;
-    uint32_t cmdsize;
-    uint32_t dataoff;
-    uint32_t datasize;
-};
-struct uuid_command
-{
-    uint32_t cmd;
-    uint32_t cmdsize;
-    uint8_t  uuid[16];
-};
-struct fileset_entry_command
-{
-    uint32_t cmd;
-    uint32_t cmdsize;
-    uint64_t vmaddr;
-    uint64_t fileoff;
-    uint32_t nameoff;
-};
-struct nlist_64
-{
-    uint32_t n_strx;
-    uint8_t  n_type;
-    uint8_t  n_sect;
-    uint16_t n_desc;
-    uint64_t n_value;
-};
-struct relocation_info
-{
-   int32_t  r_address;
-   uint32_t r_symbolnum : 24,
-            r_pcrel     :  1,
-            r_length    :  2,
-            r_extern    :  1,
-            r_type      :  4;
-};
-struct dyld_chained_fixups_header
-{
-    uint32_t fixups_version;
-    uint32_t starts_offset;
-    uint32_t imports_offset;
-    uint32_t symbols_offset;
-    uint32_t imports_count;
-    uint32_t imports_format;
-    uint32_t symbols_format;
-};
-struct dyld_chained_starts_in_image
-{
-    uint32_t seg_count;
-    uint32_t seg_info_offset[];
-};
-struct dyld_chained_starts_in_segment
-{
-    uint32_t size;
-    uint16_t page_size;
-    uint16_t pointer_format;
-    uint64_t segment_offset;
-    uint32_t max_valid_pointer;
-    uint16_t page_count;
-    uint16_t page_start[];
-};
-
-// My aliases
-#define ADDR                                    "0x%016llx"
-#define MACH_MAGIC                              MH_MAGIC_64
-#define MACH_SEGMENT                            LC_SEGMENT_64
-typedef struct fat_header                       fat_hdr_t;
-typedef struct fat_arch                         fat_arch_t;
-typedef struct mach_header_64                   mach_hdr_t;
-typedef struct load_command                     mach_lc_t;
-typedef struct segment_command_64               mach_seg_t;
-typedef struct section_64                       mach_sec_t;
-typedef struct symtab_command                   mach_stab_t;
-typedef struct dysymtab_command                 mach_dstab_t;
-typedef struct fileset_entry_command            mach_fileent_t;
-typedef struct nlist_64                         mach_nlist_t;
-typedef struct relocation_info                  mach_reloc_t;
-typedef struct dyld_chained_fixups_header       fixup_hdr_t;
-typedef struct dyld_chained_starts_in_image     fixup_seg_t;
-typedef struct dyld_chained_starts_in_segment   fixup_starts_t;
-typedef uint64_t                                kptr_t;
-typedef enum
-{
-    DYLD_CHAINED_PTR_NONE                       = 0,
-    DYLD_CHAINED_PTR_ARM64E                     = 1,
-    DYLD_CHAINED_PTR_64_KERNEL_CACHE            = 8,
-} fixup_kind_t;
-
-#define FOREACH_CMD(_hdr, _cmd) \
-for( \
-    mach_lc_t *_cmd = (mach_lc_t*)(_hdr + 1), *_end = (mach_lc_t*)((uintptr_t)_cmd + _hdr->sizeofcmds - sizeof(mach_lc_t)); \
-    _cmd <= _end; \
-    _cmd = (mach_lc_t*)((uintptr_t)_cmd + _cmd->cmdsize) \
-)
-
-#define STEP_MEM(_type, _mem, _addr, _size, _min) \
-for(_type *_mem = (_type*)(_addr), *_end = (_type*)((uintptr_t)(_mem) + (_size)) - (_min); _mem <= _end; ++_mem)
-
-#define ARRDECLEMPTY(type, name) \
-struct \
-{ \
-    size_t size; \
-    size_t idx; \
-    type *val; \
-} name; \
-do \
-{ \
-    (name).size = 0; \
-    (name).idx = 0; \
-    (name).val = NULL; \
-} while(0)
-
-#define ARRDECL(type, name, sz) \
-struct \
-{ \
-    size_t size; \
-    size_t idx; \
-    type *val; \
-} name; \
-ARRINIT(name, sz);
-
-#define ARRINIT(name, sz) \
-do \
-{ \
-    (name).size = (sz); \
-    (name).idx = 0; \
-    (name).val = malloc((name).size * sizeof(*(name).val)); \
-    if(!(name).val) \
-    { \
-        ERRNO("malloc"); \
-        exit(-1); \
-    } \
-} while(0)
-
-#define ARREXPAND(name) \
-do \
-{ \
-    if((name).size <= (name).idx) \
-    { \
-        (name).size *= 2; \
-        (name).val = realloc((name).val, (name).size * sizeof(*(name).val)); \
-        if(!(name).val) \
-        { \
-            ERRNO("realloc(0x%lx)", (name).size); \
-            exit(-1); \
-        } \
-    } \
-} while(0)
-
-#define ARRNEXT(name, ptr) \
-do \
-{ \
-    ARREXPAND((name)); \
-    (ptr) = &(name).val[(name).idx++]; \
-} while(0)
-
-#define ARRPUSH(name, obj) \
-do \
-{ \
-    ARREXPAND((name)); \
-    (name).val[(name).idx++] = (obj); \
-} while(0)
-
-#define NUM_KEXTS_EXPECT         0x200
-#define NUM_METACLASSES_EXPECT  0x1000
+#define NUM_KEXTS_EXPECT 0x200
 
 #define KMOD_MAX_NAME 64
 #pragma pack(4)
@@ -395,280 +101,6 @@ typedef struct
     kptr_t to;
 } relocrange_t;
 
-typedef struct
-{
-    kptr_t addr;
-    const char *name;
-} sym_t;
-
-typedef struct
-{
-    const char *class;
-    const char *method;
-    uint32_t structor :  1,
-             reserved : 31;
-} symmap_method_t;
-
-typedef struct
-{
-    struct metaclass *metaclass;
-    const char *name;
-    symmap_method_t *methods;
-    size_t num;
-    uint32_t duplicate :  1,
-             reserved  : 31;
-} symmap_class_t;
-
-typedef struct vtab_entry
-{
-    struct vtab_entry *chain; // only used for back-propagating name
-    const char *class;
-    const char *method;
-    kptr_t addr;
-    uint16_t pac;
-    uint16_t structor      :  1,
-             authoritative :  1,
-             placeholder   :  1,
-             overrides     :  1,
-             reserved      : 11;
-} vtab_entry_t;
-
-typedef struct metaclass
-{
-    kptr_t addr;
-    kptr_t parent;
-    kptr_t vtab;
-    kptr_t metavtab;
-    kptr_t callsite;
-    struct metaclass *parentP;
-    symmap_class_t *symclass;
-    const char *name;
-    const char *bundle;
-    vtab_entry_t *methods;
-    size_t nmethods;
-    uint32_t objsize;
-    uint32_t methods_done :  1,
-             methods_err  :  1,
-             visited      :  1,
-             duplicate    :  1,
-             reserved     : 28;
-} metaclass_t;
-
-typedef struct
-{
-    const char *name;
-    uint32_t *fncall;
-} metaclass_candidate_t;
-
-// XNU says:
-#if 0
-A pointer is one of:
-{
-    uint64_t pointerValue : 51;
-    uint64_t offsetToNextPointer : 11;
-    uint64_t isBind : 1 = 0;
-    uint64_t authenticated : 1 = 0;
-}
-{
-    uint32_t offsetFromSharedCacheBase;
-    uint16_t diversityData;
-    uint16_t hasAddressDiversity : 1;
-    uint16_t hasDKey : 1;
-    uint16_t hasBKey : 1;
-    uint16_t offsetToNextPointer : 11;
-    uint16_t isBind : 1;
-    uint16_t authenticated : 1 = 1;
-}
-#endif
-
-typedef union
-{
-    kptr_t ptr;
-    struct
-    {
-        int64_t lo  : 51,
-                hi  : 13;
-    } raw;
-    struct
-    {
-        kptr_t off  : 32,
-               div  : 16,
-               tag  :  1,
-               dkey :  1,
-               bkey :  1,
-               next : 11,
-               bind :  1,
-               auth :  1;
-    } pac;
-    struct
-    {
-        kptr_t target : 30,
-               cache  :  2,
-               div    : 16,
-               tag    :  1,
-               dkey   :  1,
-               bkey   :  1,
-               next   : 12,
-               auth   :  1;
-    } cache;
-} pacptr_t;
-
-typedef struct
-{
-    uint32_t bundle    :  1,
-             bfilt     :  1,
-             cfilt     :  1,
-             bsort     :  1,
-             csort     :  1,
-             extend    :  1,
-             inherit   :  1,
-             meta      :  1,
-             maxmap    :  1,
-             overrides :  1,
-             ofilt     :  1,
-             parent    :  1,
-             radare    :  1,
-             size      :  1,
-             symmap    :  1,
-             vtab      :  1,
-             _reserved : 16;
-} opt_t;
-
-static int map_file(const char *file, int prot, void **addrp, size_t *lenp)
-{
-    int retval = -1;
-
-    int fd = open(file, O_RDONLY);
-    if(fd == -1)
-    {
-        ERRNO("open(%s)", file);
-        goto out;
-    }
-
-    struct stat s;
-    if(fstat(fd, &s) != 0)
-    {
-        ERRNO("fstat(%s)", file);
-        goto out;
-    }
-
-    size_t len = s.st_size;
-    void *addr = mmap(NULL, len + 1, prot, MAP_PRIVATE, fd, 0); // +1 so that space afterwards is zero-filled
-    if(addr == MAP_FAILED)
-    {
-        ERRNO("mmap(%s)", file);
-        goto out;
-    }
-
-    if(addrp) *addrp = addr;
-    if(lenp)  *lenp = len;
-    retval = 0;
-
-out:;
-    // Always close fd - mapped mem will live on
-    if(fd != 0)
-    {
-        close(fd);
-    }
-    return retval;
-}
-
-static int compare_candidates(const void *a, const void *b)
-{
-    const metaclass_candidate_t *x = (const metaclass_candidate_t*)a,
-                                *y = (const metaclass_candidate_t*)b;
-    int r = strcmp(x->name, y->name);
-    return r != 0 ? r : !x->fncall - !y->fncall;
-}
-
-static int compare_names(const void *a, const void *b)
-{
-    const metaclass_t *x = *(const metaclass_t**)a,
-                      *y = *(const metaclass_t**)b;
-    int r;
-    if(!x->name || !y->name)
-    {
-        r = !!x->name - !!y->name;
-    }
-    else
-    {
-        r = strcmp(x->name, y->name);
-    }
-    return r;
-}
-
-static int compare_bundles(const void *a, const void *b)
-{
-    const metaclass_t *x = *(const metaclass_t**)a,
-                      *y = *(const metaclass_t**)b;
-    int r;
-    if(!x->bundle || !y->bundle)
-    {
-        r = !!x->bundle - !!y->bundle;
-    }
-    else
-    {
-        r = strcmp(x->bundle, y->bundle);
-    }
-    return r != 0 ? r : compare_names(a, b);
-}
-
-static int compare_sym_addrs(const void *a, const void *b)
-{
-    kptr_t adda = ((const sym_t*)a)->addr,
-           addb = ((const sym_t*)b)->addr;
-    if(adda == addb) return 0;
-    return adda < addb ? -1 : 1;
-}
-
-static int compare_sym_names(const void *a, const void *b)
-{
-    const sym_t *syma = a,
-                *symb = b;
-    return strcmp(syma->name, symb->name);
-}
-
-static int compare_sym_addr(const void *a, const void *b)
-{
-    kptr_t adda = *(const kptr_t*)a,
-           addb = ((const sym_t*)b)->addr;
-    if(adda == addb) return 0;
-    return adda < addb ? -1 : 1;
-}
-
-static int compare_sym_name(const void *a, const void *b)
-{
-    const char *name = a;
-    const sym_t *sym = b;
-    return strcmp(name, sym->name);
-}
-
-static int compare_symclass(const void *a, const void *b)
-{
-    const symmap_class_t *cla = a,
-                         *clb = b;
-    return strcmp(cla->name, clb->name);
-}
-
-static int compare_symclass_name(const void *a, const void *b)
-{
-    const char *key = a;
-    const symmap_class_t *cls = b;
-    return strcmp(key, cls->name);
-}
-
-static const char* find_sym_by_addr(kptr_t addr, sym_t *asyms, size_t nsyms)
-{
-    sym_t *sym = bsearch(&addr, asyms, nsyms, sizeof(*asyms), &compare_sym_addr);
-    return sym ? sym->name : NULL;
-}
-
-static kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms)
-{
-    sym_t *sym = bsearch(name, bsyms, nsyms, sizeof(*bsyms), &compare_sym_name);
-    return sym ? sym->addr : 0;
-}
-
 static int compare_range(const void *a, const void *b)
 {
     const relocrange_t *range = b;
@@ -688,8 +120,6 @@ static int compare_addrs(const void *a, const void *b)
     return adda < addb ? -1 : 1;
 }
 
-#define SEG_IS_EXEC(seg) (((seg)->initprot & VM_PROT_EXECUTE) || (fixupKind == DYLD_CHAINED_PTR_NONE && !have_plk_text_exec && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
-
 static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fixupKind, bool have_plk_text_exec, sym_t *exreloc, size_t nexreloc, const char *sym)
 {
     kptr_t relocAddr = find_sym_by_name(sym, exreloc, nexreloc);
@@ -701,7 +131,7 @@ static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fi
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                if(seg->filesize > 0 && SEG_IS_EXEC(seg, fixupKind, have_plk_text_exec))
                 {
                     STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                     {
@@ -729,185 +159,6 @@ static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fi
         }
     }
     return 0;
-}
-
-static kptr_t kuntag(kptr_t kbase, fixup_kind_t fixupKind, kptr_t ptr, uint16_t *pac, size_t *skip)
-{
-    pacptr_t pp;
-    pp.ptr = ptr;
-    if(fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE)
-    {
-        if(pp.cache.cache != 0)
-        {
-            ERR("Cannot resolve pointer with cache level %u: " ADDR, pp.cache.cache, ptr);
-            exit(-1);
-        }
-        if(pac)  *pac  = pp.cache.auth && pp.cache.tag ? pp.cache.div : 0;
-        if(skip) *skip = pp.cache.next * sizeof(uint32_t);
-        return kbase + pp.cache.target;
-    }
-    if(fixupKind == DYLD_CHAINED_PTR_ARM64E)
-    {
-        if(pp.pac.bind)
-        {
-            ERR("Cannot bind pointer " ADDR, ptr);
-            exit(-1);
-        }
-        if(skip) *skip = pp.pac.next * sizeof(uint32_t);
-        if(pp.pac.auth)
-        {
-            if(pac) *pac = pp.pac.tag ? pp.pac.div : 0;
-            return kbase + pp.pac.off;
-        }
-        if(pac) *pac = 0;
-        return (kptr_t)pp.raw.lo;
-    }
-    if(pac)  *pac  = 0;
-    if(skip) *skip = 0;
-    return pp.ptr;
-}
-
-static kptr_t off2addr(void *kernel, size_t off)
-{
-    FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
-    {
-        if(cmd->cmd == MACH_SEGMENT)
-        {
-            mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(off >= seg->fileoff && off < seg->fileoff + seg->filesize)
-            {
-                return seg->vmaddr + (off - seg->fileoff);
-            }
-        }
-    }
-    ERR("Failed to translate kernel offset 0x%lx", off);
-    exit(-1);
-}
-
-static void* addr2ptr(void *kernel, kptr_t addr)
-{
-    FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
-    {
-        if(cmd->cmd == MACH_SEGMENT)
-        {
-            mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(addr >= seg->vmaddr && addr < seg->vmaddr + seg->vmsize)
-            {
-                return (void*)((uintptr_t)kernel + seg->fileoff + (addr - seg->vmaddr));
-            }
-        }
-    }
-    return NULL;
-}
-
-static mach_seg_t* seg4ptr(void *kernel, void *ptr)
-{
-    char *p = ptr;
-    FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
-    {
-        if(cmd->cmd == MACH_SEGMENT)
-        {
-            mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(p >= (char*)((uintptr_t)kernel + seg->fileoff) && p < (char*)((uintptr_t)kernel + seg->fileoff + seg->vmsize))
-            {
-                return seg;
-            }
-        }
-    }
-    ERR("Failed to find segment for ptr 0x%llx", (uint64_t)ptr);
-    exit(-1);
-}
-
-static bool is_in_fixup_chain(void *kernel, kptr_t kbase, void *ptr)
-{
-    FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
-    {
-        if(cmd->cmd == MACH_SEGMENT)
-        {
-            mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(strcmp("__TEXT", seg->segname) == 0)
-            {
-                mach_sec_t *secs = (mach_sec_t*)(seg + 1);
-                for(size_t i = 0; i < seg->nsects; ++i)
-                {
-                    if(strcmp("__thread_starts", secs[i].sectname) == 0)
-                    {
-                        uint32_t *start = (uint32_t*)((uintptr_t)kernel + secs[i].offset),
-                                 *end   = (uint32_t*)((uintptr_t)start  + secs[i].size);
-                        if(end > start)
-                        {
-                            ++start;
-                            for(; start < end; ++start)
-                            {
-                                if(*start == 0xffffffff)
-                                {
-                                    break;
-                                }
-                                kptr_t *mem = addr2ptr(kernel, kbase + *start);
-                                size_t skip = 0;
-                                do
-                                {
-                                    if((uintptr_t)mem == (uintptr_t)ptr)
-                                    {
-                                        return true;
-                                    }
-                                    if((uintptr_t)mem > (uintptr_t)ptr)
-                                    {
-                                        return false;
-                                    }
-                                    kuntag(kbase, DYLD_CHAINED_PTR_ARM64E, *mem, NULL, &skip);
-                                    mem = (kptr_t*)((uintptr_t)mem + skip);
-                                } while(skip > 0);
-                            }
-                        }
-                        return false;
-                    }
-                }
-            }
-        }
-        else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
-        {
-            uint32_t off = (uintptr_t)ptr - (uintptr_t)kernel;
-            struct linkedit_data_command *data = (struct linkedit_data_command*)cmd;
-            fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)kernel + data->dataoff);
-            fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
-            for(uint32_t i = 0; i < segs->seg_count; ++i)
-            {
-                if(segs->seg_info_offset[i] == 0)
-                {
-                    continue;
-                }
-                fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
-                if(off < starts->segment_offset || (off - starts->segment_offset) / starts->page_size >= starts->page_count)
-                {
-                    continue;
-                }
-                uint16_t j = (off - starts->segment_offset) / starts->page_size;
-                uint16_t idx = starts->page_start[j];
-                if(idx == 0xffff)
-                {
-                    continue;
-                }
-                kptr_t *mem = (kptr_t*)((uintptr_t)kernel + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx);
-                size_t skip = 0;
-                do
-                {
-                    if((uintptr_t)mem == (uintptr_t)ptr)
-                    {
-                        return true;
-                    }
-                    if((uintptr_t)mem > (uintptr_t)ptr)
-                    {
-                        return false;
-                    }
-                    kuntag(kbase, DYLD_CHAINED_PTR_64_KERNEL_CACHE, *mem, NULL, &skip);
-                    mem = (kptr_t*)((uintptr_t)mem + skip);
-                } while(skip > 0);
-            }
-            return false;
-        }
-    }
-    return false;
 }
 
 static bool is_part_of_vtab(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, relocrange_t *locreloc, size_t nlocreloc, sym_t *exreloc, size_t nexreloc, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
@@ -945,12 +196,7 @@ static bool is_part_of_vtab(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, 
 
 static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str)
 {
-    struct
-    {
-        size_t size;
-        size_t idx;
-        kptr_t *val;
-    } *arr = arg;
+    ARRCAST(kptr_t, arr, arg);
     size_t len = strlen(str) + 1;
     for(size_t off = 0; off < kernelsize; )
     {
@@ -971,13 +217,8 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
 {
     if(hdr->filetype != MH_KEXT_BUNDLE)
     {
-        ARRDECL(kptr_t, refs, NUM_KEXTS_EXPECT);
-        struct
-        {
-            size_t size;
-            size_t idx;
-            kptr_t *val;
-        } *aliases = arr;
+        ARRDEF(kptr_t, refs, NUM_KEXTS_EXPECT);
+        ARRCAST(kptr_t, aliases, arr);
         // Ideally I'd want a "foreach ptr" kind of thing here, as well as a cache for the fixup structures,
         // but this is one of only two places where that's really needed, so... not worth it yet?
         if(fixupKind == DYLD_CHAINED_PTR_ARM64E)
@@ -1085,7 +326,7 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                if(seg->filesize > 0 && SEG_IS_EXEC(seg, fixupKind, have_plk_text_exec))
                 {
                     STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                     {
@@ -1116,1545 +357,8 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
                 }
             }
         }
-        free(refs.val);
+        ARRFREE(refs);
     }
-}
-
-static bool is_linear_inst(void *ptr)
-{
-    return is_adr(ptr) ||
-           is_adrp(ptr) ||
-           is_add_imm(ptr) ||
-           is_sub_imm(ptr) ||
-           is_add_reg(ptr) ||
-           is_sub_reg(ptr) ||
-           is_ldr_imm_uoff(ptr) ||
-           is_ldr_lit(ptr) ||
-           is_ldp_pre(ptr) ||
-           is_ldp_post(ptr) ||
-           is_ldp_uoff(ptr) ||
-           is_ldxr(ptr) ||
-           is_ldadd(ptr) ||
-           is_ldur(ptr) ||
-           is_ldr_fp_uoff(ptr) ||
-           is_ldur_fp(ptr) ||
-           is_ldp_fp_pre(ptr) ||
-           is_ldp_fp_post(ptr) ||
-           is_ldp_fp_uoff(ptr) ||
-           is_bl(ptr) ||
-           is_mov(ptr) ||
-           is_movz(ptr) ||
-           is_movk(ptr) ||
-           is_movn(ptr) ||
-           is_movi(ptr) ||
-           is_orr(ptr) ||
-           is_str_pre(ptr) ||
-           is_str_post(ptr) ||
-           is_str_uoff(ptr) ||
-           is_stp_pre(ptr) ||
-           is_stp_post(ptr) ||
-           is_stp_uoff(ptr) ||
-           is_stxr(ptr) ||
-           is_stur(ptr) ||
-           is_str_fp_uoff(ptr) ||
-           is_stur_fp(ptr) ||
-           is_stp_fp_pre(ptr) ||
-           is_stp_fp_post(ptr) ||
-           is_stp_fp_uoff(ptr) ||
-           is_ldrb_imm_uoff(ptr) ||
-           is_ldrh_imm_uoff(ptr) ||
-           is_ldrsb_imm_uoff(ptr) ||
-           is_ldrsh_imm_uoff(ptr) ||
-           is_ldrsw_imm_uoff(ptr) ||
-           is_strb_imm_uoff(ptr) ||
-           is_strh_imm_uoff(ptr) ||
-           is_pac(ptr) ||
-           is_pacsys(ptr) ||
-           is_pacga(ptr) ||
-           is_aut(ptr) ||
-           is_autsys(ptr) ||
-           is_nop(ptr);
-    // TODO: some floating point instrs (see 10.3.3 kernel)
-}
-
-typedef struct
-{
-    uint64_t x[32];
-    __uint128_t q[32];
-    uint32_t valid;
-    uint32_t qvalid;
-    uint32_t wide;
-    uint32_t host;
-} a64_state_t;
-
-typedef enum
-{
-    kEmuErr,
-    kEmuUnknown,
-    kEmuEnd,
-    kEmuRet,
-} emu_ret_t;
-
-typedef enum
-{
-    kEmuFnIgnore,
-    kEmuFnAssumeX0,
-    kEmuFnEnter,
-} emu_fn_behaviour_t;
-
-#define SPSIZE 0x1000
-
-static bool check_equal(uint32_t *pos, void *arg)
-{
-    return pos != (uint32_t*)arg;
-}
-
-static bool check_bl(uint32_t *pos, void *arg)
-{
-    if(is_bl((bl_t*)pos))
-    {
-        *(uint32_t**)arg = pos;
-        return false;
-    }
-    return true;
-}
-
-// Best-effort emulation: halt on unknown instructions, keep track of which registers
-// hold known values and only operate on those. Ignore non-static memory unless
-// it is specifically marked as "host memory".
-static emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_state_t *state, uint32_t *from, bool (*check)(uint32_t*, void*), void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour)
-{
-    if(init)
-    {
-        for(size_t i = 0; i < 32; ++i)
-        {
-            state->x[i] = 0;
-            state->q[i] = 0;
-        }
-        state->valid = 0;
-        state->wide = 0;
-        state->host = 0;
-    }
-    for(; check(from, arg); ++from)
-    {
-        void *ptr = from;
-        kptr_t addr = off2addr(kernel, (uintptr_t)from - (uintptr_t)kernel);
-        if(is_nop(ptr) /*|| is_stp_fp_uoff(ptr)*/ || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr))
-        {
-            // Ignore/no change
-        }
-        else if(is_str_pre(ptr) || is_str_post(ptr))
-        {
-            str_imm_t *str = ptr;
-            if(state->valid & (1 << str->Rn)) // Only if valid
-            {
-                kptr_t staddr = state->x[str->Rn] + get_str_imm(str);
-                if(is_str_pre(str))
-                {
-                    state->x[str->Rn] = staddr;
-                }
-                else if(is_str_post(str))
-                {
-                    kptr_t tmp = state->x[str->Rn];
-                    state->x[str->Rn] = staddr;
-                    staddr = tmp;
-                }
-                if(state->host & (1 << str->Rn))
-                {
-                    if(!(state->valid & (1 << str->Rt)))
-                    {
-                        if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                        else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
-                        return kEmuUnknown;
-                    }
-                    if(str->sf)
-                    {
-                        *(uint64_t*)staddr = state->x[str->Rt];
-                    }
-                    else
-                    {
-                        *(uint32_t*)staddr = (uint32_t)state->x[str->Rt];
-                    }
-                }
-            }
-        }
-        else if(is_str_uoff(ptr) || is_stur(ptr) || is_strb_imm_uoff(ptr) || is_strh_imm_uoff(ptr))
-        {
-            uint32_t Rt, Rn, size;
-            int64_t off;
-            if(is_str_uoff(ptr))
-            {
-                str_uoff_t *str = ptr;
-                Rt = str->Rt;
-                Rn = str->Rn;
-                size = 4 << str->sf;
-                off = get_str_uoff(str);
-            }
-            else if(is_stur(ptr))
-            {
-                stur_t *stur = ptr;
-                Rt = stur->Rt;
-                Rn = stur->Rn;
-                size = 4 << stur->sf;
-                off = get_stur_off(stur);
-            }
-            else if(is_strb_imm_uoff(ptr))
-            {
-                strb_imm_uoff_t *strb = ptr;
-                Rt = strb->Rt;
-                Rn = strb->Rn;
-                size = 1;
-                off = get_strb_imm_uoff(strb);
-            }
-            else if(is_strh_imm_uoff(ptr))
-            {
-                strh_imm_uoff_t *strh = ptr;
-                Rt = strh->Rt;
-                Rn = strh->Rn;
-                size = 2;
-                off = get_strh_imm_uoff(strh);
-            }
-            else
-            {
-                return kEmuErr;
-            }
-            if((state->valid & (1 << Rn)) && (state->host & (1 << Rn)))
-            {
-                if(!(state->valid & (1 << Rt)))
-                {
-                    if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                    else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
-                    return kEmuUnknown;
-                }
-                kptr_t staddr = state->x[Rn] + off;
-                switch(size)
-                {
-                    case 1: *(uint8_t *)staddr = (uint8_t )state->x[Rt]; break;
-                    case 2: *(uint16_t*)staddr = (uint16_t)state->x[Rt]; break;
-                    case 4: *(uint32_t*)staddr = (uint32_t)state->x[Rt]; break;
-                    case 8: *(uint64_t*)staddr = (uint64_t)state->x[Rt]; break;
-                    default:
-                        ERR("Bug in a64_emulate: str_uoff with invalid size at " ADDR, addr);
-                        exit(-1);
-                }
-            }
-        }
-        else if(is_stp_pre(ptr) || is_stp_post(ptr) || is_stp_uoff(ptr))
-        {
-            stp_t *stp = ptr;
-            if(state->valid & (1 << stp->Rn)) // Only if valid
-            {
-                kptr_t staddr = state->x[stp->Rn] + get_ldp_stp_off(stp);
-                if(is_stp_pre(stp))
-                {
-                    state->x[stp->Rn] = staddr;
-                }
-                else if(is_stp_post(stp))
-                {
-                    kptr_t tmp = state->x[stp->Rn];
-                    state->x[stp->Rn] = staddr;
-                    staddr = tmp;
-                }
-                if(state->host & (1 << stp->Rn))
-                {
-                    if(!(state->valid & (1 << stp->Rt)) || !(state->valid & (1 << stp->Rt2)))
-                    {
-                        if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                        else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
-                        return kEmuUnknown;
-                    }
-                    if(stp->sf)
-                    {
-                        uint64_t *p = (uint64_t*)staddr;
-                        p[0] = state->x[stp->Rt];
-                        p[1] = state->x[stp->Rt2];
-                    }
-                    else
-                    {
-                        uint32_t *p = (uint32_t*)staddr;
-                        p[0] = (uint32_t)state->x[stp->Rt];
-                        p[1] = (uint32_t)state->x[stp->Rt2];
-                    }
-                }
-            }
-        }
-        else if(is_stxr(ptr))
-        {
-            stxr_t *stxr = ptr;
-            // Always set success
-            state->x[stxr->Rs] = 0;
-            state->valid  |= 1 << stxr->Rs;
-            state->wide &= ~(1 << stxr->Rs);
-            state->host &= ~(1 << stxr->Rs);
-            if((state->valid & (1 << stxr->Rn)) && (state->host & (1 << stxr->Rn))) // Only if valid & host
-            {
-                if(!(state->valid & (1 << stxr->Rt)))
-                {
-                    if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                    else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
-                    return kEmuUnknown;
-                }
-                kptr_t staddr = state->x[stxr->Rn];
-                if(stxr->sf)
-                {
-                    *(uint64_t*)staddr = state->x[stxr->Rt];
-                }
-                else
-                {
-                    *(uint32_t*)staddr = (uint32_t)state->x[stxr->Rt];
-                }
-            }
-        }
-        else if(is_adr(ptr) || is_adrp(ptr))
-        {
-            adr_t *adr = ptr;
-            state->x[adr->Rd] = (adr->op1 ? (addr & ~0xfff) : addr) + get_adr_off(adr);
-            state->valid |=   1 << adr->Rd;
-            state->wide  |=   1 << adr->Rd;
-            state->host  &= ~(1 << adr->Rd);
-        }
-        else if(is_add_imm(ptr) || is_sub_imm(ptr))
-        {
-            add_imm_t *add = ptr;
-            if(!(state->valid & (1 << add->Rn))) // Unset validity
-            {
-                state->valid &= ~(1 << add->Rd);
-            }
-            else
-            {
-                state->x[add->Rd] = state->x[add->Rn] + (is_add_imm(add) ? 1LL : -1LL) * get_add_sub_imm(add);
-                state->valid |= 1 << add->Rd;
-                state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
-                state->host = (state->host & ~(1 << add->Rd)) | (((state->host >> add->Rn) & 0x1) << add->Rd);
-            }
-        }
-        else if(is_add_reg(ptr) || is_sub_reg(ptr))
-        {
-            add_reg_t *add = ptr;
-            if(!(state->valid & (1 << add->Rn)) || !(state->valid & (1 << add->Rm))) // Unset validity
-            {
-                state->valid &= ~(1 << add->Rd);
-            }
-            else
-            {
-                uint64_t Rm = state->x[add->Rm];
-                switch(add->shift)
-                {
-                    case 0b00: Rm =          Rm << add->imm; break; // LSL
-                    case 0b01: Rm =          Rm >> add->imm; break; // LSR
-                    case 0b10: Rm = (int64_t)Rm >> add->imm; break; // ASR
-                    default:
-                        WRN("Bad add/sub shift at " ADDR, addr);
-                        return kEmuErr;
-                }
-                uint64_t Rd;
-                if(is_add_reg(add))
-                {
-                    Rd = state->x[add->Rn] + Rm;
-                }
-                else
-                {
-                    Rd = state->x[add->Rn] - Rm;
-                }
-                state->x[add->Rd] = add->sf ? Rd : (Rd & 0xffffffffULL);
-                state->valid |= 1 << add->Rd;
-                state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
-                // Weird case: we only wanna keep the host flag if exactly one of the source registers has it.
-                // If both have it, something's gone wrong, but we wanna be able to add immediates that are loaded into a register.
-                state->host = (state->host & ~(1 << add->Rd)) | ((((state->host >> add->Rn) & 0x1) ^ ((state->host >> add->Rm) & 0x1)) << add->Rd);
-            }
-        }
-        else if(is_ldr_imm_uoff(ptr) || is_ldur(ptr) || is_ldrb_imm_uoff(ptr) || is_ldrh_imm_uoff(ptr) || is_ldrsb_imm_uoff(ptr) || is_ldrsh_imm_uoff(ptr) || is_ldrsw_imm_uoff(ptr))
-        {
-            bool sign = false;
-            uint32_t Rt, Rn, sf, size;
-            int64_t off;
-            if(is_ldr_imm_uoff(ptr))
-            {
-                ldr_imm_uoff_t *ldr = ptr;
-                Rt = ldr->Rt;
-                Rn = ldr->Rn;
-                sf = ldr->sf;
-                size = 4 << ldr->sf;
-                off = get_ldr_imm_uoff(ldr);
-            }
-            else if(is_ldur(ptr))
-            {
-                ldur_t *ldur = ptr;
-                Rt = ldur->Rt;
-                Rn = ldur->Rn;
-                sf = ldur->sf;
-                size = 4 << ldur->sf;
-                off = get_ldur_off(ldur);
-            }
-            else if(is_ldrb_imm_uoff(ptr))
-            {
-                ldrb_imm_uoff_t *ldrb = ptr;
-                Rt = ldrb->Rt;
-                Rn = ldrb->Rn;
-                sf = 0;
-                size = 1;
-                off = get_ldrb_imm_uoff(ldrb);
-            }
-            else if(is_ldrh_imm_uoff(ptr))
-            {
-                ldrh_imm_uoff_t *ldrh = ptr;
-                Rt = ldrh->Rt;
-                Rn = ldrh->Rn;
-                sf = 0;
-                size = 2;
-                off = get_ldrh_imm_uoff(ldrh);
-            }
-            else if(is_ldrsb_imm_uoff(ptr))
-            {
-                ldrsb_imm_uoff_t *ldrsb = ptr;
-                Rt = ldrsb->Rt;
-                Rn = ldrsb->Rn;
-                sf = ldrsb->sf;
-                size = 1;
-                off = get_ldrsb_imm_uoff(ldrsb);
-                sign = true;
-            }
-            else if(is_ldrsh_imm_uoff(ptr))
-            {
-                ldrsh_imm_uoff_t *ldrsh = ptr;
-                Rt = ldrsh->Rt;
-                Rn = ldrsh->Rn;
-                sf = ldrsh->sf;
-                size = 2;
-                off = get_ldrsh_imm_uoff(ldrsh);
-                sign = true;
-            }
-            else if(is_ldrsw_imm_uoff(ptr))
-            {
-                ldrsw_imm_uoff_t *ldrsw = ptr;
-                Rt = ldrsw->Rt;
-                Rn = ldrsw->Rn;
-                sf = 1;
-                size = 4;
-                off = get_ldrsw_imm_uoff(ldrsw);
-                sign = true;
-            }
-            else
-            {
-                return kEmuErr;
-            }
-            if(!(state->valid & (1 << Rn))) // Unset validity
-            {
-                state->valid &= ~(1 << Rt);
-            }
-            else
-            {
-                kptr_t laddr = state->x[Rn] + off;
-                void *ldr_addr = (state->host & (1 << Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
-                if(!ldr_addr)
-                {
-                    return kEmuErr;
-                }
-                uint64_t val;
-                switch(size)
-                {
-                    case 1: val = *(uint8_t *)ldr_addr; break;
-                    case 2: val = *(uint16_t*)ldr_addr; break;
-                    case 4: val = *(uint32_t*)ldr_addr; break;
-                    case 8: val = *(uint64_t*)ldr_addr; break;
-                    default:
-                        ERR("Bug in a64_emulate: ldr_uoff with invalid size at " ADDR, addr);
-                        exit(-1);
-                }
-                if(sign)
-                {
-                    switch(size)
-                    {
-                        case 1: val = ((int64_t)val << 56) >> 56; break;
-                        case 2: val = ((int64_t)val << 48) >> 48; break;
-                        case 4: val = ((int64_t)val << 32) >> 32; break;
-                        default:
-                            ERR("Bug in a64_emulate: ldr_uoff with invalid signed size at " ADDR, addr);
-                            exit(-1);
-                    }
-                    if(!sf)
-                    {
-                        val &= 0xffffffff;
-                    }
-                }
-                if(!(state->host & (1 << Rn)) && size == 8)
-                {
-                    if(is_in_fixup_chain(kernel, kbase, ldr_addr))
-                    {
-                        val = kuntag(kbase, fixupKind, val, NULL, NULL);
-                    }
-                }
-                state->x[Rt] = val;
-                state->valid |= 1 << Rt;
-                state->wide = (state->wide & ~(1 << Rt)) | (sf << Rt);
-                state->host &= ~(1 << Rt);
-            }
-        }
-        else if(is_ldr_lit(ptr))
-        {
-            ldr_lit_t *ldr = ptr;
-            void *ldr_addr = addr2ptr(kernel, addr + get_ldr_lit_off(ldr));
-            if(!ldr_addr)
-            {
-                return kEmuErr;
-            }
-            kptr_t val = *(kptr_t*)ldr_addr;
-            if(ldr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
-            {
-                val = kuntag(kbase, fixupKind, val, NULL, NULL);
-            }
-            state->x[ldr->Rt] = val;
-            state->valid |= 1 << ldr->Rt;
-            state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
-            state->host &= ~(1 << ldr->Rt);
-        }
-        else if(is_ldp_pre(ptr) || is_ldp_post(ptr) || is_ldp_uoff(ptr))
-        {
-            ldp_t *ldp = ptr;
-            if(!(state->valid & (1 << ldp->Rn))) // Unset validity
-            {
-                state->valid &= ~((1 << ldp->Rt) | (1 << ldp->Rt2));
-            }
-            else
-            {
-                kptr_t laddr = state->x[ldp->Rn] + get_ldp_stp_off(ldp);
-                if(is_ldp_pre(ldp))
-                {
-                    state->x[ldp->Rn] = laddr;
-                }
-                else if(is_ldp_post(ldp))
-                {
-                    kptr_t tmp = state->x[ldp->Rn];
-                    state->x[ldp->Rn] = laddr;
-                    laddr = tmp;
-                }
-                void *ldr_addr = (state->host & (1 << ldp->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
-                if(!ldr_addr)
-                {
-                    return kEmuErr;
-                }
-                if(ldp->sf)
-                {
-                    uint64_t *p = ldr_addr;
-                    uint64_t v1 = p[0];
-                    uint64_t v2 = p[1];
-                    if(!(state->host & (1 << ldp->Rn)))
-                    {
-                        if(is_in_fixup_chain(kernel, kbase, ldr_addr))
-                        {
-                            v1 = kuntag(kbase, fixupKind, v1, NULL, NULL);
-                        }
-                        if(is_in_fixup_chain(kernel, kbase, ldr_addr + 1))
-                        {
-                            v2 = kuntag(kbase, fixupKind, v2, NULL, NULL);
-                        }
-                    }
-                    state->x[ldp->Rt]  = v1;
-                    state->x[ldp->Rt2] = v2;
-                }
-                else
-                {
-                    uint32_t *p = ldr_addr;
-                    state->x[ldp->Rt]  = p[0];
-                    state->x[ldp->Rt2] = p[1];
-                }
-                state->valid |= (1 << ldp->Rt) | (1 << ldp->Rt2);
-                state->wide = (state->wide & ~((1 << ldp->Rt) | (1 << ldp->Rt2))) | (ldp->sf << ldp->Rt) | (ldp->sf << ldp->Rt2);
-                state->host &= ~((1 << ldp->Rt) | (1 << ldp->Rt2));
-            }
-        }
-        else if(is_ldxr(ptr))
-        {
-            ldxr_t *ldxr = ptr;
-            if(!(state->valid & (1 << ldxr->Rn))) // Unset validity
-            {
-                state->valid &= ~(1 << ldxr->Rt);
-            }
-            else
-            {
-                kptr_t laddr = state->x[ldxr->Rn];
-                void *ldr_addr = (state->host & (1 << ldxr->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
-                if(!ldr_addr)
-                {
-                    return kEmuErr;
-                }
-                kptr_t val = *(kptr_t*)ldr_addr;
-                if(ldxr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
-                {
-                    val = kuntag(kbase, fixupKind, val, NULL, NULL);
-                }
-                state->x[ldxr->Rt] = val;
-                state->valid |= 1 << ldxr->Rt;
-                state->wide = (state->wide & ~(1 << ldxr->Rt)) | (ldxr->sf << ldxr->Rt);
-                state->host &= ~(1 << ldxr->Rt);
-            }
-        }
-        else if(is_ldadd(ptr))
-        {
-            ldadd_t *ldadd = ptr;
-            if(!(state->valid & (1 << ldadd->Rn))) // Unset validity
-            {
-                if(ldadd->Rt != 31)
-                {
-                    state->valid &= ~(1 << ldadd->Rt);
-                }
-            }
-            else
-            {
-                kptr_t daddr = state->x[ldadd->Rn];
-                void *ld_addr = (state->host & (1 << ldadd->Rn)) ? (void*)daddr : addr2ptr(kernel, daddr);
-                if(!ld_addr)
-                {
-                    return kEmuErr;
-                }
-                kptr_t val = *(kptr_t*)ld_addr;
-                if(ldadd->Rt != 31)
-                {
-                    state->x[ldadd->Rt] = val;
-                    state->valid |= 1 << ldadd->Rt;
-                    state->wide = (state->wide & ~(1 << ldadd->Rt)) | (ldadd->sf << ldadd->Rt);
-                    state->host &= ~(1 << ldadd->Rt);
-                }
-                if((state->host & (1 << ldadd->Rn)))
-                {
-                    if(!(state->valid & (1 << ldadd->Rs)))
-                    {
-                        if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                        else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
-                        return kEmuUnknown;
-                    }
-                    val += state->x[ldadd->Rs];
-                    if(ldadd->sf)
-                    {
-                        *(uint64_t*)ld_addr = val;
-                    }
-                    else
-                    {
-                        *(uint32_t*)ld_addr = (uint32_t)val;
-                    }
-                }
-            }
-        }
-        else if(is_ldr_fp_uoff(ptr) || is_ldur_fp(ptr))
-        {
-            uint32_t Rt, Rn, size;
-            int64_t off;
-            if(is_ldr_fp_uoff(ptr))
-            {
-                str_fp_uoff_t *ldr = ptr;
-                Rt = ldr->Rt;
-                Rn = ldr->Rn;
-                size = get_fp_uoff_size(ldr);
-                off = get_fp_uoff(ldr);
-            }
-            else if(is_ldur_fp(ptr))
-            {
-                ldur_fp_t *ldur = ptr;
-                Rt = ldur->Rt;
-                Rn = ldur->Rn;
-                size = get_ldur_stur_fp_size(ldur);
-                off = get_ldur_stur_fp_off(ldur);
-            }
-            else
-            {
-                return kEmuErr;
-            }
-            if(!(state->valid & (1 << Rn))) // Unset validity
-            {
-                state->qvalid &= ~(1 << Rt);
-            }
-            else
-            {
-                kptr_t laddr = state->x[Rn] + off;
-                void *ldr_addr = (state->host & (1 << Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
-                if(!ldr_addr)
-                {
-                    return kEmuErr;
-                }
-                switch(size)
-                {
-                    case 0: state->q[Rt] = *(uint8_t *)ldr_addr; break;
-                    case 1: state->q[Rt] = *(uint16_t*)ldr_addr; break;
-                    case 2: state->q[Rt] = *(uint32_t*)ldr_addr; break;
-                    case 3: state->q[Rt] = *(uint64_t*)ldr_addr; break;
-                    case 4:
-                    {
-                        __uint128_t val = 0;
-                        val |= (__uint128_t)((uint64_t*)ldr_addr)[0];
-                        val |= (__uint128_t)((uint64_t*)ldr_addr)[1] << 64;
-                        state->q[Rt] = val;
-                        break;
-                    }
-                    default:
-                        WRN("SIMD ldr with invalid size at " ADDR, addr);
-                        return kEmuErr;
-                }
-                state->qvalid |= 1 << Rt;
-            }
-        }
-        else if(is_str_fp_uoff(ptr) || is_stur_fp(ptr))
-        {
-            uint32_t Rt, Rn, size;
-            int64_t off;
-            if(is_str_fp_uoff(ptr))
-            {
-                str_fp_uoff_t *str = ptr;
-                Rt = str->Rt;
-                Rn = str->Rn;
-                size = get_fp_uoff_size(str);
-                off = get_fp_uoff(str);
-            }
-            else if(is_stur_fp(ptr))
-            {
-                stur_fp_t *stur = ptr;
-                Rt = stur->Rt;
-                Rn = stur->Rn;
-                size = get_ldur_stur_fp_size(stur);
-                off = get_ldur_stur_fp_off(stur);
-            }
-            else
-            {
-                return kEmuErr;
-            }
-            if((state->valid & (1 << Rn)) && (state->host & (1 << Rn)))
-            {
-                if(!(state->qvalid & (1 << Rt)))
-                {
-                    if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                    else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
-                    return kEmuUnknown;
-                }
-                kptr_t staddr = state->x[Rn] + off;
-                switch(size)
-                {
-                    case 0: *(uint8_t *)staddr = (uint8_t )state->q[Rt]; break;
-                    case 1: *(uint16_t*)staddr = (uint16_t)state->q[Rt]; break;
-                    case 2: *(uint32_t*)staddr = (uint32_t)state->q[Rt]; break;
-                    case 3: *(uint64_t*)staddr = (uint64_t)state->q[Rt]; break;
-                    case 4:
-                    {
-                        ((uint64_t*)staddr)[0] = (uint64_t) state->q[Rt];
-                        ((uint64_t*)staddr)[1] = (uint64_t)(state->q[Rt] >> 64);
-                        break;
-                    }
-                    default:
-                        WRN("SIMD str with invalid size at " ADDR, addr);
-                        return kEmuErr;
-                }
-            }
-        }
-        else if(is_ldp_fp_pre(ptr) || is_ldp_fp_post(ptr) || is_ldp_fp_uoff(ptr))
-        {
-            ldp_fp_t *ldp = ptr;
-            if(!(state->valid & (1 << ldp->Rn))) // Unset validity
-            {
-                state->qvalid &= ~((1 << ldp->Rt) | (1 << ldp->Rt2));
-            }
-            else
-            {
-                kptr_t laddr = state->x[ldp->Rn] + get_ldp_stp_fp_off(ldp);
-                if(is_ldp_fp_pre(ldp))
-                {
-                    state->x[ldp->Rn] = laddr;
-                }
-                else if(is_ldp_fp_post(ldp))
-                {
-                    kptr_t tmp = state->x[ldp->Rn];
-                    state->x[ldp->Rn] = laddr;
-                    laddr = tmp;
-                }
-                void *ldr_addr = (state->host & (1 << ldp->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
-                if(!ldr_addr)
-                {
-                    return kEmuErr;
-                }
-                switch(ldp->opc)
-                {
-                    case 0:
-                    {
-                        uint32_t *p = (uint32_t*)ldr_addr;
-                        state->q[ldp->Rt]  = p[0];
-                        state->q[ldp->Rt2] = p[1];
-                        break;
-                    }
-                    case 1:
-                    {
-                        uint64_t *p = (uint64_t*)ldr_addr;
-                        state->q[ldp->Rt]  = p[0];
-                        state->q[ldp->Rt2] = p[1];
-                        break;
-                    }
-                    case 2:
-                    {
-                        uint64_t *p = (uint64_t*)ldr_addr;
-                        __uint128_t v1 = 0,
-                                    v2 = 0;
-                        v1 |= (__uint128_t)p[0];
-                        v1 |= (__uint128_t)p[1] << 64;
-                        v2 |= (__uint128_t)p[2];
-                        v2 |= (__uint128_t)p[3] << 64;
-                        state->q[ldp->Rt]  = v1;
-                        state->q[ldp->Rt2] = v2;
-                        break;
-                    }
-                    default:
-                        WRN("SIMD ldp with invalid size at " ADDR, addr);
-                        return kEmuErr;
-                }
-                state->qvalid |= (1 << ldp->Rt) | (1 << ldp->Rt2);
-            }
-        }
-        else if(is_stp_fp_pre(ptr) || is_stp_fp_post(ptr) || is_stp_fp_uoff(ptr))
-        {
-            stp_fp_t *stp = ptr;
-            if(state->valid & (1 << stp->Rn)) // Only if valid
-            {
-                kptr_t staddr = state->x[stp->Rn] + get_ldp_stp_fp_off(stp);
-                if(is_stp_fp_pre(stp))
-                {
-                    state->x[stp->Rn] = staddr;
-                }
-                else if(is_stp_fp_post(stp))
-                {
-                    kptr_t tmp = state->x[stp->Rn];
-                    state->x[stp->Rn] = staddr;
-                    staddr = tmp;
-                }
-                if(state->host & (1 << stp->Rn))
-                {
-                    if(!(state->qvalid & (1 << stp->Rt)) || !(state->qvalid & (1 << stp->Rt2)))
-                    {
-                        if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
-                        else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
-                        return kEmuUnknown;
-                    }
-                    switch(stp->opc)
-                    {
-                        case 0:
-                        {
-                            uint32_t *p = (uint32_t*)staddr;
-                            p[0] = (uint32_t)state->q[stp->Rt];
-                            p[1] = (uint32_t)state->q[stp->Rt2];
-                            break;
-                        }
-                        case 1:
-                        {
-                            uint64_t *p = (uint64_t*)staddr;
-                            p[0] = (uint64_t)state->q[stp->Rt];
-                            p[1] = (uint64_t)state->q[stp->Rt2];
-                            break;
-                        }
-                        case 2:
-                        {
-                            uint64_t *p = (uint64_t*)staddr;
-                            p[0] = (uint64_t) state->q[stp->Rt];
-                            p[1] = (uint64_t)(state->q[stp->Rt] >> 64);
-                            p[2] = (uint64_t) state->q[stp->Rt2];
-                            p[3] = (uint64_t)(state->q[stp->Rt2] >> 64);
-                            break;
-                        }
-                        default:
-                            WRN("SIMD stp with invalid size at " ADDR, addr);
-                            return kEmuErr;
-                    }
-                }
-            }
-        }
-        else if(is_bl(ptr))
-        {
-            if(fn_behaviour == kEmuFnEnter)
-            {
-                state->x[30] = addr + 4;
-                state->valid |=   1 << 30;
-                state->wide  |=   1 << 30;
-                state->host  &= ~(1 << 30);
-                from = (uint32_t*)((uintptr_t)from + get_bl_off(ptr));
-                --from;
-            }
-            else
-            {
-                state->valid &= ~0x4003fffe;
-                if(fn_behaviour != kEmuFnAssumeX0 || !((state->valid & 0x1) && (state->host & 0x1)))
-                {
-                    state->valid &= ~0x1;
-                }
-                state->qvalid &= 0xff00; // blindly assuming 128bit shit is handled as needed
-            }
-        }
-        else if(is_mov(ptr))
-        {
-            mov_t *mov = ptr;
-            if(!(state->valid & (1 << mov->Rm))) // Unset validity
-            {
-                state->valid &= ~(1 << mov->Rd);
-            }
-            else
-            {
-                state->x[mov->Rd] = state->x[mov->Rm];
-                state->valid |= 1 << mov->Rd;
-                state->wide = (state->wide & ~(1 << mov->Rd)) | (((state->wide >> mov->Rm) & 0x1 & mov->sf) << mov->Rd);
-                state->host = (state->host & ~(1 << mov->Rd)) | (((state->host >> mov->Rm) & 0x1) << mov->Rd);
-            }
-        }
-        else if(is_movz(ptr))
-        {
-            movz_t *movz = ptr;
-            state->x[movz->Rd] = get_movzk_imm(movz);
-            state->valid |= 1 << movz->Rd;
-            state->wide = (state->wide & ~(1 << movz->Rd)) | (movz->sf << movz->Rd);
-            state->host &= ~(1 << movz->Rd);
-        }
-        else if(is_movk(ptr))
-        {
-            movk_t *movk = ptr;
-            if(state->valid & (1 << movk->Rd)) // Only if valid
-            {
-                state->x[movk->Rd] = (state->x[movk->Rd] & ~(0xffff << (movk->hw << 4))) | get_movzk_imm(movk);
-                state->valid |= 1 << movk->Rd;
-                state->wide = (state->wide & ~(1 << movk->Rd)) | (movk->sf << movk->Rd);
-                state->host &= ~(1 << movk->Rd);
-            }
-        }
-        else if(is_movn(ptr))
-        {
-            movn_t *movn = ptr;
-            state->x[movn->Rd] = get_movn_imm(movn);
-            state->valid |= 1 << movn->Rd;
-            state->wide = (state->wide & ~(1 << movn->Rd)) | (movn->sf << movn->Rd);
-            state->host &= ~(1 << movn->Rd);
-        }
-        else if(is_movi(ptr))
-        {
-            movi_t *movi = ptr;
-            state->q[movi->Rd] = get_movi_imm(movi);
-            state->qvalid |= 1 << movi->Rd;
-        }
-        else if(is_orr(ptr))
-        {
-            orr_t *orr = ptr;
-            if(orr->Rn == 31 || (state->valid & (1 << orr->Rn)))
-            {
-                state->x[orr->Rd] = (orr->Rn == 31 ? 0 : state->x[orr->Rn]) | get_orr_imm(orr);
-                state->valid |= 1 << orr->Rd;
-                state->wide = (state->wide & ~(1 << orr->Rd)) | (orr->sf << orr->Rd);
-                state->host &= ~(1 << orr->Rd);
-            }
-            else
-            {
-                state->valid &= ~(1 << orr->Rd);
-            }
-        }
-        else if(is_b(ptr))
-        {
-            from = (uint32_t*)((uintptr_t)from + get_bl_off(ptr));
-            --from;
-        }
-        else if(is_cbz(ptr) || is_cbnz(ptr))
-        {
-            cbz_t *cbz = ptr;
-            if(!(state->valid & (1 << cbz->Rt)))
-            {
-                if(warnUnknown) WRN("Cannot decide cbz/cbnz at " ADDR, addr);
-                else            DBG("Cannot decide cbz/cbnz at " ADDR, addr);
-                return kEmuUnknown;
-            }
-            if((state->x[cbz->Rt] == 0) == is_cbz(cbz))
-            {
-                from = (uint32_t*)((uintptr_t)from + get_cbz_off(cbz));
-                --from;
-            }
-        }
-        else if(is_tbz(ptr) || is_tbnz(ptr))
-        {
-            tbz_t *tbz = ptr;
-            uint32_t bit = get_tbz_bit(tbz);
-            if(!(state->valid & (1 << tbz->Rt)) || (bit >= 32 && !(state->wide & (1 << tbz->Rt))))
-            {
-                if(warnUnknown) WRN("Cannot decide tbz/tbnz at " ADDR, addr);
-                else            DBG("Cannot decide tbz/tbnz at " ADDR, addr);
-                return kEmuUnknown;
-            }
-            if(((state->x[tbz->Rt] & (1 << bit)) == 0) == is_tbz(tbz))
-            {
-                from = (uint32_t*)((uintptr_t)from + get_tbz_off(tbz));
-                --from;
-            }
-        }
-        else if(is_ret(ptr))
-        {
-            if(fn_behaviour == kEmuFnEnter)
-            {
-                if(!(state->valid & (1 << 30)) || !(state->wide & (1 << 30)))
-                {
-                    if(warnUnknown) WRN("Cannot return at " ADDR, addr);
-                    else            DBG("Cannot return at " ADDR, addr);
-                    return kEmuUnknown;
-                }
-                if(state->host & (1 << 30))
-                {
-                    WRN("Cannot return to host address at " ADDR, addr);
-                    return kEmuErr;
-                }
-                // This is really dirty, but... whatcha gonna do?
-                if(state->x[30] != 0)
-                {
-                    from = addr2ptr(kernel, state->x[30]);
-                    --from;
-                    continue;
-                }
-            }
-            return kEmuRet;
-        }
-        else
-        {
-            WRN("Unexpected instruction at " ADDR, addr);
-            return kEmuErr;
-        }
-    }
-    return kEmuEnd;
-}
-
-// This is quite possibly the trickiest part: finding the start of the function.
-// At first glance it seems simple: just find the function prologue. But how do you
-// actually detect the first instruction of the prologue? On arm64e kernels there
-// should be a "pacibsp", but on arm64? Is "sub sp, sp, 0x..." or a pre-index store
-// enough? But either way, there are functions that just rearrange some args and
-// then do a tail call - these functions have no stack frame whatsoever. And
-// at some point clang also started what I call "late stack frames" which only
-// happen after some early-exit conditions have been passed already, so the prologue
-// is no longer guaranteed to constitute the start of the function.
-// The other approach would be to just seek backwards as long as we hit "linear"
-// instructions, as that would at least constitute one *possible* call path.
-// The nasty issue with that are "noreturn" functions like panic and __stack_chk_fail.
-// Those are excruciatingly often ordered right before the following function like so:
-//
-//      ldp x29, x30, [sp, 0x10]
-//      add sp, sp, 0x20
-//      ret
-//      adrp x0, 0x...
-//      add x0, x0, 0x...
-//      bl sym.panic
-//      sub sp, sp, 0x20
-//      stp x29, x30, [sp, 0x10]
-//      add x29, sp, 0x10
-//
-// Without more information on the function called by such a "bl", we simply don't know
-// whether that function can/will return or not. There is but one assumption we can make:
-// We can assume function calls are only made inside stack frames, because "bl" will
-// otherwise corrupt x30. So we simply keep track of whether we have a stack frame
-// (or more precisely, whether x30 was stashed away) by looking out for "ldp/stp x29, x30"
-// when seeking backwards. As long as we're inside a stack frame, "bl" are assumed to be
-// part of the function, once we leave it, they are no longer considered to be "linear".
-// We also always start seeking backwards from a function call, and in the case of "bl"
-// we assume we have a stack frame, in the case of "b" we assume we do not.
-static uint32_t* find_function_start(void *kernel, mach_seg_t *seg, const char *name, uint32_t *fnstart, bool have_stack_frame)
-{
-    while(1)
-    {
-        --fnstart;
-        if(fnstart < (uint32_t*)((uintptr_t)kernel + seg->fileoff))
-        {
-            // If we expect a stack frame, this is fatal.
-            if(have_stack_frame)
-            {
-                WRN("Hit start of segment at " ADDR " for %s", seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), name);
-                return NULL;
-            }
-            // Otherwise ehh whatever.
-            DBG("Hit start of segment at " ADDR " for %s", seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff)), name);
-            ++fnstart;
-            break;
-        }
-        if(!is_linear_inst(fnstart) || (is_bl((bl_t*)fnstart) && !have_stack_frame))
-        {
-            ++fnstart;
-            break;
-        }
-        stp_t *stp = (stp_t*)fnstart;
-        ldp_t *ldp = (ldp_t*)fnstart;
-        if((is_stp_pre(stp) || is_stp_uoff(stp)) && stp->Rt == 29 && stp->Rt2 == 30)
-        {
-            have_stack_frame = false;
-        }
-        else if((is_ldp_post(ldp) || is_ldp_uoff(ldp)) && ldp->Rt == 29 && ldp->Rt2 == 30)
-        {
-            have_stack_frame = true;
-        }
-    }
-    return fnstart;
-}
-
-// This is a very annoying thing that we only need as a fallback.
-// Certain calls to OSMetaClass::OSMetaClass() do not have x0 generated as an immediate,
-// but passed in from the caller. If these are the only constructor calls for a given class,
-// then we have no choice but to follow those calls back until we get an x0.
-static bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint32_t wantvalid, const char *name)
-{
-    mach_seg_t *seg = seg4ptr(kernel, fncall);
-    kptr_t fncalladdr = seg->vmaddr + ((uintptr_t)fncall - ((uintptr_t)kernel + seg->fileoff));
-
-    bool have_stack_frame;
-    bl_t *bl = (bl_t*)fncall;
-    if(is_bl(bl))
-    {
-        have_stack_frame = true;
-    }
-    else if(is_b(bl))
-    {
-        have_stack_frame = false;
-    }
-    else
-    {
-        ERR("Bug in multi_call_emulate: fncall at " ADDR " is neither b nor bl", fncalladdr);
-        exit(-1);
-    }
-    uint32_t *fnstart = find_function_start(kernel, seg, name, fncall, have_stack_frame);
-    if(!fnstart)
-    {
-        return false;
-    }
-    kptr_t fnaddr = seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff));
-    DBG("Function with call " ADDR " starts at " ADDR, fncalladdr, fnaddr);
-
-    bzero(sp, SPSIZE);
-    for(size_t i = 0; i < 31; ++i)
-    {
-        state->x[i] = 0;
-        state->q[i] = 0;
-    }
-    state->q[31]  = 0;
-    state->x[31]  = (uintptr_t)sp + SPSIZE;
-    state->valid  = 0xfff80000;
-    state->qvalid = 0x0000ff00;
-    state->wide   = 0xfff80000;
-    state->host   = 0x80000000;
-    emu_ret_t ret = a64_emulate(kernel, kbase, fixupKind, state, fnstart, &check_equal, end, false, false, kEmuFnEnter);
-    switch(ret)
-    {
-        default:
-        case kEmuRet:
-            // This should be impossible
-            ERR("Bug in a64_emulate: got %u for kEmuFnEnter", ret);
-            exit(-1);
-
-        case kEmuErr:
-            // This is a fatal error, so no point in trying further.
-            return false;
-
-        case kEmuEnd:
-            // This is the only possibly successful case. Just need to make sure we got everything we need.
-            if((state->valid & wantvalid) == wantvalid)
-            {
-                DBG("Got a satisfying function call stack at " ADDR, fnaddr);
-                return true;
-            }
-            // Otherwise fall through
-
-        case kEmuUnknown:
-            // This means we don't have enough info yet, so break into the code below and do another call level.
-            break;
-    }
-
-    DBG("Searching for function calls to " ADDR, fnaddr);
-    STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
-    {
-        bl_t *bl = (bl_t*)mem;
-        if(is_bl(bl) || is_b(bl))
-        {
-            kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
-            kptr_t bltarg = bladdr + get_bl_off(bl);
-            if(bltarg == fnaddr && multi_call_emulate(kernel, kbase, fixupKind, mem, end, state, sp, wantvalid, name))
-            {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static bool extract_symbols(void *kernel, mach_stab_t *stab, sym_t **symp, size_t *nsymp)
-{
-    mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
-    char *strtab = (char*)((uintptr_t)kernel + stab->stroff);
-    size_t nsyms = *nsymp;
-    for(size_t i = 0; i < stab->nsyms; ++i)
-    {
-        if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
-        {
-            continue;
-        }
-        ++nsyms;
-    }
-    if(nsyms == *nsymp)
-    {
-        return true;
-    }
-    sym_t *syms = realloc(*symp, sizeof(sym_t) * nsyms);
-    if(!syms)
-    {
-        ERRNO("malloc(syms)");
-        return false;
-    }
-    size_t idx = *nsymp;
-    for(size_t i = 0; i < stab->nsyms; ++i)
-    {
-        if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
-        {
-            continue;
-        }
-        syms[idx].addr = symtab[i].n_value;
-        syms[idx].name = &strtab[symtab[i].n_strx];
-        DBG("Symbol: " ADDR " %s", syms[idx].addr, syms[idx].name);
-        ++idx;
-    }
-    *symp = syms;
-    *nsymp = nsyms;
-    return true;
-}
-
-static bool extract_reloc(void *kernel, kptr_t kbase, mach_dstab_t *dstab, mach_nlist_t *symtab, char *strtab, sym_t **exrelocp, size_t *nexrelocp)
-{
-    if(dstab->nextrel > 0)
-    {
-        sym_t *exreloc = *exrelocp;
-        size_t nexreloc = *nexrelocp;
-        mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)kernel + dstab->extreloff);
-        exreloc = realloc(exreloc, (nexreloc + dstab->nextrel) * sizeof(sym_t));
-        if(!exreloc)
-        {
-            ERRNO("malloc(exreloc)");
-            return false;
-        }
-        for(size_t i = 0; i < dstab->nextrel; ++i)
-        {
-            kptr_t addr = kbase + reloc[i].r_address;
-            const char *name = &strtab[symtab[reloc[i].r_symbolnum].n_strx];
-            DBG("Exreloc " ADDR ": %s", addr, name);
-            exreloc[nexreloc].addr = addr;
-            exreloc[nexreloc].name = name;
-            ++nexreloc;
-        }
-        *exrelocp = exreloc;
-        *nexrelocp = nexreloc;
-    }
-    return true;
-}
-
-static int validate_fat(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const char *name)
-{
-    void *macho = *machop;
-    size_t machosize = *machosizep;
-    mach_hdr_t *hdr = *hdrp;
-
-    if(machosize < sizeof(mach_hdr_t))
-    {
-        if(name) ERR("Embedded file is too short to be a Mach-O (%s).", name);
-        else     ERR("File is too short to be a Mach-O.");
-        return -1;
-    }
-
-    fat_hdr_t *fat = (fat_hdr_t*)hdr;
-    if(fat->magic == FAT_CIGAM)
-    {
-        bool found = false;
-        fat_arch_t *arch = (fat_arch_t*)(fat + 1);
-        for(size_t i = 0; i < SWAP32(fat->nfat_arch); ++i)
-        {
-            if(SWAP32(arch[i].cputype) == CPU_TYPE_ARM64)
-            {
-                uint32_t offset = SWAP32(arch[i].offset);
-                uint32_t newsize = SWAP32(arch[i].size);
-                if(offset > machosize || newsize > machosize - offset)
-                {
-                    if(name) ERR("Embedded fat arch out of bounds (%s).", name);
-                    else     ERR("Fat arch out of bounds.");
-                    return -1;
-                }
-                if(newsize < sizeof(mach_hdr_t))
-                {
-                    if(name) ERR("Embedded fat arch is too short to contain a Mach-O (%s).", name);
-                    else     ERR("Fat arch is too short to contain a Mach-O.");
-                    return -1;
-                }
-                macho = (void*)((uintptr_t)hdr + offset);
-                machosize = newsize;
-                hdr = macho;
-                found = true;
-                break;
-            }
-        }
-        if(!found)
-        {
-            if(name) ERR("No arm64 slice in embedded fat binary (%s).", name);
-            else     ERR("No arm64 slice in fat binary.");
-            return -1;
-        }
-        *machop     = macho;
-        *machosizep = machosize;
-        *hdrp       = hdr;
-    }
-    return 0;
-}
-
-static int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const char *name)
-{
-    void *macho = *machop;
-    size_t machosize = *machosizep;
-    mach_hdr_t *hdr = *hdrp;
-    if(!name)
-    {
-        int r = validate_fat(&macho, &machosize, &hdr, name);
-        if(r != 0)
-        {
-            return r;
-        }
-    }
-
-    if(hdr->magic != MACH_MAGIC)
-    {
-        if(name) ERR("Wrong embedded magic: 0x%08x (%s)", hdr->magic, name);
-        else     ERR("Wrong magic: 0x%08x", hdr->magic);
-        return -1;
-    }
-    if(hdr->cputype != CPU_TYPE_ARM64)
-    {
-        if(name) ERR("Wrong embedded architecture, only arm64 is supported (%s).", name);
-        else     ERR("Wrong architecture, only arm64 is supported.");
-        return -1;
-    }
-    if(hdr->filetype != MH_EXECUTE && hdr->filetype != MH_KEXT_BUNDLE && (name != NULL || hdr->filetype != MH_FILESET))
-    {
-        if(name) ERR("Wrong embedded Mach-O type: 0x%x (%s)", hdr->filetype, name);
-        else     ERR("Wrong Mach-O type: 0x%x", hdr->filetype);
-        return -1;
-    }
-    if(hdr->sizeofcmds > machosize - sizeof(mach_hdr_t))
-    {
-        if(name) ERR("Embedded Mach-O header out of bounds (%s).", name);
-        else     ERR("Mach-O header out of bounds.");
-        return -1;
-    }
-    mach_nlist_t *symtab = NULL;
-    char         *strtab = NULL;
-    // TODO: replace header & weed out invalid load commands?
-    FOREACH_CMD(hdr, cmd)
-    {
-        if(cmd->cmdsize > hdr->sizeofcmds - ((uintptr_t)cmd - (uintptr_t)(hdr + 1)))
-        {
-            if(name) ERR("Embedded Mach-O load command out of bounds (%s).", name);
-            else     ERR("Mach-O load command out of bounds.");
-            return -1;
-        }
-        if(cmd->cmd == MACH_SEGMENT)
-        {
-            mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(seg->fileoff > machosize || seg->filesize > machosize - seg->fileoff)
-            {
-                if(name) ERR("Embedded Mach-O segment out of bounds: %s (%s)", seg->segname, name);
-                else     ERR("Mach-O segment out of bounds: %s", seg->segname);
-                return -1;
-            }
-            mach_sec_t *secs = (mach_sec_t*)(seg + 1);
-            for(size_t h = 0; h < seg->nsects; ++h)
-            {
-                if(secs[h].offset > machosize || secs[h].size > machosize - secs[h].offset)
-                {
-                    if(name) ERR("Embedded Mach-O section out of bounds: %s.%s (%s)", secs[h].segname, secs[h].sectname, name);
-                    else     ERR("Mach-O section out of bounds: %s.%s", secs[h].segname, secs[h].sectname);
-                    return -1;
-                }
-                if(strcmp("__TEXT", seg->segname) == 0 && strcmp("__thread_starts", secs[h].sectname) == 0)
-                {
-                    if(secs[h].size % sizeof(uint32_t) != 0)
-                    {
-                        if(name) ERR("Embedded Mach-O chained fixup section has bad size: 0x%llx (%s)", secs[h].size, name);
-                        else     ERR("Mach-O chained fixup section has bad size: 0x%llx", secs[h].size);
-                        return -1;
-                    }
-                    if(secs[h].size > 0)
-                    {
-                        uint32_t gran = *(uint32_t*)((uintptr_t)macho + secs[h].offset);
-                        if(gran != 0)
-                        {
-                            if(name) ERR("Embedded Mach-O chained fixup has bad granularity: 0x%x (%s)", gran, name);
-                            else     ERR("Mach-O chained fixup has bad granularity: 0x%x", gran);
-                            return -1;
-                        }
-                    }
-                }
-            }
-        }
-        else if(cmd->cmd == LC_SYMTAB)
-        {
-            mach_stab_t *stab = (mach_stab_t*)cmd;
-            if(stab->stroff > machosize || stab->symoff > machosize || stab->nsyms > (machosize - stab->symoff) / sizeof(mach_nlist_t))
-            {
-                if(name) ERR("Embedded Mach-O symtab out of bounds (%s).", name);
-                else     ERR("Mach-O symtab out of bounds.");
-                return -1;
-            }
-            symtab = (mach_nlist_t*)((uintptr_t)macho + stab->symoff);
-            strtab = (char*)((uintptr_t)macho + stab->stroff);
-            for(size_t i = 0; i < stab->nsyms; ++i)
-            {
-                if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT))) // XXX: eliminate check for verification?
-                {
-                    continue;
-                }
-                if(symtab[i].n_strx > machosize - stab->stroff)
-                {
-                    if(name) ERR("Embedded Mach-O symbol out of bounds (%s).", name);
-                    else     ERR("Mach-O symbol out of bounds.");
-                    return -1;
-                }
-            }
-        }
-        else if(cmd->cmd == LC_DYSYMTAB)
-        {
-            if(!symtab || !strtab)
-            {
-                if(name) ERR("Embedded Mach-O dsymtab without symtab/strtab (%s).", name);
-                else     ERR("Mach-O dsymtab without symtab/strtab.");
-                return -1;
-            }
-            mach_dstab_t *dstab = (mach_dstab_t*)cmd;
-            if(dstab->extreloff > machosize || dstab->nextrel > (machosize - dstab->extreloff) / sizeof(mach_reloc_t))
-            {
-                if(name) ERR("Embedded Mach-O dsymtab out of bounds (%s).", name);
-                else     ERR("Mach-O dsymtab out of bounds.");
-                return -1;
-            }
-            mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)macho + dstab->extreloff);
-            for(size_t i = 0; i < dstab->nextrel; ++i)
-            {
-                if(!reloc[i].r_extern)
-                {
-                    if(name) ERR("Embedded Mach-O external relocation entry %lu at 0x%x does not have external bit set (%s).", i, reloc[i].r_address, name);
-                    else     ERR("Mach-O external relocation entry %lu at 0x%x does not have external bit set.", i, reloc[i].r_address);
-                    return -1;
-                }
-                if(reloc[i].r_length != 0x3)
-                {
-                    if(name) ERR("Embedded Mach-O external relocation entry %lu at 0x%x is not 8 bytes (%s).", i, reloc[i].r_address, name);
-                    else     ERR("Mach-O external relocation entry %lu at 0x%x is not 8 bytes.", i, reloc[i].r_address);
-                    return -1;
-                }
-            }
-            // TODO: verify locreloc
-        }
-        else if(cmd->cmd == LC_FILESET_ENTRY)
-        {
-            if(name)
-            {
-                ERR("Embedded Mach-O has further embedded Mach-Os (%s).", name);
-                return -1;
-            }
-            mach_fileent_t *ent = (mach_fileent_t*)cmd;
-            if(ent->fileoff >= machosize || ent->nameoff >= ent->cmdsize)
-            {
-                ERR("Mach-O file entry out of bounds.");
-                return -1;
-            }
-            void *embedded = macho;
-            size_t embeddedsize = machosize;
-            mach_hdr_t *mh = (void*)((uintptr_t)macho + ent->fileoff);
-            const char *name = (const char*)((uintptr_t)ent + ent->nameoff);
-            int r = validate_macho(&embedded, &embeddedsize, &mh, name);
-            if(r != 0)
-            {
-                return r;
-            }
-        }
-        else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
-        {
-            if(name)
-            {
-                ERR("Embedded Mach-O has chained fixup load command (%s).", name);
-                return -1;
-            }
-            struct linkedit_data_command *data = (struct linkedit_data_command*)cmd;
-            if(data->datasize < sizeof(fixup_hdr_t))
-            {
-                ERR("Mach-O chained fixup data too small to hold fixup chain header.");
-                return -1;
-            }
-            if(data->dataoff >= machosize || data->datasize >= machosize - data->dataoff)
-            {
-                ERR("Mach-O chained fixup data out of bounds.");
-                return -1;
-            }
-            uintptr_t max = (uintptr_t)macho + data->dataoff + data->datasize;
-            fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)macho + data->dataoff);
-            if(fixup->fixups_version != 0)
-            {
-                ERR("Unsupported chained fixup version: %u", fixup->fixups_version);
-                return -1;
-            }
-            fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
-            if((uintptr_t)segs > max - sizeof(*segs) || segs->seg_count > (max - (uintptr_t)segs->seg_info_offset) / sizeof(segs->seg_info_offset[0]))
-            {
-                ERR("Mach-O chained fixup segments out of bounds.");
-                return -1;
-            }
-            for(uint32_t i = 0; i < segs->seg_count; ++i)
-            {
-                if(segs->seg_info_offset[i] == 0)
-                {
-                    continue;
-                }
-                fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
-                if((uintptr_t)starts > max - sizeof(*starts) || starts->size < sizeof(*starts))
-                {
-                    ERR("Mach-O chained fixup starts out of bounds (%u).", i);
-                    return -1;
-                }
-                uintptr_t end = (uintptr_t)starts + starts->size;
-                if(end > max || (uintptr_t)&starts->page_start[starts->page_count] > end)
-                {
-                    ERR("Mach-O chained fixup starts out of bounds (%u).", i);
-                    return -1;
-                }
-                if(starts->page_size != 0x1000 && starts->page_size != 0x4000)
-                {
-                    ERR("Mach-O chained fixup starts has bad page size: 0x%x (%u)", starts->page_size, i);
-                    return -1;
-                }
-                if(starts->pointer_format != DYLD_CHAINED_PTR_64_KERNEL_CACHE)
-                {
-                    ERR("Unsupported chained fixup pointer format: 0x%x (%u)", starts->pointer_format, i);
-                    return -1;
-                }
-                if(starts->segment_offset > machosize || starts->page_count > (machosize - starts->segment_offset) / starts->page_size)
-                {
-                    ERR("Mach-O chained fixup starts describes a region out of bounds (%u).", i);
-                    return -1;
-                }
-                for(uint16_t j = 0; j < starts->page_count; ++j)
-                {
-                    uint16_t idx = starts->page_start[j];
-                    if(idx == 0xffff)
-                    {
-                        continue;
-                    }
-                    if(idx % sizeof(uint32_t) != 0)
-                    {
-                        ERR("Mach-O fixup chain misaligned: 0x%x (%u, %u)", idx, i, j);
-                        return -1;
-                    }
-                    if(idx >= starts->page_size)
-                    {
-                        ERR("Mach-O fixup chain out of bounds: 0x%x (%u, %u)", idx, i, j);
-                        return -1;
-                    }
-                }
-            }
-        }
-    }
-    *machop     = macho;
-    *machosizep = machosize;
-    *hdrp       = hdr;
-    return 0;
 }
 
 static CFTypeRef get_prelink_info(mach_hdr_t *hdr)
@@ -2695,757 +399,6 @@ static CFTypeRef get_prelink_info(mach_hdr_t *hdr)
 out:;
     if(err) CFRelease(err);
     return info;
-}
-
-static inline bool isws(char ch)
-{
-    return ch == ' ' || ch == '\t' || ch == '\r'; // disregard newline by design
-}
-
-static inline bool isan(char ch)
-{
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
-}
-
-static int parse_symmap(char *mem, size_t len, size_t *num, symmap_class_t **entries)
-{
-    int retval = -1;
-    ARRDECL(symmap_class_t, map, NUM_METACLASSES_EXPECT);
-
-    // One loop iteration = one line of data.
-    // At the end of an iteration, mem points to the newline at the end of the line.
-    // Since we skip leading whitespace, this saves us the ++mem as third for() argument,
-    // which in turn saves us a lot of headache with making sure we stay < end.
-    bool zero_nl = false;
-    size_t line = 1;
-    struct
-    {
-        const char *class;
-        struct
-        {
-            size_t size;
-            size_t idx;
-            symmap_method_t *val;
-        } arr;
-    } current;
-    current.class = NULL;
-    ARRINIT(current.arr, 0x100);
-#define PUSHENT() \
-do \
-{ \
-    symmap_class_t *ent; \
-    ARRNEXT(map, ent); \
-    symmap_method_t *methods = NULL; \
-    if(current.arr.idx > 0) \
-    { \
-        size_t sz = current.arr.idx * sizeof(*methods); \
-        methods = malloc(sz); \
-        if(!methods) \
-        { \
-            ERRNO("malloc(symmap methods)"); \
-            goto bad; \
-        } \
-        memcpy(methods, current.arr.val, sz); \
-    } \
-    ent->metaclass = NULL; \
-    ent->name = current.class; \
-    ent->num = current.arr.idx; \
-    ent->methods = methods; \
-    ent->duplicate = 0; \
-} while(0)
-    for(char *end = mem + len; mem < end;)
-    {
-        char ch;
-
-        // Skip leading whitespace and empty lines
-        while(mem < end)
-        {
-            ch = *mem;
-            if(ch == '\n')
-            {
-                if(zero_nl)
-                {
-                    *mem = '\0';
-                    zero_nl = false;
-                }
-                ++line;
-            }
-            else if(!isws(ch))
-            {
-                break;
-            }
-            ++mem;
-        }
-        if(mem >= end) break;
-        DBG("Symmap line %lu", line);
-
-        ch = *mem;
-
-        // Comment, jump to end of line
-        if(ch == '#')
-        {
-            do
-            {
-                ++mem;
-            } while(mem < end && *mem != '\n');
-        }
-        // This is a method
-        else if(ch == '-')
-        {
-            DBG("Got symmap method");
-
-            // Must have seen a class name before
-            if(!current.class)
-            {
-                ERR("Symbol map, line %lu: method declaration before first class declaration", line);
-                goto bad;
-            }
-            ++mem; // Skip dash
-            // Skip leading whitespace
-            while(mem < end && isws(*mem))
-            {
-                ++mem;
-            }
-            // Empty lines are permitted as "no name assigned"
-            if(mem >= end || *mem == '\n')
-            {
-                symmap_method_t *ent;
-                ARRNEXT(current.arr, ent);
-                ent->class = NULL;
-                ent->method = NULL;
-                ent->structor = 0;
-                ent->reserved = 0;
-                if(mem >= end) break;
-                goto next;
-            }
-
-            bool structor = false;
-            const char *classname = NULL,
-                       *methname  = NULL,
-                       *namestart = mem;
-            // Seek end of identifier
-            while(mem < end && isan(*mem))
-            {
-                ++mem;
-            }
-            if(mem >= end)
-            {
-                ERR("Symbol map, line %lu: incomplete method declaration", line);
-                goto bad;
-            }
-            // If we are at "::", this is a class name
-            if(mem < end - 1 && mem[0] == ':' && mem[1] == ':')
-            {
-                *mem = '\0'; // terminate class name
-                mem += 2;
-                classname = namestart;
-                namestart = mem;
-            }
-            if(mem < end && *mem == '~')
-            {
-                ++mem;
-            }
-            while(mem < end && isan(*mem))
-            {
-                ++mem;
-            }
-            if(mem >= end)
-            {
-                ERR("Symbol map, line %lu: incomplete method declaration (identifier)", line);
-                goto bad;
-            }
-            ch = *mem;
-            if(ch != '(')
-            {
-                ERR("Symbol map, line %lu: expected '(', got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
-                goto bad;
-            }
-            while(mem < end && *mem != '\n')
-            {
-                ++mem;
-            }
-            methname = namestart;
-            zero_nl = true; // Defer termination to next loop iteration
-            if(!classname)
-            {
-                classname = current.class;
-                // Do this here so structors can be suppressed by prefixing with "ClassName::".
-                size_t sz = strlen(classname);
-                const char *tmp = methname;
-                if(tmp[0] == '~')
-                {
-                    ++tmp;
-                }
-                if(strncmp(classname, tmp, sz) == 0 && tmp[sz] == '(')
-                {
-                    structor = true;
-                }
-            }
-            symmap_method_t *ent;
-            ARRNEXT(current.arr, ent);
-            ent->class = classname;
-            ent->method = methname;
-            ent->structor = !!structor;
-            ent->reserved = 0;
-        }
-        // This is a class name
-        else
-        {
-            DBG("Got symmap class");
-
-            const char *classname = mem;
-            while(mem < end && isan(*mem))
-            {
-                ++mem;
-            }
-            if(mem < end && (ch = *mem) != '\n')
-            {
-                ERR("Symbol map, line %lu: expected newline, got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
-                goto bad;
-            }
-            zero_nl = true; // Defer termination to next loop iteration
-            if(current.class)
-            {
-                PUSHENT();
-            }
-            current.class = classname;
-            current.arr.idx = 0; // don't realloc or anything
-        }
-
-    next:;
-        if(mem < end && *mem != '\n')
-        {
-            ERR("Symbol map, line %lu: error in parse_symmap implementation, loop does not end on newline", line);
-            goto bad;
-        }
-    }
-    // Can ignore zero_nl here, since mmap() guarantees zeroed mem afterwards, and we mapped len + 1.
-    if(current.class)
-    {
-        PUSHENT();
-        current.class = NULL;
-    }
-    size_t sz = map.idx * sizeof(*map.val);
-    symmap_class_t *ptr = malloc(sz);
-    if(!ptr)
-    {
-        ERRNO("malloc(symmap final)");
-        goto bad;
-    }
-    memcpy(ptr, map.val, sz);
-    qsort(ptr, map.idx, sizeof(*map.val), &compare_symclass);
-
-    // Mark duplicates and warn if methods don't match
-    for(size_t i = 1; i < map.idx; ++i)
-    {
-        symmap_class_t *prev = &ptr[i-1],
-                       *cur  = &ptr[i];
-        if(strcmp(prev->name, cur->name) == 0)
-        {
-            DBG("Duplicate symmap class: %s", cur->name);
-            cur->duplicate = 1;
-            if(prev->num != cur->num)
-            {
-                WRN("Duplicate symmap classes %s have different number of methods (%lu vs %lu)", cur->name, prev->num, cur->num);
-            }
-            else
-            {
-                for(size_t j = 0; j < cur->num; ++j)
-                {
-                    symmap_method_t *one = &prev->methods[j],
-                                    *two = &cur ->methods[j];
-                    if(!one->method && !two->method) // note the AND
-                    {
-                        continue;
-                    }
-                    if(!one->method || !two->method || strcmp(one->class, two->class) != 0 || strcmp(one->method, two->method) != 0)
-                    {
-                        WRN("Mismatching method names of duplicate symmap class %s: %s::%s vs %s::%s", cur->name, one->class, one->method, two->class, two->method);
-                    }
-                }
-            }
-        }
-    }
-
-    *entries = ptr;
-    *num = map.idx;
-
-    retval = 0;
-    goto out;
-
-bad:;
-    for(size_t i = 0; i < map.idx; ++i)
-    {
-        free(map.val[i].methods);
-        map.val[i].methods = NULL;
-    }
-out:;
-    if(current.arr.val)
-    {
-        free(current.arr.val);
-        current.arr.val = NULL;
-    }
-    if(map.val)
-    {
-        free(map.val);
-        map.val = NULL;
-    }
-    return retval;
-#undef PUSHENT
-}
-
-static void print_syment(const char *owner, const char *class, const char *method)
-{
-    if(!method)
-    {
-        // Quick exit - preserve empty placeholder
-        printf("-\n");
-        return;
-    }
-    printf("- ");
-    if(strcmp(class, owner) != 0)
-    {
-        printf("%s::", class);
-    }
-    printf("%s\n", method);
-}
-
-static void print_symmap(metaclass_t *meta)
-{
-    printf("%s\n", meta->name);
-    metaclass_t *parent = meta->parentP;
-    while(parent && !parent->vtab)
-    {
-        parent = parent->parentP;
-    }
-    for(size_t i = parent ? parent->nmethods : 0; i < meta->nmethods; ++i)
-    {
-        vtab_entry_t *ent = &meta->methods[i];
-        print_syment(meta->name, ent->class, ent->placeholder ? NULL : ent->method);
-    }
-}
-
-// Turn special chars to underscores for now.
-// Eventually this should be replaced by the mangled name.
-static const char* radarify(const char *sym)
-{
-    static char *buf = NULL;
-    static size_t buflen = 0;
-    size_t len = strlen(sym) + 1;
-    if(len > buflen)
-    {
-        if(buf) free(buf);
-        buf = malloc(len);
-        buflen = len;
-    }
-    size_t from = 0,
-           to   = 0,
-           last = 0;
-    while(from < len)
-    {
-        char c = sym[from++];
-        if(
-            (c >= '0' && c <= '9') ||
-            (c >= 'a' && c <= 'z') ||
-            (c >= 'A' && c <= 'Z') ||
-            (c == '.') ||
-            (c == ':')
-        )
-        {
-            last = to;
-        }
-        else
-        {
-            c = '_';
-        }
-        buf[to++] = c;
-    }
-    buf[last+1] = '\0';
-    return buf;
-}
-
-static void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
-{
-    if(opt.radare)
-    {
-        if(meta->vtab != 0 && meta->vtab != -1)
-        {
-            printf("f sym.vtablefor%s 0 " ADDR "\n", meta->name, meta->vtab);
-            printf("fN sym.vtablefor%s vtablefor%s\n", meta->name, meta->name);
-        }
-        if(meta->addr)
-        {
-            printf("f sym.%s::gMetaClass 0 " ADDR "\n", meta->name, meta->addr);
-            printf("fN sym.%s::gMetaClass %s::gMetaClass\n", meta->name, meta->name);
-        }
-        if(meta->metavtab != 0 && meta->metavtab != -1)
-        {
-            printf("f sym.vtablefor%s::MetaClass 0 " ADDR "\n", meta->name, meta->metavtab);
-            printf("fN sym.vtablefor%s::MetaClass vtablefor%s::MetaClass\n", meta->name, meta->name);
-        }
-        for(size_t i = 0; i < meta->nmethods; ++i)
-        {
-            vtab_entry_t *ent = &meta->methods[i];
-            if(!ent->overrides || ent->addr == -1)
-            {
-                continue;
-            }
-            const char *r2name = radarify(ent->method);
-            printf("f sym.%s::%s 0 " ADDR "\n", ent->class, r2name, ent->addr);
-            printf("\"fN sym.%s::%s %s::%s\"\n", ent->class, r2name, ent->class, ent->method);
-        }
-    }
-    else
-    {
-        if(opt.vtab)
-        {
-            if(meta->vtab == -1)
-            {
-                printf("%svtab=??????????????????%s ", colorRed, colorReset);
-            }
-            else
-            {
-                printf("vtab=" ADDR " ", meta->vtab);
-            }
-        }
-        if(opt.size)
-        {
-            printf("size=0x%08x ", meta->objsize);
-        }
-        if(opt.meta)
-        {
-            printf("meta=" ADDR " parent=" ADDR " metavtab=" ADDR " ", meta->addr, meta->parent, meta->metavtab);
-        }
-        printf("%s%-*s%s", colorCyan, namelen, meta->name, colorReset);
-        if(opt.bundle)
-        {
-            if(meta->bundle)
-            {
-                printf(" (%s%s%s)", colorBlue, meta->bundle, colorReset);
-            }
-            else
-            {
-                printf(" (%s???%s)", colorRed, colorReset);
-            }
-        }
-        printf("\n");
-        if(opt.overrides)
-        {
-            metaclass_t *parent = meta->parentP;
-            while(parent && !parent->vtab)
-            {
-                parent = parent->parentP;
-            }
-            for(size_t i = 0; i < meta->nmethods; ++i)
-            {
-                vtab_entry_t *ent = &meta->methods[i];
-                if(!ent->overrides && !opt.inherit)
-                {
-                    continue;
-                }
-                const char *color = ent->addr == -1 ? colorRed : !ent->overrides ? colorGray : "";
-                vtab_entry_t *pent = (parent && i < parent->nmethods) ? &parent->methods[i] : NULL;
-                size_t hex = i * sizeof(kptr_t);
-                int hexlen = 5;
-                for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
-                printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
-            }
-        }
-    }
-}
-
-static void add_metaclass(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, void *arg, a64_state_t *state, uint32_t *callsite, bool want_vtabs, sym_t *bsyms, size_t nsyms)
-{
-    struct
-    {
-        size_t size;
-        size_t idx;
-        metaclass_t *val;
-    } *metas = arg;
-    const char *name = addr2ptr(kernel, state->x[1]);
-    DBG("Adding metaclass: %s", name);
-
-    metaclass_t *meta;
-    ARRNEXT(*metas, meta);
-    meta->addr = state->x[0];
-    meta->parent = state->x[2];
-    meta->vtab = 0;
-    meta->metavtab = 0;
-    meta->callsite = off2addr(kernel, (uintptr_t)callsite - (uintptr_t)kernel);
-    meta->parentP = NULL;
-    meta->symclass = NULL;
-    meta->name = name;
-    meta->bundle = NULL;
-    meta->methods = NULL;
-    meta->nmethods = 0;
-    meta->objsize = state->x[3];
-    meta->methods_done = 0;
-    meta->methods_err = 0;
-    meta->visited = 0;
-    meta->duplicate = 0;
-    meta->reserved = 0;
-    if(want_vtabs)
-    {
-        if(nsyms > 0)
-        {
-            char buf[512];
-            uint32_t len = strlen(name);
-            if(snprintf(buf, sizeof(buf), "__ZTV%u%s", len, name) >= sizeof(buf))
-            {
-                WRN("Class name too big for buffer: %s", name);
-            }
-            else
-            {
-                meta->vtab = find_sym_by_name(buf, bsyms, nsyms);
-                if(meta->vtab)
-                {
-                    meta->vtab += 2 * sizeof(kptr_t);
-                }
-                if(snprintf(buf, sizeof(buf), "__ZTVN%u%s9MetaClassE", len, name) >= sizeof(buf))
-                {
-                    WRN("MetaClass name too big for buffer: %s", name);
-                }
-                else
-                {
-                    meta->metavtab = find_sym_by_name(buf, bsyms, nsyms);
-                    if(meta->metavtab)
-                    {
-                        meta->metavtab += 2 * sizeof(kptr_t);
-                    }
-                }
-            }
-        }
-        if(!meta->metavtab)
-        {
-            kptr_t x0 = state->x[0];
-            for(uint32_t *m = callsite + 1; is_linear_inst(m) || is_cbz((cbz_t*)m) || is_cbnz((cbz_t*)m) || is_tbz((tbz_t*)m) || is_tbnz((tbz_t*)m); ++m)
-            {
-                // Kinda trash, but works... and it's at least a possible path
-                if(is_cbz((cbz_t*)m) || is_cbnz((cbz_t*)m) || is_tbz((tbz_t*)m) || is_tbnz((tbz_t*)m))
-                {
-                    continue;
-                }
-                emu_ret_t ret = a64_emulate(kernel, kbase, fixupKind, state, m, &check_equal, m + 1, false, true, kEmuFnIgnore);
-                if(ret != kEmuEnd)
-                {
-                    DBG("a64_emulate returned %u", ret);
-                    break;
-                }
-                str_uoff_t *stru = (str_uoff_t*)m;
-                if(is_str_uoff(stru) && (state->valid & (1 << stru->Rn)) && state->x[stru->Rn] + get_str_uoff(stru) == x0)
-                {
-                    DBG("Got str at " ADDR, off2addr(kernel, (uintptr_t)stru - (uintptr_t)kernel));
-                    if(!(state->valid & (1 << stru->Rt)))
-                    {
-                        DBG("Store has no valid source register");
-                    }
-                    else
-                    {
-                        meta->metavtab = state->x[stru->Rt];
-                    }
-                    break;
-                }
-            }
-        }
-        if(!meta->metavtab)
-        {
-            WRN("Failed to find metavtab for %s", name);
-        }
-    }
-}
-
-static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, sym_t *bsyms, size_t nsyms, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
-{
-    const char *name = NULL;
-    uint32_t *fncall = NULL;
-    if((state->valid & 0x2) && (state->wide & 0x2))
-    {
-        name = addr2ptr(kernel, state->x[1]);
-        if(!name)
-        {
-            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, fixupKind, state->x[1], NULL, NULL));
-            ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
-            exit(-1);
-        }
-    }
-    DBG("Constructor candidate for %s", name ? name : "???");
-    if((state->valid & 0xe) != 0xe)
-    {
-        // Check for alt constructor
-        if((state->valid & 0xe) == 0x0)
-        {
-            for(size_t i = 0; i < 32; ++i)
-            {
-                state->x[i] = 0;
-                state->q[i] = 0;
-            }
-            // NOTE: Will have to revise this if the constructors ever diverge in x0-x3
-            state->x[0]  = 0x6174656d656b6166; // "fakemeta"
-            state->x[1]  = 0x656d616e656b6166; // "fakename"
-            state->x[2]  = 0x00727470656b6166; // "fakeptr"
-            state->x[3]  = 0x656b6166; // "fake"
-            state->valid  = 0xf;
-            state->qvalid = 0x0;
-            state->wide   = 0x7;
-            state->host   = 0x0;
-            if(a64_emulate(kernel, kbase, fixupKind, state, fnstart, &check_equal, bl, false, true, kEmuFnIgnore) == kEmuEnd)
-            {
-                if((state->valid & 0xf) == 0xf && (state->wide & 0xf) == 0x7 && state->x[0] == 0x6174656d656b6166 && state->x[1] == 0x656d616e656b6166 && state->x[2] == 0x00727470656b6166 && state->x[3] == 0x656b6166)
-                {
-                    kptr_t addr = seg->vmaddr + ((uintptr_t)fnstart - ((uintptr_t)kernel + seg->fileoff));
-                    DBG("OSMetaClassAltConstructor: " ADDR, addr);
-                    // We wanna land here even if we already got OSMetaClassAltConstructor off symtab, in order to suppress the warning below.
-                    // But we obviously never wanna store a result or fail on multiple candidates in that case.
-                    if(arg)
-                    {
-                        if(*(kptr_t*)arg)
-                        {
-                            ERR("More than one candidate for OSMetaClassAltConstructor");
-                            exit(-1);
-                        }
-                        *(kptr_t*)arg = addr;
-                    }
-                    // Do NOT fall through
-                    return;
-                }
-            }
-        }
-        WRN("Skipping constructor call without x1-x3 (%x) at " ADDR, state->valid, bladdr);
-        // Fall through
-    }
-    else if((state->valid & 0x1) != 0x1)
-    {
-        DBG("Skipping constructor call without x0 at " ADDR, bladdr);
-        fncall = bl;
-        // Fall through
-    }
-    else if((state->wide & 0xf) != 0x7)
-    {
-        WRN("Skipping constructor call with unexpected register widths (%x) at " ADDR, state->wide, bladdr);
-        // Fall through
-    }
-    else
-    {
-        DBG("Processing constructor call at " ADDR " (%s)", bladdr, name);
-        add_metaclass(kernel, kbase, fixupKind, metas, state, bl, want_vtabs, bsyms, nsyms);
-        // Do NOT fall through
-        return;
-    }
-    // We only get here on failure:
-    if(name)
-    {
-        struct
-        {
-            size_t size;
-            size_t idx;
-            metaclass_candidate_t *val;
-        } *namelist = names;
-        metaclass_candidate_t *cand;
-        ARRNEXT(*namelist, cand);
-        cand->name = name;
-        cand->fncall = fncall;
-    }
-}
-
-static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, sym_t *bsyms, size_t nsyms, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg)
-{
-    const char *name = NULL;
-    if((state->valid & 0x2) && (state->wide & 0x2))
-    {
-        name = addr2ptr(kernel, state->x[1]);
-        if(!name)
-        {
-            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, fixupKind, state->x[1], NULL, NULL));
-            ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
-            exit(-1);
-        }
-    }
-    DBG("Alt constructor candidate for %s", name ? name : "???");
-    if((state->valid & 0x7e) != 0x7e)
-    {
-        WRN("Skipping alt constructor call without x1-x6 (%x) at " ADDR, state->valid, bladdr);
-        // Fall through
-    }
-    else if((state->valid & 0x1) != 0x1)
-    {
-        DBG("Skipping alt constructor call without x0 (%x) at " ADDR, state->valid, bladdr);
-        // Fall through
-    }
-    else if((state->wide & 0x7f) != 0x37)
-    {
-        WRN("Skipping alt constructor call with unexpected register widths (%x) at " ADDR, state->wide, bladdr);
-        // Fall through
-    }
-    else
-    {
-        DBG("Processing alt constructor call at " ADDR " (%s)", bladdr, name);
-        // NOTE: Will have to revise this if the constructors ever diverge in x0-x3
-        add_metaclass(kernel, kbase, fixupKind, metas, state, bl, want_vtabs, bsyms, nsyms);
-        // Do NOT fall through
-        return;
-    }
-    // We only get here on failure:
-    if(name)
-    {
-        // For now, always set NULL for alt constructor
-        struct
-        {
-            size_t size;
-            size_t idx;
-            metaclass_candidate_t *val;
-        } *namelist = names;
-        metaclass_candidate_t *cand;
-        ARRNEXT(*namelist, cand);
-        cand->name = name;
-        cand->fncall = NULL;
-    }
-}
-
-typedef void (*constructor_cb_t)(void*, kptr_t, mach_seg_t*, fixup_kind_t, bool, void*, void*, sym_t*, size_t, a64_state_t*, uint32_t*, uint32_t*, kptr_t, void*);
-
-static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, fixup_kind_t fixupKind, bool have_plk_text_exec, bool want_vtabs, void *arr, void *metas, void *names, sym_t *bsyms, size_t nsyms, constructor_cb_t cb, void *arg)
-{
-    struct
-    {
-        size_t size;
-        size_t idx;
-        kptr_t *val;
-    } *aliases = arr;
-    FOREACH_CMD(hdr, cmd)
-    {
-        if(cmd->cmd == MACH_SEGMENT)
-        {
-            mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(seg->filesize > 0 && SEG_IS_EXEC(seg))
-            {
-                STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 1)
-                {
-                    bl_t *bl = (bl_t*)mem;
-                    if(is_bl(bl) || is_b(bl))
-                    {
-                        kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
-                        kptr_t bltarg = bladdr + get_bl_off(bl);
-                        for(size_t i = 0; i < aliases->idx; ++i)
-                        {
-                            if(bltarg == aliases->val[i])
-                            {
-                                uint32_t *fnstart = find_function_start(kernel, seg, "OSMetaClass constructor call", mem, is_bl(bl));
-                                if(fnstart)
-                                {
-                                    a64_state_t state;
-                                    if(a64_emulate(kernel, kbase, fixupKind, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
-                                    {
-                                        cb(kernel, kbase, seg, fixupKind, want_vtabs, metas, names, bsyms, nsyms, &state, fnstart, mem, bladdr, arg);
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 static void print_help(const char *self)
@@ -3744,8 +697,8 @@ int main(int argc, const char **argv)
         if(r != 0) return r;
     }
 
-    ARRDECL(kptr_t, aliases, NUM_KEXTS_EXPECT);
-    ARRDECL(kptr_t, altaliases, NUM_KEXTS_EXPECT);
+    ARRDEF(kptr_t, aliases, NUM_KEXTS_EXPECT);
+    ARRDEF(kptr_t, altaliases, NUM_KEXTS_EXPECT);
 
     kptr_t OSMetaClassConstructor = 0,
            OSMetaClassAltConstructor = 0,
@@ -3805,7 +758,7 @@ int main(int argc, const char **argv)
             mach_stab_t *stab = (mach_stab_t*)cmd;
             symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
             strtab = (char*)((uintptr_t)kernel + stab->stroff);
-            if(!extract_symbols(kernel, stab, &asyms, &nsyms))
+            if(!macho_extract_symbols(kernel, stab, &asyms, &nsyms))
             {
                 return -1;
             }
@@ -3816,7 +769,7 @@ int main(int argc, const char **argv)
             if(hdr->filetype == MH_KEXT_BUNDLE)
             {
                 dstab = (mach_dstab_t*)cmd;
-                if(!extract_reloc(kernel, kbase, dstab, symtab, strtab, &exrelocA, &nexreloc))
+                if(!macho_extract_reloc(kernel, kbase, dstab, symtab, strtab, &exrelocA, &nexreloc))
                 {
                     return -1;
                 }
@@ -3843,14 +796,14 @@ int main(int argc, const char **argv)
                     mach_stab_t *stab = (mach_stab_t*)lc;
                     symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
                     strtab = (char*)((uintptr_t)kernel + stab->stroff);
-                    if(!extract_symbols(kernel, stab, &asyms, &nsyms))
+                    if(!macho_extract_symbols(kernel, stab, &asyms, &nsyms))
                     {
                         return -1;
                     }
                 }
                 else if(lc->cmd == LC_DYSYMTAB)
                 {
-                    if(!extract_reloc(kernel, kbase, (mach_dstab_t*)lc, symtab, strtab, &exrelocA, &nexreloc))
+                    if(!macho_extract_reloc(kernel, kbase, (mach_dstab_t*)lc, symtab, strtab, &exrelocA, &nexreloc))
                     {
                         return -1;
                     }
@@ -3934,12 +887,7 @@ int main(int argc, const char **argv)
             DBG("Failed to find OSMetaClassConstructor symbol, falling back to binary matching.");
 #define NSTRREF 3
             const char *strs[NSTRREF] = { "IORegistryEntry", "IOService", "IOUserClient" };
-            struct
-            {
-                size_t size;
-                size_t idx;
-                kptr_t *val;
-            } strrefs[NSTRREF];
+            ARRDECL(kptr_t, strrefs)[NSTRREF];
             for(size_t i = 0; i < NSTRREF; ++i)
             {
                 ARRINIT(strrefs[i], 4);
@@ -3950,12 +898,7 @@ int main(int argc, const char **argv)
                     return -1;
                 }
             }
-            struct
-            {
-                size_t size;
-                size_t idx;
-                kptr_t *val;
-            } constrCand[2];
+            ARRDECL(kptr_t, constrCand)[2];
             ARRINIT(constrCand[0], 4);
             ARRINIT(constrCand[1], 4);
             size_t constrIdx = 0;
@@ -3970,7 +913,7 @@ int main(int argc, const char **argv)
                     if(cmd->cmd == MACH_SEGMENT)
                     {
                         mach_seg_t *seg = (mach_seg_t*)cmd;
-                        if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                        if(seg->filesize > 0 && SEG_IS_EXEC(seg, fixupKind, have_plk_text_exec))
                         {
                             uintptr_t start = (uintptr_t)kernel + seg->fileoff;
                             STEP_MEM(uint32_t, mem, start, seg->filesize, 2)
@@ -4009,7 +952,7 @@ int main(int argc, const char **argv)
                                         if(is_bl(bl))
                                         {
                                             a64_state_t state;
-                                            if(a64_emulate(kernel, kbase, fixupKind, &state, mem, &check_equal, m, true, true, kEmuFnIgnore) != kEmuEnd)
+                                            if(a64_emulate(kernel, kbase, fixupKind, &state, mem, &a64cb_check_equal, m, true, true, kEmuFnIgnore) != kEmuEnd)
                                             {
                                                 // a64_emulate should've printed error already
                                                 goto skip;
@@ -4079,11 +1022,11 @@ int main(int argc, const char **argv)
             else if(constrCandCurr.idx == 1)
             {
                 OSMetaClassConstructor = constrCandCurr.val[0];
-                free(constrCand[0].val);
-                free(constrCand[1].val);
+                ARRFREE(constrCand[0]);
+                ARRFREE(constrCand[1]);
                 for(size_t i = 0; i < NSTRREF; ++i)
                 {
-                    free(strrefs[i].val);
+                    ARRFREE(strrefs[i]);
                 }
             }
             // else fall through to below
@@ -4102,26 +1045,26 @@ int main(int argc, const char **argv)
 
     find_imports(kernel, kernelsize, hdr, kbase, fixupKind, have_plk_text_exec, &aliases, OSMetaClassConstructor);
 
-    ARRDECL(metaclass_t, metas, NUM_METACLASSES_EXPECT);
-    ARRDECL(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
+    ARRDEF(metaclass_t, metas, NUM_METACLASSES_EXPECT);
+    ARRDEF(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
 
-    find_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, bsyms, nsyms, &constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
+    find_meta_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, bsyms, nsyms, &meta_constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
     if(OSMetaClassAltConstructor)
     {
         ARRPUSH(altaliases, OSMetaClassAltConstructor);
         find_imports(kernel, kernelsize, hdr, kbase, fixupKind, have_plk_text_exec, &altaliases, OSMetaClassAltConstructor);
-        find_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, bsyms, nsyms, &alt_constructor_cb, NULL);
+        find_meta_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, bsyms, nsyms, &meta_alt_constructor_cb, NULL);
     }
 
     // This is a safety check to make sure we're not missing anything.
     DBG("Got %lu names (probably a ton of dupes)", namelist.idx);
-    qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_candidates);
+    qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_meta_candidates);
     for(size_t i = 0; i < namelist.idx; ++i)
     {
         metaclass_candidate_t *current = &namelist.val[i];
         if(i > 0)
         {
-            // compare_candidates() sorts entries without fncall last, and we set it to NULL if it got us nowhere,
+            // compare_meta_candidates() sorts entries without fncall last, and we set it to NULL if it got us nowhere,
             // so if we have duplicate names and we either lack a fncall or prev still has its one, we can safely skip.
             metaclass_candidate_t *prev = &namelist.val[i - 1];
             if(strcmp(current->name, prev->name) == 0 && (prev->fncall || !current->fncall))
@@ -4138,7 +1081,7 @@ int main(int argc, const char **argv)
         }
         if(current->fncall)
         {
-            void *sp = malloc(SPSIZE);
+            void *sp = malloc(A64_EMU_SPSIZE);
             if(!sp)
             {
                 ERR("malloc(sp)");
@@ -4178,9 +1121,7 @@ int main(int argc, const char **argv)
         WRN("Failed to find MetaClass constructor for %s", current->name);
         onward:;
     }
-    free(namelist.val);
-    namelist.val = NULL;
-    namelist.size = namelist.idx = 0;
+    ARRFREE(namelist);
 
     DBG("Got %lu metaclasses", metas.idx);
     for(size_t i = 0; i < metas.idx; ++i)
@@ -4209,7 +1150,7 @@ int main(int argc, const char **argv)
     CFTypeRef prelink_info = NULL;
     if(want_vtabs)
     {
-        ARRDECLEMPTY(relocrange_t, locreloc);
+        ARRDEFEMPTY(relocrange_t, locreloc);
         if(fixupKind == DYLD_CHAINED_PTR_NONE)
         {
             size_t nlocrel = 0,
@@ -4290,7 +1231,7 @@ int main(int argc, const char **argv)
 
             // Squash and merge
             qsort(tmp, nlocrel, sizeof(*tmp), &compare_addrs);
-            ARRINIT(locreloc, 0x1000);
+            ARRINIT(locreloc, 0x2000);
             relocrange_t *range = NULL;
             ARRNEXT(locreloc, range);
             range->from = range->to = tmp[0];
@@ -4385,7 +1326,7 @@ int main(int argc, const char **argv)
                                     state.qvalid = 0;
                                     state.wide = 1;
                                     state.host = 0;
-                                    if(a64_emulate(kernel, kbase, fixupKind, &state, start, &check_equal, mem, false, true, kEmuFnIgnore) == kEmuEnd)
+                                    if(a64_emulate(kernel, kbase, fixupKind, &state, start, &a64cb_check_equal, mem, false, true, kEmuFnIgnore) == kEmuEnd)
                                     {
                                         if(!(state.valid & (1 << str->Rn)) || !(state.wide & (1 << str->Rn)) || !(state.valid & (1 << str->Rt)) || !(state.wide & (1 << str->Rt)))
                                         {
@@ -4427,7 +1368,7 @@ int main(int argc, const char **argv)
                     if(cmd->cmd == MACH_SEGMENT)
                     {
                         mach_seg_t *seg = (mach_seg_t*)cmd;
-                        if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                        if(seg->filesize > 0 && SEG_IS_EXEC(seg, fixupKind, have_plk_text_exec))
                         {
                             STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                             {
@@ -4526,7 +1467,7 @@ int main(int argc, const char **argv)
                     break;
                 }
 
-                ARRDECL(kptr_t, strref, 4);
+                ARRDEF(kptr_t, strref, 4);
                 find_str(kernel, kernelsize, &strref, "__cxa_pure_virtual");
                 if(strref.idx == 0)
                 {
@@ -4540,7 +1481,7 @@ int main(int argc, const char **argv)
                     if(cmd->cmd == MACH_SEGMENT)
                     {
                         mach_seg_t *seg = (mach_seg_t*)cmd;
-                        if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                        if(seg->filesize > 0 && SEG_IS_EXEC(seg, fixupKind, have_plk_text_exec))
                         {
                             uintptr_t start = (uintptr_t)kernel + seg->fileoff;
                             STEP_MEM(uint32_t, mem, start, seg->filesize, 6)
@@ -4698,13 +1639,13 @@ int main(int argc, const char **argv)
             }
         }
 
-        //ARRDECL(kptr_t, candidates, 0x100);
+        //ARRDEF(kptr_t, candidates, 0x100);
         FOREACH_CMD(hdr, cmd)
         {
             if(cmd->cmd == MACH_SEGMENT)
             {
                 mach_seg_t *seg = (mach_seg_t*)cmd;
-                if(seg->filesize > 0 && SEG_IS_EXEC(seg))
+                if(seg->filesize > 0 && SEG_IS_EXEC(seg, fixupKind, have_plk_text_exec))
                 {
                     STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 2)
                     {
@@ -4917,9 +1858,7 @@ int main(int argc, const char **argv)
                 }
             }
         }
-        /*free(candidates.val);
-        candidates.val = NULL;
-        candidates.size = candidates.idx = 0;*/
+        //ARRFREE(candidates);
 
         for(size_t i = 0; i < metas.idx; ++i)
         {
@@ -4946,7 +1885,7 @@ int main(int argc, const char **argv)
                             {
                                 uint32_t *end     = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize),
                                          *fnstart = (uint32_t*)((uintptr_t)kernel + seg->fileoff + (fnaddr - seg->vmaddr));
-                                void *sp = malloc(SPSIZE),
+                                void *sp = malloc(A64_EMU_SPSIZE),
                                      *obj = NULL;
                                 if(!sp)
                                 {
@@ -4961,12 +1900,12 @@ int main(int argc, const char **argv)
                                     state.q[i] = 0;
                                 }
                                 state.x[ 0]  = 0x6174656d656b6166; // "fakemeta", fake "this" ptr
-                                state.x[31]  = (uintptr_t)sp + SPSIZE;
+                                state.x[31]  = (uintptr_t)sp + A64_EMU_SPSIZE;
                                 state.valid  = 0xfff80001;
                                 state.qvalid = 0x0000ff00;
                                 state.wide   = 0xfff80001;
                                 state.host   = 0x80000000;
-                                switch(a64_emulate(kernel, kbase, fixupKind, &state, fnstart, &check_bl, &m, false, true, kEmuFnIgnore))
+                                switch(a64_emulate(kernel, kbase, fixupKind, &state, fnstart, &a64cb_check_bl, &m, false, true, kEmuFnIgnore))
                                 {
                                     case kEmuRet:
                                         if((state.valid & 0x1) == 0x1 && (state.wide & 0x1) == 0x1 && state.x[0] == 0x0)
@@ -5009,7 +1948,7 @@ int main(int argc, const char **argv)
                                                 }
                                                 break;
                                             }
-                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m, &check_equal, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
+                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m, &a64cb_check_equal, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
                                             {
                                                 break;
                                             }
@@ -5024,7 +1963,7 @@ int main(int argc, const char **argv)
                                             state.valid |= 0x1;
                                             state.wide  |= 0x1;
                                             state.host  |= 0x1;
-                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m + 1, &check_equal, end, false, true, kEmuFnAssumeX0) != kEmuRet)
+                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m + 1, &a64cb_check_equal, end, false, true, kEmuFnAssumeX0) != kEmuRet)
                                             {
                                                 break;
                                             }
@@ -5905,7 +2844,7 @@ int main(int argc, const char **argv)
         {
             list[lsize++] = &metas.val[i];
         }
-        qsort(list, lsize, sizeof(*list), &compare_names);
+        qsort(list, lsize, sizeof(*list), &compare_meta_names);
 
         // Mark duplicates and warn if methods don't match
         for(size_t i = 1; i < lsize; ++i)
@@ -6085,7 +3024,7 @@ int main(int argc, const char **argv)
         }
         if(opt.bsort || opt.csort)
         {
-            qsort(list, lsize, sizeof(*list), opt.bsort ? &compare_bundles : &compare_names);
+            qsort(list, lsize, sizeof(*list), opt.bsort ? &compare_meta_bundles : &compare_meta_names);
         }
         size_t namelen = 0;
         if(opt.bundle && !opt.overrides) // Spaced out looks weird
