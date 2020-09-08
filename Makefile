@@ -1,4 +1,4 @@
-VERSION = 1.4.2
+VERSION = 1.5.0
 TARGET  = iometa
 SRCDIR  = src
 FLAGS   = -Wall -O3 -flto -DVERSION=$(VERSION) -DTIMESTAMP="`date +'%d. %B %Y %H:%M:%S'`" -framework CoreFoundation -framework IOKit -lc++abi $(CFLAGS)
