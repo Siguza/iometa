@@ -1035,8 +1035,8 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
                             } while(skip > 0);
                         }
                     }
+                    break;
                 }
-                break;
             }
         }
         else
@@ -4805,8 +4805,8 @@ int main(int argc, const char **argv)
                                                                 } while(skip > 0);
                                                             }
                                                         }
+                                                        break;
                                                     }
-                                                    break;
                                                 }
                                             }
                                             else
