@@ -175,7 +175,19 @@ typedef struct
              size   :  2;
 } ldr_fp_uoff_t, str_fp_uoff_t;
 
-/*typedef struct
+typedef struct
+{
+    uint32_t Rt     : 5,
+             Rn     : 5,
+             op3    : 2,
+             imm    : 9,
+             op2    : 2,
+             opc    : 1,
+             op1    : 6,
+             size   : 2;
+} ldur_fp_t, stur_fp_t;
+
+typedef struct
 {
     uint32_t Rt     : 5,
              Rn     : 5,
@@ -183,7 +195,7 @@ typedef struct
              imm    : 7,
              op     : 8,
              opc    : 2;
-} stp_fp_t;*/
+} ldp_fp_t, stp_fp_t;
 
 typedef struct
 {
@@ -383,11 +395,6 @@ static inline bool is_ldp_uoff(ldp_t *ldp)
     return ldp->op == 0xa5;
 }
 
-static inline int64_t get_ldp_off(ldp_t *ldp)
-{
-    return ((int64_t)ldp->imm << (64 - 7)) >> (64 - 7 - (2 + ldp->sf));
-}
-
 static inline bool is_stp_pre(stp_t *stp)
 {
     return stp->op == 0xa6;
@@ -403,9 +410,9 @@ static inline bool is_stp_uoff(stp_t *stp)
     return stp->op == 0xa4;
 }
 
-static inline int64_t get_stp_off(stp_t *stp)
+static inline int64_t get_ldp_stp_off(ldp_t *ldp)
 {
-    return ((int64_t)stp->imm << (64 - 7)) >> (64 - 7 - (2 + stp->sf));
+    return ((int64_t)ldp->imm << (64 - 7)) >> (64 - 7 - (2 + ldp->sf));
 }
 
 /*static inline bool is_str_reg(str_reg_t *str)
@@ -548,10 +555,60 @@ static inline uint32_t get_fp_uoff(ldr_fp_uoff_t *ldr)
     return ldr->imm << get_fp_uoff_size(ldr);
 }
 
-/*static inline bool is_stp_fp_uoff(stp_fp_t *stp)
+static inline bool is_ldur_fp(ldur_fp_t *stur)
 {
-    return stp->op == 0xb4;
-}*/
+    return stur->op1 == 0b111100 && stur->op2 == 0b10 && stur->op3 == 0b00;
+}
+
+static inline bool is_stur_fp(stur_fp_t *stur)
+{
+    return stur->op1 == 0b111100 && stur->op2 == 0b00 && stur->op3 == 0b00;
+}
+
+static inline uint32_t get_ldur_stur_fp_size(stur_fp_t *ldur)
+{
+    return (ldur->opc << 2) | ldur->size;
+}
+
+static inline int64_t get_ldur_stur_fp_off(stur_fp_t *ldur)
+{
+    return (((int64_t)ldur->imm) << (64 - 9)) >> (64 - 9);
+}
+
+static inline bool is_ldp_fp_pre(ldp_fp_t *ldp)
+{
+    return ldp->op == 0b10110111;
+}
+
+static inline bool is_ldp_fp_post(ldp_fp_t *ldp)
+{
+    return ldp->op == 0b10110011;
+}
+
+static inline bool is_ldp_fp_uoff(ldp_fp_t *ldp)
+{
+    return ldp->op == 0b10110101;
+}
+
+static inline bool is_stp_fp_pre(stp_fp_t *stp)
+{
+    return stp->op == 0b10110110;
+}
+
+static inline bool is_stp_fp_post(stp_fp_t *stp)
+{
+    return stp->op == 0b10110010;
+}
+
+static inline bool is_stp_fp_uoff(stp_fp_t *stp)
+{
+    return stp->op == 0b10110100;
+}
+
+static inline int64_t get_ldp_stp_fp_off(ldp_fp_t *ldp)
+{
+    return (((int64_t)ldp->imm) << (64 - 7)) >> (64 - 9 - ldp->opc);
+}
 
 static inline bool is_br(br_t *br)
 {

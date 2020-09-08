@@ -1108,6 +1108,10 @@ static bool is_linear_inst(void *ptr)
            is_ldadd(ptr) ||
            is_ldur(ptr) ||
            is_ldr_fp_uoff(ptr) ||
+           is_ldur_fp(ptr) ||
+           is_ldp_fp_pre(ptr) ||
+           is_ldp_fp_post(ptr) ||
+           is_ldp_fp_uoff(ptr) ||
            is_bl(ptr) ||
            is_mov(ptr) ||
            is_movz(ptr) ||
@@ -1124,7 +1128,10 @@ static bool is_linear_inst(void *ptr)
            is_stxr(ptr) ||
            is_stur(ptr) ||
            is_str_fp_uoff(ptr) ||
-           //is_stp_fp_uoff(ptr) ||
+           is_stur_fp(ptr) ||
+           is_stp_fp_pre(ptr) ||
+           is_stp_fp_post(ptr) ||
+           is_stp_fp_uoff(ptr) ||
            is_ldrb_imm_uoff(ptr) ||
            is_ldrh_imm_uoff(ptr) ||
            is_ldrsb_imm_uoff(ptr) ||
@@ -1308,7 +1315,7 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
             stp_t *stp = ptr;
             if(state->valid & (1 << stp->Rn)) // Only if valid
             {
-                kptr_t staddr = state->x[stp->Rn] + get_stp_off(stp);
+                kptr_t staddr = state->x[stp->Rn] + get_ldp_stp_off(stp);
                 if(is_stp_pre(stp))
                 {
                     state->x[stp->Rn] = staddr;
@@ -1570,7 +1577,7 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
             }
             else
             {
-                kptr_t laddr = state->x[ldp->Rn] + get_ldp_off(ldp);
+                kptr_t laddr = state->x[ldp->Rn] + get_ldp_stp_off(ldp);
                 if(is_ldp_pre(ldp))
                 {
                     state->x[ldp->Rn] = laddr;
@@ -1670,69 +1677,228 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
                 }
             }
         }
-        else if(is_ldr_fp_uoff(ptr))
+        else if(is_ldr_fp_uoff(ptr) || is_ldur_fp(ptr))
         {
-            str_fp_uoff_t *ldr = ptr;
-            if(!(state->valid & (1 << ldr->Rn))) // Unset validity
+            uint32_t Rt, Rn, size;
+            int64_t off;
+            if(is_ldr_fp_uoff(ptr))
             {
-                state->qvalid &= ~(1 << ldr->Rt);
+                str_fp_uoff_t *ldr = ptr;
+                Rt = ldr->Rt;
+                Rn = ldr->Rn;
+                size = get_fp_uoff_size(ldr);
+                off = get_fp_uoff(ldr);
+            }
+            else if(is_ldur_fp(ptr))
+            {
+                ldur_fp_t *ldur = ptr;
+                Rt = ldur->Rt;
+                Rn = ldur->Rn;
+                size = get_ldur_stur_fp_size(ldur);
+                off = get_ldur_stur_fp_off(ldur);
             }
             else
             {
-                kptr_t laddr = state->x[ldr->Rn] + get_fp_uoff(ldr);
-                void *ldr_addr = (state->host & (1 << ldr->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                return kEmuErr;
+            }
+            if(!(state->valid & (1 << Rn))) // Unset validity
+            {
+                state->qvalid &= ~(1 << Rt);
+            }
+            else
+            {
+                kptr_t laddr = state->x[Rn] + off;
+                void *ldr_addr = (state->host & (1 << Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
                     return kEmuErr;
                 }
-                switch(get_fp_uoff_size(ldr))
+                switch(size)
                 {
-                    case 0: state->q[ldr->Rt] = *(uint8_t *)ldr_addr; break;
-                    case 1: state->q[ldr->Rt] = *(uint16_t*)ldr_addr; break;
-                    case 2: state->q[ldr->Rt] = *(uint32_t*)ldr_addr; break;
-                    case 3: state->q[ldr->Rt] = *(uint64_t*)ldr_addr; break;
+                    case 0: state->q[Rt] = *(uint8_t *)ldr_addr; break;
+                    case 1: state->q[Rt] = *(uint16_t*)ldr_addr; break;
+                    case 2: state->q[Rt] = *(uint32_t*)ldr_addr; break;
+                    case 3: state->q[Rt] = *(uint64_t*)ldr_addr; break;
                     case 4:
                     {
                         __uint128_t val = 0;
                         val |= (__uint128_t)((uint64_t*)ldr_addr)[0];
                         val |= (__uint128_t)((uint64_t*)ldr_addr)[1] << 64;
-                        state->q[ldr->Rt] = val;
+                        state->q[Rt] = val;
                         break;
                     }
                     default:
                         WRN("SIMD ldr with invalid size at " ADDR, addr);
                         return kEmuErr;
                 }
-                state->qvalid |= 1 << ldr->Rt;
+                state->qvalid |= 1 << Rt;
             }
         }
-        else if(is_str_fp_uoff(ptr))
+        else if(is_str_fp_uoff(ptr) || is_stur_fp(ptr))
         {
-            str_fp_uoff_t *str = ptr;
-            if((state->valid & (1 << str->Rn)) && (state->host & (1 << str->Rn)))
+            uint32_t Rt, Rn, size;
+            int64_t off;
+            if(is_str_fp_uoff(ptr))
             {
-                if(!(state->qvalid & (1 << str->Rt)))
+                str_fp_uoff_t *str = ptr;
+                Rt = str->Rt;
+                Rn = str->Rn;
+                size = get_fp_uoff_size(str);
+                off = get_fp_uoff(str);
+            }
+            else if(is_stur_fp(ptr))
+            {
+                stur_fp_t *stur = ptr;
+                Rt = stur->Rt;
+                Rn = stur->Rn;
+                size = get_ldur_stur_fp_size(stur);
+                off = get_ldur_stur_fp_off(stur);
+            }
+            else
+            {
+                return kEmuErr;
+            }
+            if((state->valid & (1 << Rn)) && (state->host & (1 << Rn)))
+            {
+                if(!(state->qvalid & (1 << Rt)))
                 {
                     if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
                     else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                     return kEmuUnknown;
                 }
-                kptr_t staddr = state->x[str->Rn] + get_fp_uoff(str);
-                switch(get_fp_uoff_size(str))
+                kptr_t staddr = state->x[Rn] + off;
+                switch(size)
                 {
-                    case 0: *(uint8_t *)staddr = (uint8_t )state->q[str->Rt]; break;
-                    case 1: *(uint16_t*)staddr = (uint16_t)state->q[str->Rt]; break;
-                    case 2: *(uint32_t*)staddr = (uint32_t)state->q[str->Rt]; break;
-                    case 3: *(uint64_t*)staddr = (uint64_t)state->q[str->Rt]; break;
+                    case 0: *(uint8_t *)staddr = (uint8_t )state->q[Rt]; break;
+                    case 1: *(uint16_t*)staddr = (uint16_t)state->q[Rt]; break;
+                    case 2: *(uint32_t*)staddr = (uint32_t)state->q[Rt]; break;
+                    case 3: *(uint64_t*)staddr = (uint64_t)state->q[Rt]; break;
                     case 4:
                     {
-                        ((uint64_t*)staddr)[0] = (uint64_t) state->q[str->Rt];
-                        ((uint64_t*)staddr)[1] = (uint64_t)(state->q[str->Rt] >> 64);
+                        ((uint64_t*)staddr)[0] = (uint64_t) state->q[Rt];
+                        ((uint64_t*)staddr)[1] = (uint64_t)(state->q[Rt] >> 64);
                         break;
                     }
                     default:
                         WRN("SIMD str with invalid size at " ADDR, addr);
                         return kEmuErr;
+                }
+            }
+        }
+        else if(is_ldp_fp_pre(ptr) || is_ldp_fp_post(ptr) || is_ldp_fp_uoff(ptr))
+        {
+            ldp_fp_t *ldp = ptr;
+            if(!(state->valid & (1 << ldp->Rn))) // Unset validity
+            {
+                state->qvalid &= ~((1 << ldp->Rt) | (1 << ldp->Rt2));
+            }
+            else
+            {
+                kptr_t laddr = state->x[ldp->Rn] + get_ldp_stp_fp_off(ldp);
+                if(is_ldp_fp_pre(ldp))
+                {
+                    state->x[ldp->Rn] = laddr;
+                }
+                else if(is_ldp_fp_post(ldp))
+                {
+                    kptr_t tmp = state->x[ldp->Rn];
+                    state->x[ldp->Rn] = laddr;
+                    laddr = tmp;
+                }
+                void *ldr_addr = (state->host & (1 << ldp->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                if(!ldr_addr)
+                {
+                    return kEmuErr;
+                }
+                switch(ldp->opc)
+                {
+                    case 0:
+                    {
+                        uint32_t *p = (uint32_t*)ldr_addr;
+                        state->q[ldp->Rt]  = p[0];
+                        state->q[ldp->Rt2] = p[1];
+                        break;
+                    }
+                    case 1:
+                    {
+                        uint64_t *p = (uint64_t*)ldr_addr;
+                        state->q[ldp->Rt]  = p[0];
+                        state->q[ldp->Rt2] = p[1];
+                        break;
+                    }
+                    case 2:
+                    {
+                        uint64_t *p = (uint64_t*)ldr_addr;
+                        __uint128_t v1 = 0,
+                                    v2 = 0;
+                        v1 |= (__uint128_t)p[0];
+                        v1 |= (__uint128_t)p[1] << 64;
+                        v2 |= (__uint128_t)p[2];
+                        v2 |= (__uint128_t)p[3] << 64;
+                        state->q[ldp->Rt]  = v1;
+                        state->q[ldp->Rt2] = v2;
+                        break;
+                    }
+                    default:
+                        WRN("SIMD ldp with invalid size at " ADDR, addr);
+                        return kEmuErr;
+                }
+                state->qvalid |= (1 << ldp->Rt) | (1 << ldp->Rt2);
+            }
+        }
+        else if(is_stp_fp_pre(ptr) || is_stp_fp_post(ptr) || is_stp_fp_uoff(ptr))
+        {
+            stp_fp_t *stp = ptr;
+            if(state->valid & (1 << stp->Rn)) // Only if valid
+            {
+                kptr_t staddr = state->x[stp->Rn] + get_ldp_stp_fp_off(stp);
+                if(is_stp_fp_pre(stp))
+                {
+                    state->x[stp->Rn] = staddr;
+                }
+                else if(is_stp_fp_post(stp))
+                {
+                    kptr_t tmp = state->x[stp->Rn];
+                    state->x[stp->Rn] = staddr;
+                    staddr = tmp;
+                }
+                if(state->host & (1 << stp->Rn))
+                {
+                    if(!(state->qvalid & (1 << stp->Rt)) || !(state->qvalid & (1 << stp->Rt2)))
+                    {
+                        if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
+                        else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
+                        return kEmuUnknown;
+                    }
+                    switch(stp->opc)
+                    {
+                        case 0:
+                        {
+                            uint32_t *p = (uint32_t*)staddr;
+                            p[0] = (uint32_t)state->q[stp->Rt];
+                            p[1] = (uint32_t)state->q[stp->Rt2];
+                            break;
+                        }
+                        case 1:
+                        {
+                            uint64_t *p = (uint64_t*)staddr;
+                            p[0] = (uint64_t)state->q[stp->Rt];
+                            p[1] = (uint64_t)state->q[stp->Rt2];
+                            break;
+                        }
+                        case 2:
+                        {
+                            uint64_t *p = (uint64_t*)staddr;
+                            p[0] = (uint64_t) state->q[stp->Rt];
+                            p[1] = (uint64_t)(state->q[stp->Rt] >> 64);
+                            p[2] = (uint64_t) state->q[stp->Rt2];
+                            p[3] = (uint64_t)(state->q[stp->Rt2] >> 64);
+                            break;
+                        }
+                        default:
+                            WRN("SIMD stp with invalid size at " ADDR, addr);
+                            return kEmuErr;
+                    }
                 }
             }
         }
