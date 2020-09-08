@@ -1031,7 +1031,7 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
                                     DBG("ref: " ADDR, ref);
                                     ARRPUSH(refs, ref);
                                 }
-                                mem += skip / sizeof(uint32_t);
+                                mem = (kptr_t*)((uintptr_t)mem + skip);
                             } while(skip > 0);
                         }
                     }
@@ -4801,7 +4801,7 @@ int main(int argc, const char **argv)
                                                                             //ARRPUSH(candidates, ref);
                                                                         }
                                                                     }
-                                                                    mem2 += skip / sizeof(uint32_t);
+                                                                    mem2 = (kptr_t*)((uintptr_t)mem2 + skip);
                                                                 } while(skip > 0);
                                                             }
                                                         }
