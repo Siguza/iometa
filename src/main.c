@@ -818,9 +818,8 @@ static mach_seg_t* seg4ptr(void *kernel, void *ptr)
     exit(-1);
 }
 
-static bool is_fixup_start(void *kernel, kptr_t kbase, void *ptr)
+static bool is_in_fixup_chain(void *kernel, kptr_t kbase, void *ptr)
 {
-    uint32_t off = (uintptr_t)ptr - (uintptr_t)kernel;
     FOREACH_CMD(((mach_hdr_t*)kernel), cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
@@ -833,7 +832,6 @@ static bool is_fixup_start(void *kernel, kptr_t kbase, void *ptr)
                 {
                     if(strcmp("__thread_starts", secs[i].sectname) == 0)
                     {
-                        kptr_t addr = off2addr(kernel, off);
                         uint32_t *start = (uint32_t*)((uintptr_t)kernel + secs[i].offset),
                                  *end   = (uint32_t*)((uintptr_t)start  + secs[i].size);
                         if(end > start)
@@ -845,10 +843,21 @@ static bool is_fixup_start(void *kernel, kptr_t kbase, void *ptr)
                                 {
                                     break;
                                 }
-                                if(kbase + *start == addr)
+                                kptr_t *mem = addr2ptr(kernel, kbase + *start);
+                                size_t skip = 0;
+                                do
                                 {
-                                    return true;
-                                }
+                                    if((uintptr_t)mem == (uintptr_t)ptr)
+                                    {
+                                        return true;
+                                    }
+                                    if((uintptr_t)mem > (uintptr_t)ptr)
+                                    {
+                                        return false;
+                                    }
+                                    kuntag(kbase, DYLD_CHAINED_PTR_ARM64E, *mem, NULL, &skip);
+                                    mem = (kptr_t*)((uintptr_t)mem + skip);
+                                } while(skip > 0);
                             }
                         }
                         return false;
@@ -858,6 +867,7 @@ static bool is_fixup_start(void *kernel, kptr_t kbase, void *ptr)
         }
         else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
         {
+            uint32_t off = (uintptr_t)ptr - (uintptr_t)kernel;
             struct linkedit_data_command *data = (struct linkedit_data_command*)cmd;
             fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)kernel + data->dataoff);
             fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
@@ -872,8 +882,27 @@ static bool is_fixup_start(void *kernel, kptr_t kbase, void *ptr)
                 {
                     continue;
                 }
-                uint16_t idx = starts->page_start[(off - starts->segment_offset) / starts->page_size];
-                return idx == (off - starts->segment_offset) % starts->page_size;
+                uint16_t j = (off - starts->segment_offset) / starts->page_size;
+                uint16_t idx = starts->page_start[j];
+                if(idx == 0xffff)
+                {
+                    continue;
+                }
+                kptr_t *mem = (kptr_t*)((uintptr_t)kernel + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx);
+                size_t skip = 0;
+                do
+                {
+                    if((uintptr_t)mem == (uintptr_t)ptr)
+                    {
+                        return true;
+                    }
+                    if((uintptr_t)mem > (uintptr_t)ptr)
+                    {
+                        return false;
+                    }
+                    kuntag(kbase, DYLD_CHAINED_PTR_64_KERNEL_CACHE, *mem, NULL, &skip);
+                    mem = (kptr_t*)((uintptr_t)mem + skip);
+                } while(skip > 0);
             }
             return false;
         }
@@ -900,7 +929,7 @@ static bool is_part_of_vtab(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, 
             return false;
         }
         // If skip is == 0, it's possible that a new fixup chain starts right here
-        return is_fixup_start(kernel, kbase, &vtab[idx]);
+        return is_in_fixup_chain(kernel, kbase, &vtab[idx]);
     }
     else
     {
@@ -1193,7 +1222,7 @@ static bool check_bl(uint32_t *pos, void *arg)
 // Best-effort emulation: halt on unknown instructions, keep track of which registers
 // hold known values and only operate on those. Ignore non-static memory unless
 // it is specifically marked as "host memory".
-static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, bool (*check)(uint32_t*, void*), void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour)
+static emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_state_t *state, uint32_t *from, bool (*check)(uint32_t*, void*), void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour)
 {
     if(init)
     {
@@ -1549,6 +1578,13 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
                         val &= 0xffffffff;
                     }
                 }
+                if(!(state->host & (1 << Rn)) && size == 8)
+                {
+                    if(is_in_fixup_chain(kernel, kbase, ldr_addr))
+                    {
+                        val = kuntag(kbase, fixupKind, val, NULL, NULL);
+                    }
+                }
                 state->x[Rt] = val;
                 state->valid |= 1 << Rt;
                 state->wide = (state->wide & ~(1 << Rt)) | (sf << Rt);
@@ -1563,7 +1599,12 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
             {
                 return kEmuErr;
             }
-            state->x[ldr->Rt] = *(kptr_t*)ldr_addr;
+            kptr_t val = *(kptr_t*)ldr_addr;
+            if(ldr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
+            {
+                val = kuntag(kbase, fixupKind, val, NULL, NULL);
+            }
+            state->x[ldr->Rt] = val;
             state->valid |= 1 << ldr->Rt;
             state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
             state->host &= ~(1 << ldr->Rt);
@@ -1596,8 +1637,21 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
                 if(ldp->sf)
                 {
                     uint64_t *p = ldr_addr;
-                    state->x[ldp->Rt]  = p[0];
-                    state->x[ldp->Rt2] = p[1];
+                    uint64_t v1 = p[0];
+                    uint64_t v2 = p[1];
+                    if(!(state->host & (1 << ldp->Rn)))
+                    {
+                        if(is_in_fixup_chain(kernel, kbase, ldr_addr))
+                        {
+                            v1 = kuntag(kbase, fixupKind, v1, NULL, NULL);
+                        }
+                        if(is_in_fixup_chain(kernel, kbase, ldr_addr + 1))
+                        {
+                            v2 = kuntag(kbase, fixupKind, v2, NULL, NULL);
+                        }
+                    }
+                    state->x[ldp->Rt]  = v1;
+                    state->x[ldp->Rt2] = v2;
                 }
                 else
                 {
@@ -1625,7 +1679,12 @@ static emu_ret_t a64_emulate(void *kernel, a64_state_t *state, uint32_t *from, b
                 {
                     return kEmuErr;
                 }
-                state->x[ldxr->Rt] = *(kptr_t*)ldr_addr;
+                kptr_t val = *(kptr_t*)ldr_addr;
+                if(ldxr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
+                {
+                    val = kuntag(kbase, fixupKind, val, NULL, NULL);
+                }
+                state->x[ldxr->Rt] = val;
                 state->valid |= 1 << ldxr->Rt;
                 state->wide = (state->wide & ~(1 << ldxr->Rt)) | (ldxr->sf << ldxr->Rt);
                 state->host &= ~(1 << ldxr->Rt);
@@ -2130,7 +2189,7 @@ static uint32_t* find_function_start(void *kernel, mach_seg_t *seg, const char *
 // Certain calls to OSMetaClass::OSMetaClass() do not have x0 generated as an immediate,
 // but passed in from the caller. If these are the only constructor calls for a given class,
 // then we have no choice but to follow those calls back until we get an x0.
-static bool multi_call_emulate(void *kernel, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint32_t wantvalid, const char *name)
+static bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint32_t wantvalid, const char *name)
 {
     mach_seg_t *seg = seg4ptr(kernel, fncall);
     kptr_t fncalladdr = seg->vmaddr + ((uintptr_t)fncall - ((uintptr_t)kernel + seg->fileoff));
@@ -2170,7 +2229,7 @@ static bool multi_call_emulate(void *kernel, uint32_t *fncall, uint32_t *end, a6
     state->qvalid = 0x0000ff00;
     state->wide   = 0xfff80000;
     state->host   = 0x80000000;
-    emu_ret_t ret = a64_emulate(kernel, state, fnstart, &check_equal, end, false, false, kEmuFnEnter);
+    emu_ret_t ret = a64_emulate(kernel, kbase, fixupKind, state, fnstart, &check_equal, end, false, false, kEmuFnEnter);
     switch(ret)
     {
         default:
@@ -2205,7 +2264,7 @@ static bool multi_call_emulate(void *kernel, uint32_t *fncall, uint32_t *end, a6
         {
             kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
             kptr_t bltarg = bladdr + get_bl_off(bl);
-            if(bltarg == fnaddr && multi_call_emulate(kernel, mem, end, state, sp, wantvalid, name))
+            if(bltarg == fnaddr && multi_call_emulate(kernel, kbase, fixupKind, mem, end, state, sp, wantvalid, name))
             {
                 return true;
             }
@@ -3095,7 +3154,7 @@ static void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
     }
 }
 
-static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t *callsite, bool want_vtabs, sym_t *bsyms, size_t nsyms)
+static void add_metaclass(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, void *arg, a64_state_t *state, uint32_t *callsite, bool want_vtabs, sym_t *bsyms, size_t nsyms)
 {
     struct
     {
@@ -3166,7 +3225,7 @@ static void add_metaclass(void *kernel, void *arg, a64_state_t *state, uint32_t 
                 {
                     continue;
                 }
-                emu_ret_t ret = a64_emulate(kernel, state, m, &check_equal, m + 1, false, true, kEmuFnIgnore);
+                emu_ret_t ret = a64_emulate(kernel, kbase, fixupKind, state, m, &check_equal, m + 1, false, true, kEmuFnIgnore);
                 if(ret != kEmuEnd)
                 {
                     DBG("a64_emulate returned %u", ret);
@@ -3229,7 +3288,7 @@ static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_ki
             state->qvalid = 0x0;
             state->wide   = 0x7;
             state->host   = 0x0;
-            if(a64_emulate(kernel, state, fnstart, &check_equal, bl, false, true, kEmuFnIgnore) == kEmuEnd)
+            if(a64_emulate(kernel, kbase, fixupKind, state, fnstart, &check_equal, bl, false, true, kEmuFnIgnore) == kEmuEnd)
             {
                 if((state->valid & 0xf) == 0xf && (state->wide & 0xf) == 0x7 && state->x[0] == 0x6174656d656b6166 && state->x[1] == 0x656d616e656b6166 && state->x[2] == 0x00727470656b6166 && state->x[3] == 0x656b6166)
                 {
@@ -3268,7 +3327,7 @@ static void constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_ki
     else
     {
         DBG("Processing constructor call at " ADDR " (%s)", bladdr, name);
-        add_metaclass(kernel, metas, state, bl, want_vtabs, bsyms, nsyms);
+        add_metaclass(kernel, kbase, fixupKind, metas, state, bl, want_vtabs, bsyms, nsyms);
         // Do NOT fall through
         return;
     }
@@ -3321,7 +3380,7 @@ static void alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixu
     {
         DBG("Processing alt constructor call at " ADDR " (%s)", bladdr, name);
         // NOTE: Will have to revise this if the constructors ever diverge in x0-x3
-        add_metaclass(kernel, metas, state, bl, want_vtabs, bsyms, nsyms);
+        add_metaclass(kernel, kbase, fixupKind, metas, state, bl, want_vtabs, bsyms, nsyms);
         // Do NOT fall through
         return;
     }
@@ -3374,7 +3433,7 @@ static void find_constructor_calls(void *kernel, mach_hdr_t *hdr, kptr_t kbase, 
                                 if(fnstart)
                                 {
                                     a64_state_t state;
-                                    if(a64_emulate(kernel, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
+                                    if(a64_emulate(kernel, kbase, fixupKind, &state, fnstart, &check_equal, mem, true, true, kEmuFnIgnore) == kEmuEnd)
                                     {
                                         cb(kernel, kbase, seg, fixupKind, want_vtabs, metas, names, bsyms, nsyms, &state, fnstart, mem, bladdr, arg);
                                     }
@@ -3950,7 +4009,7 @@ int main(int argc, const char **argv)
                                         if(is_bl(bl))
                                         {
                                             a64_state_t state;
-                                            if(a64_emulate(kernel, &state, mem, &check_equal, m, true, true, kEmuFnIgnore) != kEmuEnd)
+                                            if(a64_emulate(kernel, kbase, fixupKind, &state, mem, &check_equal, m, true, true, kEmuFnIgnore) != kEmuEnd)
                                             {
                                                 // a64_emulate should've printed error already
                                                 goto skip;
@@ -4086,7 +4145,7 @@ int main(int argc, const char **argv)
                 return -1;
             }
             a64_state_t state;
-            bool success = multi_call_emulate(kernel, current->fncall, current->fncall, &state, sp, 0xf, current->name);
+            bool success = multi_call_emulate(kernel, kbase, fixupKind, current->fncall, current->fncall, &state, sp, 0xf, current->name);
             if(success)
             {
                 mach_seg_t *seg = seg4ptr(kernel, current->fncall);
@@ -4099,7 +4158,7 @@ int main(int argc, const char **argv)
                 else
                 {
                     DBG("Processing triaged constructor call at " ADDR " (%s)", bladdr, current->name);
-                    add_metaclass(kernel, &metas, &state, current->fncall, want_vtabs, bsyms, nsyms);
+                    add_metaclass(kernel, kbase, fixupKind, &metas, &state, current->fncall, want_vtabs, bsyms, nsyms);
                     free(sp);
                     goto onward;
                 }
@@ -4326,7 +4385,7 @@ int main(int argc, const char **argv)
                                     state.qvalid = 0;
                                     state.wide = 1;
                                     state.host = 0;
-                                    if(a64_emulate(kernel, &state, start, &check_equal, mem, false, true, kEmuFnIgnore) == kEmuEnd)
+                                    if(a64_emulate(kernel, kbase, fixupKind, &state, start, &check_equal, mem, false, true, kEmuFnIgnore) == kEmuEnd)
                                     {
                                         if(!(state.valid & (1 << str->Rn)) || !(state.wide & (1 << str->Rn)) || !(state.valid & (1 << str->Rt)) || !(state.wide & (1 << str->Rt)))
                                         {
@@ -4907,7 +4966,7 @@ int main(int argc, const char **argv)
                                 state.qvalid = 0x0000ff00;
                                 state.wide   = 0xfff80001;
                                 state.host   = 0x80000000;
-                                switch(a64_emulate(kernel, &state, fnstart, &check_bl, &m, false, true, kEmuFnIgnore))
+                                switch(a64_emulate(kernel, kbase, fixupKind, &state, fnstart, &check_bl, &m, false, true, kEmuFnIgnore))
                                 {
                                     case kEmuRet:
                                         if((state.valid & 0x1) == 0x1 && (state.wide & 0x1) == 0x1 && state.x[0] == 0x0)
@@ -4950,7 +5009,7 @@ int main(int argc, const char **argv)
                                                 }
                                                 break;
                                             }
-                                            if(a64_emulate(kernel, &state, m, &check_equal, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
+                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m, &check_equal, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
                                             {
                                                 break;
                                             }
@@ -4965,7 +5024,7 @@ int main(int argc, const char **argv)
                                             state.valid |= 0x1;
                                             state.wide  |= 0x1;
                                             state.host  |= 0x1;
-                                            if(a64_emulate(kernel, &state, m + 1, &check_equal, end, false, true, kEmuFnAssumeX0) != kEmuRet)
+                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m + 1, &check_equal, end, false, true, kEmuFnAssumeX0) != kEmuRet)
                                             {
                                                 break;
                                             }
