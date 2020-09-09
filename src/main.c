@@ -2131,7 +2131,6 @@ int main(int argc, const char **argv)
                     uint16_t pac;
                     bool structor      = false,
                          authoritative = false,
-                         placeholder   = false,
                          overrides     = false,
                          is_in_exreloc = false;
 
@@ -2151,45 +2150,35 @@ int main(int argc, const char **argv)
                     {
                         func = -1;
                     }
+                    else if(cxx_sym)
+                    {
+                        DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
+                        if(cxx_demangle(cxx_sym, &class, &method, &structor))
+                        {
+                            authoritative = true;
+                        }
+                        else if(is_in_exreloc)
+                        {
+                            WRN("Failed to demangle symbol: %s (from reloc)", cxx_sym);
+                        }
+                        else
+                        {
+                            WRN("Failed to demangle symbol: %s (from symtab, addr " ADDR ")", cxx_sym, func);
+                        }
+                    }
                     if(!ignore_symmap && idx >= pnmeth && meta->symclass)
                     {
                         symmap_method_t *smeth = &meta->symclass->methods[idx - pnmeth];
+                        if(method && smeth->method && !smeth->structor && strcmp(method, smeth->method) != 0)
+                        {
+                            WRN("Overriding %s::%s from symtab with %s::%s from symmap", class, method, smeth->class, smeth->method);
+                        }
                         class = smeth->class;
                         method = smeth->method;
                         structor = smeth->structor;
                         if(method)
                         {
                             authoritative = true;
-                        }
-                        else
-                        {
-                            placeholder = true;
-                        }
-                    }
-                    if(!method && func != -1)
-                    {
-                        if(cxx_sym)
-                        {
-                            DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
-                            if(!cxx_demangle(cxx_sym, &class, &method, &structor))
-                            {
-                                if(is_in_exreloc)
-                                {
-                                    WRN("Failed to demangle symbol: %s (from reloc)", cxx_sym);
-                                }
-                                else
-                                {
-                                    WRN("Failed to demangle symbol: %s (from symtab, addr " ADDR ")", cxx_sym, func);
-                                }
-                            }
-                            else
-                            {
-                                authoritative = true;
-                            }
-                        }
-                        else
-                        {
-                            DBG("Found no symbol for virtual function " ADDR, func);
                         }
                     }
                     if(!is_in_exreloc) // TODO: reloc parent?
@@ -2267,7 +2256,6 @@ int main(int argc, const char **argv)
                     ent->pac = pac;
                     ent->structor = !!structor;
                     ent->authoritative = !!authoritative;
-                    ent->placeholder = !!placeholder;
                     ent->overrides = !!overrides;
                     ent->reserved = 0;
 

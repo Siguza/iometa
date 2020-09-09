@@ -332,6 +332,6 @@ void print_symmap(metaclass_t *meta)
     for(size_t i = parent ? parent->nmethods : 0; i < meta->nmethods; ++i)
     {
         vtab_entry_t *ent = &meta->methods[i];
-        print_syment(meta->name, ent->class, ent->placeholder ? NULL : ent->method);
+        print_syment(meta->name, ent->class, ent->authoritative ? ent->method : NULL);
     }
 }
