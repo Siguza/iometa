@@ -391,10 +391,6 @@ int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const c
             strtab = (char*)((uintptr_t)macho + stab->stroff);
             for(size_t i = 0; i < stab->nsyms; ++i)
             {
-                if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT))) // XXX: eliminate check for verification?
-                {
-                    continue;
-                }
                 if(symtab[i].n_strx > machosize - stab->stroff)
                 {
                     if(name) ERR("Embedded Mach-O symbol out of bounds (%s).", name);

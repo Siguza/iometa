@@ -2124,11 +2124,11 @@ int main(int argc, const char **argv)
                     vtab_entry_t *ent   = &meta->methods[idx],
                                  *pent  = (parent && idx < parent->nmethods) ? &parent->methods[idx] : NULL,
                                  *chain = NULL;
-                    kptr_t func = 0;
+                    kptr_t func  = 0;
+                    uint16_t pac = 0;
                     const char *cxx_sym = NULL,
                                *class   = NULL,
                                *method  = NULL;
-                    uint16_t pac;
                     bool structor      = false,
                          authoritative = false,
                          overrides     = false,
@@ -2181,9 +2181,21 @@ int main(int argc, const char **argv)
                             authoritative = true;
                         }
                     }
-                    if(!is_in_exreloc) // TODO: reloc parent?
+                    if(!is_in_exreloc && pent && func != -1) // pure_virtual will not match parent because yolo
                     {
-                        if(pent && pac != pent->pac && func != -1 && pent->addr != -1) // ignore pure_virtual
+                        // Skip over pure_virtual entries until we either reach a non-pure_virtual, or the base decl
+                        metaclass_t  *bcls = parent;
+                        vtab_entry_t *bent = pent;
+                        while(bent->addr == -1)
+                        {
+                            bcls = bcls->parentP;
+                            if(!bcls || idx >= bcls->nmethods)
+                            {
+                                break;
+                            }
+                            bent = &bcls->methods[idx];
+                        }
+                        if(pac != bent->pac)
                         {
                             WRN("PAC mismatch method 0x%lx: %s 0x%04hx vs 0x%04hx %s", idx * sizeof(kptr_t), meta->name, pac, pent->pac, parent->name);
                         }
