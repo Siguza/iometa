@@ -106,11 +106,11 @@ do \
     (ptr) = &(name).val[(name).idx++]; \
 } while(0)
 
-#define ARRPUSH(name, obj) \
+#define ARRPUSH(name, ...) \
 do \
 { \
     ARREXPAND((name)); \
-    (name).val[(name).idx++] = (obj); \
+    (name).val[(name).idx++] = (__VA_ARGS__); \
 } while(0)
 
 #define ARRFREE(name) \

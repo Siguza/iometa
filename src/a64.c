@@ -75,7 +75,7 @@ static inline uint64_t Replicate(uint64_t val, uint8_t times, uint64_t width)
 
 uint64_t AdvSIMDExpandImm(uint8_t op, uint8_t cmode, uint64_t imm8)
 {
-    uint64_t imm64;
+    uint64_t imm64 = 0;
     switch((cmode >> 1) & 0b111)
     {
         case 0b000:
