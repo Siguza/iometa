@@ -2181,23 +2181,42 @@ int main(int argc, const char **argv)
                             authoritative = true;
                         }
                     }
-                    if(!is_in_exreloc && pent && func != -1) // pure_virtual will not match parent because yolo
+                    // Ok, this is a nasty thing now. We wanna verify that the method's PAC diversifier
+                    // matches that of the parent class, if existent. There is only one case where it
+                    // will not match, and literally all of the complexits below is due to that:
+                    // If class A has a pure virtual method and B inherits from A but does not override
+                    // said method, the compiler will give B's vtable a diversifier as if B had declared
+                    // the method, not A. This means that we have to traverse the class hierarchy until
+                    // we either find a method entry that is not pure virtual, or we reach the first
+                    // class with such a method entry. Then however, if that entry is still pure virtual
+                    // and the class'es direct parent class has no vtable (i.e. the compiler optimised
+                    // it out), we have to skip the check altogether because it is possible that the
+                    // parent class declared the method, in which case the entry we found will have the
+                    // wrong diversifier. And this really occurs in practice, for example in the
+                    // N104AP kernel for 18A5373a (iPhone 11, iOS 14.0 beta 8).
+                    if(!is_in_exreloc && pent && func != -1)
                     {
-                        // Skip over pure_virtual entries until we either reach a non-pure_virtual, or the base decl
                         metaclass_t  *bcls = parent;
                         vtab_entry_t *bent = pent;
+                        // Skip while pure virtual
                         while(bent->addr == -1)
                         {
                             bcls = bcls->parentP;
+                            // Skip while missing vtab
+                            while(bcls && bcls->vtab == 0)
+                            {
+                                bcls = bcls->parentP;
+                            }
                             if(!bcls || idx >= bcls->nmethods)
                             {
+                                bent = NULL;
                                 break;
                             }
                             bent = &bcls->methods[idx];
                         }
-                        if(pac != bent->pac)
+                        if(bent && pac != bent->pac)
                         {
-                            WRN("PAC mismatch method 0x%lx: %s 0x%04hx vs 0x%04hx %s", idx * sizeof(kptr_t), meta->name, pac, pent->pac, parent->name);
+                            WRN("PAC mismatch method 0x%lx: %s 0x%04hx vs 0x%04hx %s", idx * sizeof(kptr_t), meta->name, pac, bent->pac, bcls->name);
                         }
                     }
 
