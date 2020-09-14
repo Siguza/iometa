@@ -11,11 +11,88 @@
 #include <stdbool.h>
 #include <stdio.h>              // asprintf
 #include <stdlib.h>             // malloc, free
-#include <string.h>             // strncmp, memcpy
+#include <string.h>             // strncmp, strndup, memcpy
 
 #include "cxx.h"
+#include "util.h"
 
-static int demangle_num(const char **ptr)
+#define ROTL(x, b) (uint64_t)(((x) << (b)) | ((x) >> (64 - (b))))
+
+#define SIPROUND            \
+do {                        \
+    v0 += v1;               \
+    v1 = ROTL(v1, 13) ^ v0; \
+    v0 = ROTL(v0, 32);      \
+    v2 += v3;               \
+    v3 = ROTL(v3, 16) ^ v2; \
+    v0 += v3;               \
+    v3 = ROTL(v3, 21) ^ v0; \
+    v2 += v1;               \
+    v1 = ROTL(v1, 17) ^ v2; \
+    v2 = ROTL(v2, 32);      \
+} while(0)
+
+static uint64_t siphash(const uint8_t *in, uint64_t inlen)
+{
+    uint64_t v0 = 0x0a257d1c9bbab1c0ULL;
+    uint64_t v1 = 0xb0eef52375ef8302ULL;
+    uint64_t v2 = 0x1533771c85aca6d4ULL;
+    uint64_t v3 = 0xa0e4e32062ff891cULL;
+    for(const uint8_t *end = in + (inlen & ~7ULL); in != end; in += 8)
+    {
+        uint64_t m = ((uint64_t)in[7] << 56)
+                   | ((uint64_t)in[6] << 48)
+                   | ((uint64_t)in[5] << 40)
+                   | ((uint64_t)in[4] << 32)
+                   | ((uint64_t)in[3] << 24)
+                   | ((uint64_t)in[2] << 16)
+                   | ((uint64_t)in[1] <<  8)
+                   | ((uint64_t)in[0]);
+        v3 ^= m;
+        SIPROUND;
+        SIPROUND;
+        v0 ^= m;
+    }
+    uint64_t b = inlen << 56;
+    switch(inlen & 7)
+    {
+        case 7: b |= (uint64_t)in[6] << 48;
+        case 6: b |= (uint64_t)in[5] << 40;
+        case 5: b |= (uint64_t)in[4] << 32;
+        case 4: b |= (uint64_t)in[3] << 24;
+        case 3: b |= (uint64_t)in[2] << 16;
+        case 2: b |= (uint64_t)in[1] <<  8;
+        case 1: b |= (uint64_t)in[0];
+        case 0: break;
+    }
+    v3 ^= b;
+    SIPROUND;
+    SIPROUND;
+    v0 ^= b;
+    v2 ^= 0xff;
+    SIPROUND;
+    SIPROUND;
+    SIPROUND;
+    SIPROUND;
+    return v0 ^ v1 ^ v2 ^ v3;
+}
+
+bool cxx_compute_pac(const char *sym, uint16_t *pac)
+{
+    if(sym[0] != '_')
+    {
+        return false;
+    }
+    size_t len = 0;
+    for(const char *s = sym + 1; *s != '\0' && *s != '.'; ++s)
+    {
+        ++len;
+    }
+    *pac = (siphash((const uint8_t*)(sym + 1), len) % 0xffff) + 1;
+    return true;
+}
+
+static int cxx_demangle_num(const char **ptr)
 {
     const char *sym = *ptr;
     if(!(*sym >= '0' && *sym <= '9'))
@@ -69,7 +146,7 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
     str[len] = '\0';
     str[len+1] = '\0';
     const char *p = sym + 4;
-    int slen = demangle_num(&p);
+    int slen = cxx_demangle_num(&p);
     *structorptr = slen == len && strncmp(p, str, len) == 0 && (p[len] == 'C' || p[len] == 'D');
     *methodptr = str + len + 2;
     *classptr = str;
@@ -98,7 +175,7 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
         cnst = true;
         ++sym;
     }
-    int clslen = demangle_num(&sym);
+    int clslen = cxx_demangle_num(&sym);
     if(clslen == -1)
     {
         return false;
@@ -129,7 +206,7 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
         }
         default:
         {
-            int mthdlen = demangle_num(&sym);
+            int mthdlen = cxx_demangle_num(&sym);
             if(mthdlen == -1)
             {
                 return false;
@@ -151,4 +228,23 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
     return true;
 }
 
+#endif
+
+#ifdef CXXPAC_DEBUG
+int main(int argc, const char **argv)
+{
+    if(argc != 2)
+    {
+        fprintf(stderr, "Usage: %s symbol\n", argv[0]);
+        return -1;
+    }
+    uint16_t pac = 0;
+    if(!cxx_compute_pac(argv[1], &pac))
+    {
+        fprintf(stderr, "Symbol must start with underscore\n");
+        return -1;
+    }
+    printf("PAC: 0x%04hx\n", pac);
+    return 0;
+}
 #endif

@@ -12,7 +12,10 @@
 #define CXX_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
+bool cxx_compute_pac(const char *sym, uint16_t *pac);
 bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr, bool *structorptr);
+char* cxx_mangle(const char *class, const char *method);
 
 #endif
