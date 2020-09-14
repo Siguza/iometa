@@ -20,6 +20,9 @@
 #define VM_PROT_WRITE                      0x2
 #define VM_PROT_EXECUTE                    0x4
 #define CPU_TYPE_ARM64              0x0100000c
+#define CPU_SUBTYPE_MASK            0x00ffffff
+#define CPU_SUBTYPE_ARM64_ALL              0x0
+#define CPU_SUBTYPE_ARM64E                 0x2
 #define FAT_CIGAM                   0xbebafeca
 #define MH_MAGIC_64                 0xfeedfacf
 #define MH_EXECUTE                  0x00000002

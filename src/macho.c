@@ -308,6 +308,13 @@ int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const c
         else     ERR("Wrong architecture, only arm64 is supported.");
         return -1;
     }
+    uint32_t subtype = hdr->cpusubtype & CPU_SUBTYPE_MASK;
+    if(subtype != CPU_SUBTYPE_ARM64_ALL && subtype != CPU_SUBTYPE_ARM64E)
+    {
+        if(name) ERR("Unknown embedded cpusubtype: 0x%x (%s)", subtype, name);
+        else     ERR("Unknown cpusubtype: 0x%x", subtype);
+        return -1;
+    }
     if(hdr->filetype != MH_EXECUTE && hdr->filetype != MH_KEXT_BUNDLE && (name != NULL || hdr->filetype != MH_FILESET))
     {
         if(name) ERR("Wrong embedded Mach-O type: 0x%x (%s)", hdr->filetype, name);
