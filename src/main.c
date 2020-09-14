@@ -2194,7 +2194,7 @@ int main(int argc, const char **argv)
                     // parent class declared the method, in which case the entry we found will have the
                     // wrong diversifier. And this really occurs in practice, for example in the
                     // N104AP kernel for 18A5373a (iPhone 11, iOS 14.0 beta 8).
-                    if(!is_in_exreloc && pent && func != -1)
+                    if((hdr->cpusubtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E && !is_in_exreloc && pent && func != -1)
                     {
                         metaclass_t  *bcls = parent;
                         vtab_entry_t *bent = pent;
@@ -2280,6 +2280,118 @@ int main(int argc, const char **argv)
                     {
                         class = meta->name;
                     }
+
+                    // If we're on arm64e and have a symbol that we believe should be correct, we can check if it matches the PAC diversifier.
+                    // In order to avoid duplicate work, we wanna skip this if we already did for the parent, but determining if we did that is a bit of a pain.
+                    if((hdr->cpusubtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E && !is_in_exreloc && authoritative && (!pent || !pent->authoritative))
+                    {
+                        // First seek down to the first class that has this method
+                        metaclass_t *checkClass = meta;
+                        if(pent)
+                        {
+                            for(metaclass_t *curClass = parent; curClass; curClass = curClass->parentP)
+                            {
+                                if(curClass->vtab == 0)
+                                {
+                                    continue;
+                                }
+                                if(idx >= curClass->nmethods)
+                                {
+                                    break;
+                                }
+                                checkClass = curClass;
+                            }
+                        }
+                        DBG("Checking diversifier of %s::%s (sym: %s)", checkClass->name, method, cxx_sym ? cxx_sym : "---");
+                        do
+                        {
+                            char *sym = NULL;
+                            if(structor)
+                            {
+                                // TODO: Everywhere else, I support both con- and destructors, and don't make any assumptions about indices.
+                                // But both destructors look exactly the same de-mangled, so this is the only indicator I have, for now.
+                                // At least this will spew a warning if things break, I guess.
+                                asprintf(&sym, "__ZN%lu%sD%luEv", strlen(checkClass->name), checkClass->name, 1 - idx);
+                                if(!sym)
+                                {
+                                    ERRNO("asprintf(sym)");
+                                    return -1;
+                                }
+                            }
+                            else
+                            {
+                                sym = cxx_mangle(checkClass->name, method);
+                                if(!sym)
+                                {
+                                    WRN("Failed to mangle %s::%s", checkClass->name, method);
+                                    break;
+                                }
+                            }
+                            uint16_t div = 0;
+                            if(!cxx_compute_pac(sym, &div))
+                            {
+                                ERR("Failed to compute PAC diversifier. This means something is broken.");
+                                return -1;
+                            }
+                            DBG("Computed PAC 0x%04hx for symbol %s", div, sym);
+                            if(!cxx_sym && !pent)
+                            {
+                                cxx_sym = sym;
+                            }
+                            else
+                            {
+                                free(sym);
+                            }
+                            // With abstract parents, we might have to use the parent class name.
+                            // This can go on as long as the hierarchy has no vtable.
+                            if(div != pac)
+                            {
+                                // We don't capture OSMetaClassBase, so treat parent == null as that
+                                for(metaclass_t *p = checkClass->parentP; !p || p->vtab == 0 || p->methods[idx].addr == -1; p = p->parentP)
+                                {
+                                    const char *pname = p ? p->name : "OSMetaClassBase";
+                                    if(structor)
+                                    {
+                                        // TODO: See above
+                                        asprintf(&sym, "__ZN%lu%sD%luEv", strlen(pname), pname, 1 - idx);
+                                        if(!sym)
+                                        {
+                                            ERRNO("asprintf(sym)");
+                                            return -1;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        sym = cxx_mangle(pname, method);
+                                        if(!sym)
+                                        {
+                                            ERR("Failed to mangle a method, but mangling with different class succeeded.");
+                                            ERR("Failed method was: %s::%s", pname, method);
+                                            return -1;
+                                        }
+                                    }
+                                    if(!cxx_compute_pac(sym, &div))
+                                    {
+                                        ERR("Failed to compute PAC diversifier. This means something is broken.");
+                                        return -1;
+                                    }
+                                    DBG("Computed PAC 0x%04hx for symbol %s", div, sym);
+                                    free(sym);
+                                    if(!p || div == pac)
+                                    {
+                                        break;
+                                    }
+                                }
+                                if(div != pac)
+                                {
+                                    WRN("PAC verification failed for %s::%s", checkClass->name, method);
+                                }
+                            }
+                        } while(0);
+                    }
+
+                    // TODO: record C++ symbol
+
                     ent->chain = chain;
                     ent->class = class;
                     ent->method = method;
