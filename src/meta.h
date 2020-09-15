@@ -24,6 +24,7 @@ struct symmap_class;
 typedef struct vtab_entry
 {
     struct vtab_entry *chain; // only used for back-propagating name
+    const char *mangled;
     const char *class;
     const char *method;
     kptr_t addr;

@@ -102,31 +102,63 @@ void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
 {
     if(opt.radare)
     {
-        if(meta->vtab != 0 && meta->vtab != -1)
+        if(opt.mangle)
         {
-            printf("f sym.vtablefor%s 0 " ADDR "\n", meta->name, meta->vtab);
-            printf("fN sym.vtablefor%s vtablefor%s\n", meta->name, meta->name);
-        }
-        if(meta->addr)
-        {
-            printf("f sym.%s::gMetaClass 0 " ADDR "\n", meta->name, meta->addr);
-            printf("fN sym.%s::gMetaClass %s::gMetaClass\n", meta->name, meta->name);
-        }
-        if(meta->metavtab != 0 && meta->metavtab != -1)
-        {
-            printf("f sym.vtablefor%s::MetaClass 0 " ADDR "\n", meta->name, meta->metavtab);
-            printf("fN sym.vtablefor%s::MetaClass vtablefor%s::MetaClass\n", meta->name, meta->name);
-        }
-        for(size_t i = 0; i < meta->nmethods; ++i)
-        {
-            vtab_entry_t *ent = &meta->methods[i];
-            if(!ent->overrides || ent->addr == -1)
+            size_t len = strlen(meta->name);
+            if(meta->vtab != 0 && meta->vtab != -1)
             {
-                continue;
+                printf("f sym.__ZTV%lu%s 0 " ADDR "\n", len, meta->name, meta->vtab);
+                printf("fN sym.__ZTV%lu%s __ZTV%lu%s\n", len, meta->name, len, meta->name);
             }
-            const char *r2name = radarify(ent->method);
-            printf("f sym.%s::%s 0 " ADDR "\n", ent->class, r2name, ent->addr);
-            printf("\"fN sym.%s::%s %s::%s\"\n", ent->class, r2name, ent->class, ent->method);
+            if(meta->addr)
+            {
+                printf("f sym.__ZN%lu%s10gMetaClassE 0 " ADDR "\n", len, meta->name, meta->addr);
+                printf("fN sym.__ZN%lu%s10gMetaClassE __ZN%lu%s10gMetaClassE\n", len, meta->name, len, meta->name);
+            }
+            if(meta->metavtab != 0 && meta->metavtab != -1)
+            {
+                printf("f sym.__ZTVN%lu%s9MetaClassE 0 " ADDR "\n", len, meta->name, meta->metavtab);
+                printf("fN sym.__ZTVN%lu%s9MetaClassE __ZTVN%lu%s9MetaClassE\n", len, meta->name, len, meta->name);
+            }
+            for(size_t i = 0; i < meta->nmethods; ++i)
+            {
+                vtab_entry_t *ent = &meta->methods[i];
+                if(!ent->overrides || ent->addr == -1)
+                {
+                    continue;
+                }
+                printf("f sym.%s 0 " ADDR "\n", ent->mangled, ent->addr);
+                printf("fN sym.%s %s\n", ent->mangled, ent->mangled);
+            }
+        }
+        else
+        {
+            if(meta->vtab != 0 && meta->vtab != -1)
+            {
+                printf("f sym.vtablefor%s 0 " ADDR "\n", meta->name, meta->vtab);
+                printf("fN sym.vtablefor%s vtablefor%s\n", meta->name, meta->name);
+            }
+            if(meta->addr)
+            {
+                printf("f sym.%s::gMetaClass 0 " ADDR "\n", meta->name, meta->addr);
+                printf("fN sym.%s::gMetaClass %s::gMetaClass\n", meta->name, meta->name);
+            }
+            if(meta->metavtab != 0 && meta->metavtab != -1)
+            {
+                printf("f sym.vtablefor%s::MetaClass 0 " ADDR "\n", meta->name, meta->metavtab);
+                printf("fN sym.vtablefor%s::MetaClass vtablefor%s::MetaClass\n", meta->name, meta->name);
+            }
+            for(size_t i = 0; i < meta->nmethods; ++i)
+            {
+                vtab_entry_t *ent = &meta->methods[i];
+                if(!ent->overrides || ent->addr == -1)
+                {
+                    continue;
+                }
+                const char *r2name = radarify(ent->method);
+                printf("f sym.%s::%s 0 " ADDR "\n", ent->class, r2name, ent->addr);
+                printf("\"fN sym.%s::%s %s::%s\"\n", ent->class, r2name, ent->class, ent->method);
+            }
         }
     }
     else
@@ -182,7 +214,14 @@ void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
                 size_t hex = i * sizeof(kptr_t);
                 int hexlen = 5;
                 for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
-                printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
+                if(opt.mangle)
+                {
+                    printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->mangled, colorReset);
+                }
+                else
+                {
+                    printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
+                }
             }
         }
     }

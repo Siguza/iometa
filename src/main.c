@@ -424,6 +424,7 @@ static void print_help(const char *self)
                     "    -R  Print symbols for radare2 (implies -mov, takes precedence)\n"
                     "    -s  Print object sizes\n"
                     "    -v  Print object vtabs\n"
+                    "    -z  Print mangled symbols\n"
                     "\n"
                     "Filter options:\n"
                     "    -B  Filter by bundle identifier (kext)\n"
@@ -461,6 +462,7 @@ int main(int argc, const char **argv)
         .size      = 0,
         .symmap    = 0,
         .vtab      = 0,
+        .mangle    = 0,
         ._reserved = 0,
     };
     const char *filt_class    = NULL,
@@ -598,6 +600,11 @@ int main(int argc, const char **argv)
                     opt.vtab = 1;
                     break;
                 }
+                case 'z':
+                {
+                    opt.mangle = 1;
+                    break;
+                }
                 default:
                 {
                     ERR("Unrecognised option: -%c", argv[aoff][i]);
@@ -639,9 +646,9 @@ int main(int argc, const char **argv)
         return -1;
     }
 
-    if(opt.symmap && (opt.bfilt || opt.cfilt || opt.ofilt || opt.bsort || opt.csort || opt.extend || opt.parent))
+    if(opt.symmap && (opt.bfilt || opt.cfilt || opt.ofilt || opt.bsort || opt.csort || opt.extend || opt.parent || opt.mangle))
     {
-        ERR("Cannot use filters or sorting with -M.");
+        ERR("Cannot use filters, sorting or mangling with -M.");
         return -1;
     }
     if(opt.symmap && opt.radare)
@@ -2169,9 +2176,11 @@ int main(int argc, const char **argv)
                     if(!ignore_symmap && idx >= pnmeth && meta->symclass)
                     {
                         symmap_method_t *smeth = &meta->symclass->methods[idx - pnmeth];
-                        if(method && smeth->method && !smeth->structor && strcmp(method, smeth->method) != 0)
+                        if(method && smeth->method && !smeth->structor && (strcmp(class, smeth->class) != 0 || strcmp(method, smeth->method) != 0))
                         {
                             WRN("Overriding %s::%s from symtab with %s::%s from symmap", class, method, smeth->class, smeth->method);
+                            // Clear symbol
+                            cxx_sym = NULL;
                         }
                         class = smeth->class;
                         method = smeth->method;
@@ -2390,9 +2399,8 @@ int main(int argc, const char **argv)
                         } while(0);
                     }
 
-                    // TODO: record C++ symbol
-
                     ent->chain = chain;
+                    ent->mangled = cxx_sym;
                     ent->class = class;
                     ent->method = method;
                     ent->addr = func;
@@ -2438,6 +2446,42 @@ int main(int argc, const char **argv)
                 if(do_again)
                 {
                     goto again;
+                }
+            }
+
+            if(opt.mangle)
+            {
+                for(size_t i = 0; i < metas.idx; ++i)
+                {
+                    metaclass_t *meta = &metas.val[i];
+                    for(size_t idx = 0; idx < meta->nmethods; ++idx)
+                    {
+                        vtab_entry_t *ent = &meta->methods[idx];
+                        if(!ent->mangled)
+                        {
+                            if(ent->structor)
+                            {
+                                // TODO: See above
+                                char *sym = NULL;
+                                asprintf(&sym, "__ZN%lu%sD%luEv", strlen(ent->class), ent->class, 1 - idx);
+                                if(!sym)
+                                {
+                                    ERRNO("asprintf(ent->mangled)");
+                                    return -1;
+                                }
+                                ent->mangled = sym;
+                            }
+                            else
+                            {
+                                ent->mangled = cxx_mangle(ent->class, ent->method);
+                                if(!ent->mangled)
+                                {
+                                    ERR("Failed to mangle %s::%s", ent->class, ent->method);
+                                    return -1;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
