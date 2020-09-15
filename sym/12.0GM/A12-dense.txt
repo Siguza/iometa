@@ -2786,7 +2786,7 @@ AppleCSHTDCodecMikey
 - AppleCSCodecMikey::separateTXAckInit()
 - codecReadReg(CirrusDS911Register)
 - codecWriteReg(CirrusDS911Register, unsigned char)
-- codecMaskWriteReg(CirrusDS911Register, unsigned char, unsigned cha
+- codecMaskWriteReg(CirrusDS911Register, unsigned char, unsigned char)
 - codecReadReg(CirrusHTDRegister)
 - codecWriteReg(CirrusHTDRegister, unsigned char)
 - codecMaskWriteReg(CirrusHTDRegister, unsigned char, unsigned char)
