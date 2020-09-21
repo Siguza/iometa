@@ -1,3 +1,5 @@
 .DS_Store
-/iometa
 /gen
+/iometa
+/mangle
+/pac
