@@ -126,8 +126,16 @@ do \
                 ++mem;
             }
             // Empty lines are permitted as "no name assigned"
-            if(mem >= end || *mem == '\n')
+            ch = *mem;
+            if(mem >= end || ch == '\n' || ch == '#')
             {
+                if(ch == '#')
+                {
+                    do
+                    {
+                        ++mem;
+                    } while(mem < end && *mem != '\n');
+                }
                 symmap_method_t *ent;
                 ARRNEXT(current.arr, ent);
                 ent->class = NULL;
@@ -179,12 +187,28 @@ do \
                 ERR("Symbol map, line %lu: expected '(', got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
                 goto bad;
             }
+            while(mem < end && *mem != '\n' && *mem != '#')
+            {
+                ++mem;
+            }
+            char *pos = mem;
+            while(isws(pos[-1]))
+            {
+                --pos;
+            }
+            if(*pos == '\n')
+            {
+                zero_nl = true; // Defer termination to next loop iteration
+            }
+            else
+            {
+                *pos = '\0';
+            }
             while(mem < end && *mem != '\n')
             {
                 ++mem;
             }
             methname = namestart;
-            zero_nl = true; // Defer termination to next loop iteration
             if(!classname)
             {
                 classname = current.class;
@@ -217,12 +241,31 @@ do \
             {
                 ++mem;
             }
+            char *pos = mem;
+            while(isws(*mem))
+            {
+                ++mem;
+            }
+            if(*mem == '#')
+            {
+                while(mem < end && *mem != '\n')
+                {
+                    ++mem;
+                }
+            }
             if(mem < end && (ch = *mem) != '\n')
             {
                 ERR("Symbol map, line %lu: expected newline, got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
                 goto bad;
             }
-            zero_nl = true; // Defer termination to next loop iteration
+            if(mem == pos)
+            {
+                zero_nl = true; // Defer termination to next loop iteration
+            }
+            else
+            {
+                *pos = '\0';
+            }
             if(current.class)
             {
                 PUSHENT();
