@@ -498,6 +498,7 @@ static type_t* alloctype(int kind)
 
 static void freetype(type_t *t)
 {
+    if(!t) return;
     if(t->next) freetype(t->next);
     switch(t->kind)
     {
