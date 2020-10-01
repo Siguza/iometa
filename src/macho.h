@@ -213,9 +213,10 @@ typedef struct dyld_chained_starts_in_segment   fixup_starts_t;
 typedef uint64_t                                kptr_t;
 typedef enum
 {
-    DYLD_CHAINED_PTR_NONE                       = 0,
-    DYLD_CHAINED_PTR_ARM64E                     = 1,
-    DYLD_CHAINED_PTR_64_KERNEL_CACHE            = 8,
+    DYLD_CHAINED_PTR_NONE                       = 0, // pacptr.raw
+    DYLD_CHAINED_PTR_ARM64E                     = 1, // pacptr.pac
+    DYLD_CHAINED_PTR_ARM64E_KERNEL              = 7, // pacptr.cache, virt offset from kbase
+    DYLD_CHAINED_PTR_64_KERNEL_CACHE            = 8, // pacptr.cache, file offset
 } fixup_kind_t;
 
 typedef struct
@@ -237,7 +238,7 @@ kptr_t off2addr(void *macho, size_t off);
 void* addr2ptr(void *macho, kptr_t addr);
 mach_seg_t* seg4ptr(void *macho, void *ptr);
 
-kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, uint16_t *pac, size_t *skip);
+kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *auth, uint16_t *pac, size_t *skip);
 
 bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr);
 

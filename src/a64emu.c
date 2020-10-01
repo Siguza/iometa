@@ -522,7 +522,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 {
                     if(is_in_fixup_chain(kernel, kbase, ldr_addr))
                     {
-                        val = kuntag(kbase, fixupKind, val, NULL, NULL);
+                        val = kuntag(kbase, fixupKind, val, NULL, NULL, NULL);
                     }
                 }
                 state->x[Rt] = val;
@@ -542,7 +542,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             kptr_t val = *(kptr_t*)ldr_addr;
             if(ldr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
             {
-                val = kuntag(kbase, fixupKind, val, NULL, NULL);
+                val = kuntag(kbase, fixupKind, val, NULL, NULL, NULL);
             }
             state->x[ldr->Rt] = val;
             state->valid |= 1 << ldr->Rt;
@@ -583,11 +583,11 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     {
                         if(is_in_fixup_chain(kernel, kbase, ldr_addr))
                         {
-                            v1 = kuntag(kbase, fixupKind, v1, NULL, NULL);
+                            v1 = kuntag(kbase, fixupKind, v1, NULL, NULL, NULL);
                         }
                         if(is_in_fixup_chain(kernel, kbase, ldr_addr + 1))
                         {
-                            v2 = kuntag(kbase, fixupKind, v2, NULL, NULL);
+                            v2 = kuntag(kbase, fixupKind, v2, NULL, NULL, NULL);
                         }
                     }
                     state->x[ldp->Rt]  = v1;
@@ -622,7 +622,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 kptr_t val = *(kptr_t*)ldr_addr;
                 if(ldxr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
                 {
-                    val = kuntag(kbase, fixupKind, val, NULL, NULL);
+                    val = kuntag(kbase, fixupKind, val, NULL, NULL, NULL);
                 }
                 state->x[ldxr->Rt] = val;
                 state->valid |= 1 << ldxr->Rt;

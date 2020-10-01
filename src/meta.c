@@ -100,6 +100,7 @@ static const char* radarify(const char *sym)
 
 void print_metaclass(metaclass_t *meta, int namelen, opt_t opt)
 {
+    // TODO: OSMetaClass::alloc()
     if(opt.radare)
     {
         if(opt.mangle)
@@ -331,7 +332,7 @@ void meta_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind
         name = addr2ptr(kernel, state->x[1]);
         if(!name)
         {
-            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, fixupKind, state->x[1], NULL, NULL));
+            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, fixupKind, state->x[1], NULL, NULL, NULL));
             ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
             exit(-1);
         }
@@ -418,7 +419,7 @@ void meta_alt_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_
         name = addr2ptr(kernel, state->x[1]);
         if(!name)
         {
-            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, fixupKind, state->x[1], NULL, NULL));
+            DBG("meta->name: " ADDR " (untagged: " ADDR ")", state->x[1], kuntag(kbase, fixupKind, state->x[1], NULL, NULL, NULL));
             ERR("Name of MetaClass lies outside all segments at " ADDR, bladdr);
             exit(-1);
         }

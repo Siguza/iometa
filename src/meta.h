@@ -32,7 +32,8 @@ typedef struct vtab_entry
     uint16_t structor      :  1,
              authoritative :  1,
              overrides     :  1,
-             reserved      : 13;
+             auth          :  1,
+             reserved      : 12;
 } vtab_entry_t;
 
 typedef struct metaclass

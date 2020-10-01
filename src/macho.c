@@ -98,18 +98,19 @@ mach_seg_t* seg4ptr(void *macho, void *ptr)
     exit(-1);
 }
 
-kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, uint16_t *pac, size_t *skip)
+kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *auth, uint16_t *pac, size_t *skip)
 {
     pacptr_t pp;
     pp.ptr = ptr;
-    if(fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE)
+    if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL || fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE)
     {
         if(pp.cache.cache != 0)
         {
             ERR("Cannot resolve pointer with cache level %u: " ADDR, pp.cache.cache, ptr);
             exit(-1);
         }
-        if(pac)  *pac  = pp.cache.auth && pp.cache.tag ? pp.cache.div : 0;
+        if(auth) *auth = !!(pp.cache.auth && pp.cache.tag);
+        if(pac)  *pac  = pp.cache.div;
         if(skip) *skip = pp.cache.next * sizeof(uint32_t);
         return base + pp.cache.target;
     }
@@ -123,12 +124,15 @@ kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, uint16_t *pac, si
         if(skip) *skip = pp.pac.next * sizeof(uint32_t);
         if(pp.pac.auth)
         {
-            if(pac) *pac = pp.pac.tag ? pp.pac.div : 0;
+            if(auth) *auth = !!pp.pac.tag;
+            if(pac)  *pac  = pp.pac.div;
             return base + pp.pac.off;
         }
-        if(pac) *pac = 0;
+        if(auth) *auth = false;
+        if(pac)  *pac  = 0;
         return (kptr_t)pp.raw.lo;
     }
+    if(auth) *auth = false;
     if(pac)  *pac  = 0;
     if(skip) *skip = 0;
     return pp.ptr;
@@ -171,19 +175,18 @@ bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr)
                                     {
                                         return false;
                                     }
-                                    kuntag(base, DYLD_CHAINED_PTR_ARM64E, *mem, NULL, &skip);
+                                    kuntag(base, DYLD_CHAINED_PTR_ARM64E, *mem, NULL, NULL, &skip);
                                     mem = (kptr_t*)((uintptr_t)mem + skip);
                                 } while(skip > 0);
                             }
+                            return false;
                         }
-                        return false;
                     }
                 }
             }
         }
         else if(cmd->cmd == LC_DYLD_CHAINED_FIXUPS)
         {
-            uint32_t off = (uintptr_t)ptr - (uintptr_t)macho;
             struct linkedit_data_command *data = (struct linkedit_data_command*)cmd;
             fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)macho + data->dataoff);
             fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
@@ -194,6 +197,11 @@ bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr)
                     continue;
                 }
                 fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
+                uint64_t off = (uintptr_t)ptr - (uintptr_t)macho;
+                if(starts->pointer_format == DYLD_CHAINED_PTR_ARM64E_KERNEL)
+                {
+                    off = off2addr(macho, off) - base;
+                }
                 if(off < starts->segment_offset || (off - starts->segment_offset) / starts->page_size >= starts->page_count)
                 {
                     continue;
@@ -204,7 +212,8 @@ bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr)
                 {
                     continue;
                 }
-                kptr_t *mem = (kptr_t*)((uintptr_t)macho + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx);
+                size_t where = (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx;
+                kptr_t *mem = starts->pointer_format == DYLD_CHAINED_PTR_ARM64E_KERNEL ? addr2ptr(macho, base + where) : (kptr_t*)((uintptr_t)macho + where);
                 size_t skip = 0;
                 do
                 {
@@ -216,7 +225,7 @@ bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr)
                     {
                         return false;
                     }
-                    kuntag(base, DYLD_CHAINED_PTR_64_KERNEL_CACHE, *mem, NULL, &skip);
+                    kuntag(base, starts->pointer_format, *mem, NULL, NULL, &skip);
                     mem = (kptr_t*)((uintptr_t)mem + skip);
                 } while(skip > 0);
             }
@@ -327,6 +336,7 @@ int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const c
         else     ERR("Mach-O header out of bounds.");
         return -1;
     }
+    kptr_t kbase = 0, kmin = ~0ULL, kmax = 0;
     fixup_kind_t fixupKind = DYLD_CHAINED_PTR_NONE;
     mach_nlist_t *symtab = NULL;
     char         *strtab = NULL;
@@ -347,6 +357,21 @@ int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const c
                 if(name) ERR("Embedded Mach-O segment out of bounds: %s (%s)", seg->segname, name);
                 else     ERR("Mach-O segment out of bounds: %s", seg->segname);
                 return -1;
+            }
+            if(seg->vmsize > 0)
+            {
+                if(seg->fileoff == 0)
+                {
+                    kbase = seg->vmaddr;
+                }
+                if(seg->vmaddr < kmin)
+                {
+                    kmin = seg->vmaddr;
+                }
+                if(seg->vmaddr + seg->vmsize > kmax)
+                {
+                    kmax = seg->vmaddr + seg->vmsize;
+                }
             }
             mach_sec_t *secs = (mach_sec_t*)(seg + 1);
             for(size_t h = 0; h < seg->nsects; ++h)
@@ -474,7 +499,6 @@ int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const c
                 ERR("Mach-O has multiple fixup types.");
                 return -1;
             }
-            fixupKind = DYLD_CHAINED_PTR_64_KERNEL_CACHE;
             struct linkedit_data_command *data = (struct linkedit_data_command*)cmd;
             if(data->datasize < sizeof(fixup_hdr_t))
             {
@@ -522,15 +546,34 @@ int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const c
                     ERR("Mach-O chained fixup starts has bad page size: 0x%x (%u)", starts->page_size, i);
                     return -1;
                 }
-                if(starts->pointer_format != DYLD_CHAINED_PTR_64_KERNEL_CACHE)
+                if(starts->pointer_format != DYLD_CHAINED_PTR_ARM64E_KERNEL && starts->pointer_format != DYLD_CHAINED_PTR_64_KERNEL_CACHE)
                 {
                     ERR("Unsupported chained fixup pointer format: 0x%x (%u)", starts->pointer_format, i);
                     return -1;
                 }
-                if(starts->segment_offset > machosize || starts->page_count > (machosize - starts->segment_offset) / starts->page_size)
+                if(fixupKind != DYLD_CHAINED_PTR_NONE && fixupKind != starts->pointer_format)
                 {
-                    ERR("Mach-O chained fixup starts describes a region out of bounds (%u).", i);
+                    ERR("Mach-O has multiple fixup types.");
                     return -1;
+                }
+                fixupKind = starts->pointer_format;
+                if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
+                {
+                    // REVIEW: I guess it's fine for this to overflow?
+                    kptr_t start = kbase + starts->segment_offset;
+                    if(start >= kmax || start < kmin || starts->page_count > (kmax - start) / starts->page_size)
+                    {
+                        ERR("Mach-O chained fixup starts describes a region out of bounds (%u).", i);
+                        return -1;
+                    }
+                }
+                else
+                {
+                    if(starts->segment_offset > machosize || starts->page_count > (machosize - starts->segment_offset) / starts->page_size)
+                    {
+                        ERR("Mach-O chained fixup starts describes a region out of bounds (%u).", i);
+                        return -1;
+                    }
                 }
                 for(uint16_t j = 0; j < starts->page_count; ++j)
                 {
