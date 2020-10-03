@@ -98,40 +98,51 @@ mach_seg_t* seg4ptr(void *macho, void *ptr)
     exit(-1);
 }
 
-kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *auth, uint16_t *pac, size_t *skip)
+kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *bind, bool *auth, uint16_t *pac, size_t *skip)
 {
     pacptr_t pp;
     pp.ptr = ptr;
-    if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL || fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE)
+    if(fixupKind == DYLD_CHAINED_PTR_64_KERNEL_CACHE)
     {
         if(pp.cache.cache != 0)
         {
             ERR("Cannot resolve pointer with cache level %u: " ADDR, pp.cache.cache, ptr);
             exit(-1);
         }
+        if(bind) *bind = false;
         if(auth) *auth = !!(pp.cache.auth && pp.cache.tag);
         if(pac)  *pac  = pp.cache.div;
         if(skip) *skip = pp.cache.next * sizeof(uint32_t);
         return base + pp.cache.target;
     }
-    if(fixupKind == DYLD_CHAINED_PTR_ARM64E)
+    if(fixupKind == DYLD_CHAINED_PTR_ARM64E || fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
     {
         if(pp.pac.bind)
         {
-            ERR("Cannot bind pointer " ADDR, ptr);
-            exit(-1);
+            if(!bind)
+            {
+                ERR("Cannot bind pointer " ADDR, ptr);
+                exit(-1);
+            }
+            *bind = true;
         }
+        else if(bind)
+        {
+            *bind = false;
+        }
+        if(auth) *auth = false;
+        if(pac)  *pac  = 0;
         if(skip) *skip = pp.pac.next * sizeof(uint32_t);
         if(pp.pac.auth)
         {
             if(auth) *auth = !!pp.pac.tag;
             if(pac)  *pac  = pp.pac.div;
-            return base + pp.pac.off;
         }
-        if(auth) *auth = false;
-        if(pac)  *pac  = 0;
+        if(pp.pac.bind) return pp.pac.off & 0xffff;
+        if(pp.pac.auth) return base + pp.pac.off;
         return (kptr_t)pp.raw.lo;
     }
+    if(bind) *bind = false;
     if(auth) *auth = false;
     if(pac)  *pac  = 0;
     if(skip) *skip = 0;
@@ -140,6 +151,7 @@ kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *auth, uint1
 
 bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr)
 {
+    bool bind;
     FOREACH_CMD(((mach_hdr_t*)macho), cmd)
     {
         if(cmd->cmd == MACH_SEGMENT)
@@ -175,7 +187,7 @@ bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr)
                                     {
                                         return false;
                                     }
-                                    kuntag(base, DYLD_CHAINED_PTR_ARM64E, *mem, NULL, NULL, &skip);
+                                    kuntag(base, DYLD_CHAINED_PTR_ARM64E, *mem, &bind, NULL, NULL, &skip);
                                     mem = (kptr_t*)((uintptr_t)mem + skip);
                                 } while(skip > 0);
                             }
@@ -225,7 +237,7 @@ bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr)
                     {
                         return false;
                     }
-                    kuntag(base, starts->pointer_format, *mem, NULL, NULL, &skip);
+                    kuntag(base, starts->pointer_format, *mem, &bind, NULL, NULL, &skip);
                     mem = (kptr_t*)((uintptr_t)mem + skip);
                 } while(skip > 0);
             }
@@ -517,6 +529,45 @@ int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const c
                 ERR("Unsupported chained fixup version: %u", fixup->fixups_version);
                 return -1;
             }
+            if(fixup->imports_count)
+            {
+                if(fixup->imports_count > 0xffff)
+                {
+                    ERR("More imports that the pointer format can handle: 0x%x", fixup->imports_count);
+                    return -1;
+                }
+                if(fixup->imports_format != 0x1 || fixup->symbols_format != 0x0)
+                {
+                    ERR("Unsupported chained imports or symbols format: 0x%x/0x%x", fixup->imports_format, fixup->symbols_format);
+                    return -1;
+                }
+                fixup_import_t *import = (fixup_import_t*)((uintptr_t)fixup + fixup->imports_offset);
+                if(fixup->imports_offset > max - (uintptr_t)fixup - sizeof(*import) || fixup->imports_count > (max - (uintptr_t)import) / sizeof(*import))
+                {
+                    ERR("Mach-O chained imports out of bounds.");
+                    return -1;
+                }
+                if(fixup->symbols_offset > max - (uintptr_t)fixup - 1)
+                {
+                    ERR("Mach-O import symbols out of bounds.");
+                    return -1;
+                }
+                const char *syms = (const char*)((uintptr_t)fixup + fixup->symbols_offset);
+                for(uint32_t i = 0; i < fixup->imports_count; ++i)
+                {
+                    fixup_import_t *imp = import + i;
+                    if(imp->lib_ordinal != 0xfe)
+                    {
+                        ERR("Unsupported chained import ordinal: 0x%x", imp->lib_ordinal);
+                        return -1;
+                    }
+                    if(imp->name_offset >= max - (uintptr_t)syms)
+                    {
+                        ERR("Mach-O chained import out of bounds: 0x%x", imp->name_offset);
+                        return -1;
+                    }
+                }
+            }
             fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
             if((uintptr_t)segs > max - sizeof(*segs) || segs->seg_count > (max - (uintptr_t)segs->seg_info_offset) / sizeof(segs->seg_info_offset[0]))
             {
@@ -705,6 +756,103 @@ bool macho_extract_reloc(void *macho, kptr_t base, mach_dstab_t *dstab, mach_nli
             exreloc[nexreloc].addr = addr;
             exreloc[nexreloc].name = name;
             ++nexreloc;
+        }
+        *exrelocp = exreloc;
+        *nexrelocp = nexreloc;
+    }
+    return true;
+}
+
+bool macho_extract_chained_imports(void *macho, kptr_t base, struct linkedit_data_command *cmd, sym_t **exrelocp, size_t *nexrelocp)
+{
+    fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)macho + cmd->dataoff);
+    if(fixup->imports_count)
+    {
+        fixup_import_t *import = (fixup_import_t*)((uintptr_t)fixup + fixup->imports_offset);
+        const char *syms = (const char*)((uintptr_t)fixup + fixup->symbols_offset);
+        fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
+        size_t nimport = 0;
+        for(uint32_t i = 0; i < segs->seg_count; ++i)
+        {
+            if(segs->seg_info_offset[i] == 0)
+            {
+                continue;
+            }
+            fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
+            if(starts->pointer_format != DYLD_CHAINED_PTR_ARM64E_KERNEL)
+            {
+                ERR("Cannot resolve chained imports for format: 0x%x", starts->pointer_format);
+                return false;
+            }
+            for(uint16_t j = 0; j < starts->page_count; ++j)
+            {
+                uint16_t idx = starts->page_start[j];
+                if(idx == 0xffff)
+                {
+                    continue;
+                }
+                kptr_t *mem = addr2ptr(macho, base + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx);
+                size_t skip = 0;
+                do
+                {
+                    pacptr_t pp;
+                    pp.ptr = *mem;
+                    if(pp.pac.bind)
+                    {
+                        if(pp.pac.off > fixup->imports_count) // validate_macho() checks that <= 0xffff
+                        {
+                            ERR("Chained import number out of bounds: 0x%x", pp.pac.off);
+                            return false;
+                        }
+                        ++nimport;
+                    }
+                    skip = pp.pac.next * sizeof(uint32_t);
+                    mem = (kptr_t*)((uintptr_t)mem + skip);
+                } while(skip > 0);
+            }
+        }
+        sym_t *exreloc = *exrelocp;
+        size_t nexreloc = *nexrelocp;
+        exreloc = realloc(exreloc, (nexreloc + nimport) * sizeof(sym_t));
+        if(!exreloc)
+        {
+            ERRNO("malloc(exreloc)");
+            return false;
+        }
+        for(uint32_t i = 0; i < segs->seg_count; ++i)
+        {
+            if(segs->seg_info_offset[i] == 0)
+            {
+                continue;
+            }
+            fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
+            for(uint16_t j = 0; j < starts->page_count; ++j)
+            {
+                uint16_t idx = starts->page_start[j];
+                if(idx == 0xffff)
+                {
+                    continue;
+                }
+                kptr_t addr = base + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx;
+                kptr_t *mem = addr2ptr(macho, addr);
+                size_t skip = 0;
+                do
+                {
+                    pacptr_t pp;
+                    pp.ptr = *mem;
+                    if(pp.pac.bind)
+                    {
+                        const char *name = &syms[import[pp.pac.off].name_offset];
+                        DBG("Chained import " ADDR ": %s", addr, name);
+                        exreloc[nexreloc].addr = addr;
+                        exreloc[nexreloc].name = name;
+                        ++nexreloc;
+                    }
+                    skip = pp.pac.next * sizeof(uint32_t);
+                    mem  = (kptr_t*)((uintptr_t)mem + skip);
+                    addr += skip;
+                } while(skip > 0);
+            }
         }
         *exrelocp = exreloc;
         *nexrelocp = nexreloc;

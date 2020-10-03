@@ -522,7 +522,9 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 {
                     if(is_in_fixup_chain(kernel, kbase, ldr_addr))
                     {
-                        val = kuntag(kbase, fixupKind, val, NULL, NULL, NULL);
+                        bool bind = false;
+                        val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
+                        if(bind) val = 0;
                     }
                 }
                 state->x[Rt] = val;
@@ -542,7 +544,9 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             kptr_t val = *(kptr_t*)ldr_addr;
             if(ldr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
             {
-                val = kuntag(kbase, fixupKind, val, NULL, NULL, NULL);
+                bool bind = false;
+                val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
+                if(bind) val = 0;
             }
             state->x[ldr->Rt] = val;
             state->valid |= 1 << ldr->Rt;
@@ -583,11 +587,15 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     {
                         if(is_in_fixup_chain(kernel, kbase, ldr_addr))
                         {
-                            v1 = kuntag(kbase, fixupKind, v1, NULL, NULL, NULL);
+                            bool bind = false;
+                            v1 = kuntag(kbase, fixupKind, v1, &bind, NULL, NULL, NULL);
+                            if(bind) v1 = 0;
                         }
                         if(is_in_fixup_chain(kernel, kbase, ldr_addr + 1))
                         {
-                            v2 = kuntag(kbase, fixupKind, v2, NULL, NULL, NULL);
+                            bool bind = false;
+                            v2 = kuntag(kbase, fixupKind, v2, &bind, NULL, NULL, NULL);
+                            if(bind) v2 = 0;
                         }
                     }
                     state->x[ldp->Rt]  = v1;
@@ -622,7 +630,9 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 kptr_t val = *(kptr_t*)ldr_addr;
                 if(ldxr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
                 {
-                    val = kuntag(kbase, fixupKind, val, NULL, NULL, NULL);
+                    bool bind = false;
+                    val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
+                    if(bind) val = 0;
                 }
                 state->x[ldxr->Rt] = val;
                 state->valid |= 1 << ldxr->Rt;

@@ -191,6 +191,12 @@ struct dyld_chained_starts_in_segment
     uint16_t page_count;
     uint16_t page_start[];
 };
+struct dyld_chained_import
+{
+    uint32_t lib_ordinal :  8,
+             weak_import :  1,
+             name_offset : 23;
+};
 
 // My aliases
 #define ADDR                                    "0x%016llx"
@@ -210,6 +216,7 @@ typedef struct relocation_info                  mach_reloc_t;
 typedef struct dyld_chained_fixups_header       fixup_hdr_t;
 typedef struct dyld_chained_starts_in_image     fixup_seg_t;
 typedef struct dyld_chained_starts_in_segment   fixup_starts_t;
+typedef struct dyld_chained_import              fixup_import_t;
 typedef uint64_t                                kptr_t;
 typedef enum
 {
@@ -238,7 +245,7 @@ kptr_t off2addr(void *macho, size_t off);
 void* addr2ptr(void *macho, kptr_t addr);
 mach_seg_t* seg4ptr(void *macho, void *ptr);
 
-kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *auth, uint16_t *pac, size_t *skip);
+kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *bind, bool *auth, uint16_t *pac, size_t *skip);
 
 bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr);
 
@@ -253,5 +260,6 @@ kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms);
 
 bool macho_extract_symbols(void *macho, mach_stab_t *stab, sym_t **symp, size_t *nsymp);
 bool macho_extract_reloc(void *macho, kptr_t base, mach_dstab_t *dstab, mach_nlist_t *symtab, char *strtab, sym_t **exrelocp, size_t *nexrelocp);
+bool macho_extract_chained_imports(void *macho, kptr_t base, struct linkedit_data_command *cmd, sym_t **exrelocp, size_t *nexrelocp);
 
 #endif

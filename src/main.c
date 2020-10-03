@@ -169,8 +169,9 @@ static bool is_part_of_vtab(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, 
     }
     if(fixupKind != DYLD_CHAINED_PTR_NONE)
     {
+        bool bind;
         size_t skip = 0;
-        kuntag(kbase, fixupKind, vtab[idx - 1], NULL, NULL, &skip);
+        kuntag(kbase, fixupKind, vtab[idx - 1], &bind, NULL, NULL, &skip);
         if(skip == sizeof(kptr_t))
         {
             return true;
@@ -250,7 +251,7 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
                                         size_t skip = 0;
                                         do
                                         {
-                                            if(kuntag(kbase, fixupKind, *mem, NULL, NULL, &skip) == func)
+                                            if(kuntag(kbase, fixupKind, *mem, NULL, NULL, NULL, &skip) == func)
                                             {
                                                 kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                                                 DBG("ref: " ADDR, ref);
@@ -296,7 +297,7 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
                             size_t skip = 0;
                             do
                             {
-                                if(kuntag(kbase, fixupKind, *mem, NULL, NULL, &skip) == func)
+                                if(kuntag(kbase, fixupKind, *mem, NULL, NULL, NULL, &skip) == func)
                                 {
                                     kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                                     DBG("ref: " ADDR, ref);
@@ -314,7 +315,7 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
         {
             STEP_MEM(kptr_t, mem, kernel, kernelsize, 1)
             {
-                if(kuntag(kbase, fixupKind, *mem, NULL, NULL, NULL) == func)
+                if(kuntag(kbase, fixupKind, *mem, NULL, NULL, NULL, NULL) == func)
                 {
                     kptr_t ref = off2addr(kernel, (uintptr_t)mem - (uintptr_t)kernel);
                     DBG("ref: " ADDR, ref);
@@ -797,6 +798,14 @@ int main(int argc, const char **argv)
                 fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
                 fixupKind = starts->pointer_format;
                 break;
+            }
+            // Chained imports for kexts
+            if(hdr->filetype == MH_KEXT_BUNDLE)
+            {
+                if(!macho_extract_chained_imports(kernel, kbase, data, &exrelocA, &nexreloc))
+                {
+                    return -1;
+                }
             }
         }
         else if(cmd->cmd == LC_FILESET_ENTRY)
@@ -1462,10 +1471,15 @@ int main(int argc, const char **argv)
                 ERR("OSObjectVtab lies outside all segments.");
                 return -1;
             }
-            for(size_t i = 0; hdr->filetype == MH_KEXT_BUNDLE || ovtab[i] != 0; ++i) // TODO: fix dirty hack
+            for(size_t i = 0; is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, ovtab, OSObjectVtab, i); ++i)
             {
-                if(kuntag(kbase, fixupKind, ovtab[i], NULL, NULL, NULL) == OSObjectGetMetaClass)
+                bool bind = false;
+                if(kuntag(kbase, fixupKind, ovtab[i], &bind, NULL, NULL, NULL) == OSObjectGetMetaClass)
                 {
+                    if(bind)
+                    {
+                        continue;
+                    }
                     VtabGetMetaClassIdx = i;
                     DBG("VtabGetMetaClassIdx: 0x%lx", VtabGetMetaClassIdx);
                     break;
@@ -1646,7 +1660,7 @@ int main(int argc, const char **argv)
                 }
                 for(size_t i = 0; ovtab[i] != 0; ++i)
                 {
-                    if(kuntag(kbase, fixupKind, ovtab[i], NULL, NULL, NULL) == pure_virtual)
+                    if(kuntag(kbase, fixupKind, ovtab[i], NULL, NULL, NULL, NULL) == pure_virtual)
                     {
                         VtabAllocIdx = i;
                         DBG("VtabAllocIdx: 0x%lx", VtabAllocIdx);
@@ -1746,7 +1760,7 @@ int main(int argc, const char **argv)
                                                                             size_t skip = 0;
                                                                             do
                                                                             {
-                                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, &skip) == func)
+                                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, NULL, &skip) == func)
                                                                                 {
                                                                                     kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
                                                                                     if(meta->vtab == 0)
@@ -1805,7 +1819,7 @@ int main(int argc, const char **argv)
                                                                 size_t skip = 0;
                                                                 do
                                                                 {
-                                                                    if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, &skip) == func)
+                                                                    if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, NULL, &skip) == func)
                                                                     {
                                                                         kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
                                                                         if(meta->vtab == 0)
@@ -1847,7 +1861,7 @@ int main(int argc, const char **argv)
                                                         {
                                                             STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassIdx + 2, seg2->filesize - (VtabGetMetaClassIdx + 2) * sizeof(kptr_t), 1)
                                                             {
-                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
+                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, NULL, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
                                                                 {
                                                                     kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
                                                                     if(meta->vtab == 0)
@@ -1895,7 +1909,7 @@ int main(int argc, const char **argv)
                     ERR("Metavtab of %s lies outside all segments.", meta->name);
                     return -1;
                 }
-                kptr_t fnaddr = kuntag(kbase, fixupKind, ovtab[VtabAllocIdx], NULL, NULL, NULL);
+                kptr_t fnaddr = kuntag(kbase, fixupKind, ovtab[VtabAllocIdx], NULL, NULL, NULL, NULL);
                 if(fnaddr != pure_virtual)
                 {
                     DBG("Got %s::MetaClass::alloc at " ADDR, meta->name, fnaddr);
@@ -2163,10 +2177,22 @@ int main(int argc, const char **argv)
                     if(cxx_sym)
                     {
                         is_in_exreloc = true;
+                        if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
+                        {
+                            bool bind = false;
+                            bool a = false;
+                            uint16_t p = false;
+                            kuntag(kbase, fixupKind, mvtab[idx], &bind, &a, &p, NULL);
+                            if(bind)
+                            {
+                                auth = a;
+                                pac  = p;
+                            }
+                        }
                     }
                     else
                     {
-                        func = kuntag(kbase, fixupKind, mvtab[idx], &auth, &pac, NULL);
+                        func = kuntag(kbase, fixupKind, mvtab[idx], NULL, &auth, &pac, NULL);
                         cxx_sym = find_sym_by_addr(func, asyms, nsyms);
                         overrides = !pent || func != pent->addr;
                     }
@@ -2314,7 +2340,9 @@ int main(int argc, const char **argv)
 
                     // If we're on arm64e and have a symbol that we believe should be correct, we can check if it matches the PAC diversifier.
                     // In order to avoid duplicate work, we wanna skip this if we already did for the parent, but determining if we did that is a bit of a pain.
-                    if(auth && (hdr->cpusubtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E && !is_in_exreloc && authoritative && (!pent || !pent->authoritative))
+                    // We also need to outright skip kexts, because there will always be classes whose superclass isn't in the kext,
+                    // so we have absolutely no way of determining where any given method of such classes was declared. :|
+                    if(auth && (hdr->cpusubtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E && hdr->filetype != MH_KEXT_BUNDLE && !is_in_exreloc && authoritative && (!pent || !pent->authoritative))
                     {
                         // First seek down to the first class that has this method
                         metaclass_t *checkClass = meta;
@@ -2675,7 +2703,7 @@ int main(int argc, const char **argv)
                 {
                     if(kmod_start->size == kmod_info->size + sizeof(kptr_t))
                     {
-                        mach_hdr_t *exhdr = addr2ptr(kernel, kuntag(kbase, fixupKind, start_ptr[kmod_num], NULL, NULL, NULL));
+                        mach_hdr_t *exhdr = addr2ptr(kernel, kuntag(kbase, fixupKind, start_ptr[kmod_num], NULL, NULL, NULL, NULL));
                         if(exhdr && exhdr->ncmds == 2)
                         {
                             mach_seg_t *exseg = (mach_seg_t*)(exhdr + 1);
@@ -2713,8 +2741,8 @@ int main(int argc, const char **argv)
                 }
                 for(size_t i = 0; i < kmod_num; ++i)
                 {
-                    kptr_t iaddr = kuntag(kbase, fixupKind, info_ptr[i],  NULL, NULL, NULL);
-                    kptr_t haddr = kuntag(kbase, fixupKind, start_ptr[i], NULL, NULL, NULL);
+                    kptr_t iaddr = kuntag(kbase, fixupKind, info_ptr[i],  NULL, NULL, NULL, NULL);
+                    kptr_t haddr = kuntag(kbase, fixupKind, start_ptr[i], NULL, NULL, NULL, NULL);
                     kmod_info_t *kmod = addr2ptr(kernel, iaddr);
                     mach_hdr_t  *khdr = addr2ptr(kernel, haddr);
                     if(!kmod)
@@ -2739,7 +2767,7 @@ int main(int argc, const char **argv)
                             mach_seg_t *kseg = (mach_seg_t*)kcmd;
                             if(strcmp("__TEXT_EXEC", kseg->segname) == 0)
                             {
-                                kptr_t vmaddr = kuntag(kbase, fixupKind, kseg->vmaddr, NULL, NULL, NULL);
+                                kptr_t vmaddr = kuntag(kbase, fixupKind, kseg->vmaddr, NULL, NULL, NULL, NULL);
                                 DBG("%s __TEXT_EXEC at " ADDR, kmod->name, vmaddr);
                                 for(size_t j = 0; j < metas.idx; ++j)
                                 {
