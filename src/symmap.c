@@ -31,7 +31,7 @@ int compare_symclass_name(const void *a, const void *b)
     return strcmp(key, cls->name);
 }
 
-int parse_symmap(char *mem, size_t len, size_t *num, symmap_class_t **entries)
+int parse_symmap(char *mem, size_t len, symmap_t *symmap)
 {
     int retval = -1;
     ARRDEF(symmap_class_t, map, NUM_METACLASSES_EXPECT);
@@ -329,8 +329,8 @@ do \
         }
     }
 
-    *entries = ptr;
-    *num = map.idx;
+    symmap->map = ptr;
+    symmap->num = map.idx;
 
     retval = 0;
     goto out;
@@ -348,7 +348,7 @@ out:;
 #undef PUSHENT
 }
 
-void print_syment(const char *owner, const char *class, const char *method)
+static void print_syment(const char *owner, const char *class, const char *method)
 {
     if(!method)
     {
@@ -364,7 +364,7 @@ void print_syment(const char *owner, const char *class, const char *method)
     printf("%s\n", method);
 }
 
-void print_symmap(metaclass_t *meta)
+static void print_symclass(metaclass_t *meta)
 {
     printf("%s\n", meta->name);
     metaclass_t *parent = meta->parentP;
@@ -377,4 +377,108 @@ void print_symmap(metaclass_t *meta)
         vtab_entry_t *ent = &meta->methods[i];
         print_syment(meta->name, ent->class, ent->authoritative ? ent->method : NULL);
     }
+}
+
+bool print_symmap(void *classes, symmap_t *symmap, opt_t opt)
+{
+    ARRCAST(metaclass_t, metas, classes);
+    metaclass_t **list = malloc(metas->idx * sizeof(metaclass_t*));
+    if(!list)
+    {
+        ERRNO("malloc(list)");
+        return false;
+    }
+    size_t lsize = 0;
+    for(size_t i = 0; i < metas->idx; ++i)
+    {
+        list[lsize++] = &metas->val[i];
+    }
+    qsort(list, lsize, sizeof(*list), &compare_meta_names);
+
+    // Mark duplicates and warn if methods don't match
+    for(size_t i = 1; i < lsize; ++i)
+    {
+        metaclass_t *prev = list[i-1],
+                    *cur  = list[i];
+        if(strcmp(prev->name, cur->name) == 0)
+        {
+            DBG("Duplicate class: %s", cur->name);
+            cur->duplicate = 1;
+            if(prev->nmethods != cur->nmethods)
+            {
+                WRN("Duplicate classes %s have different number of methods (%lu vs %lu)", cur->name, prev->nmethods, cur->nmethods);
+            }
+            else
+            {
+                for(size_t j = 0; j < cur->nmethods; ++j)
+                {
+                    vtab_entry_t *one = &prev->methods[j],
+                                 *two = &cur ->methods[j];
+                    if(strcmp(one->class, two->class) != 0 || strcmp(one->method, two->method) != 0)
+                    {
+                        WRN("Mismatching method names of duplicate class %s: %s::%s vs %s::%s", cur->name, one->class, one->method, two->class, two->method);
+                    }
+                }
+            }
+        }
+    }
+
+    if(opt.maxmap)
+    {
+        // Merge two sorted lists, ugh
+        for(size_t i = 0, j = 0; i < symmap->num || j < lsize; )
+        {
+            if(j >= lsize || (i < symmap->num && strcmp(symmap->map[i].name, list[j]->name) <= 0))
+            {
+                symmap_class_t *class = &symmap->map[i++];
+                metaclass_t *meta = class->metaclass;
+                if(class->duplicate)
+                {
+                    if(meta)
+                    {
+                        WRN("Implementation fault: duplicate symclass has metaclass!");
+                    }
+                    continue;
+                }
+                if(meta)
+                {
+                    //if(!meta->duplicate)
+                    {
+                        print_symclass(meta);
+                    }
+                }
+                else
+                {
+                    printf("%s\n", class->name);
+                    for(size_t k = 0; k < class->num; ++k)
+                    {
+                        symmap_method_t *ent = &class->methods[k];
+                        print_syment(class->name, ent->class, ent->method);
+                    }
+                }
+            }
+            else
+            {
+                metaclass_t *meta = list[j++];
+                if(!meta->duplicate && !meta->symclass) // Only print what we haven't printed above already
+                {
+                    print_symclass(meta);
+                }
+            }
+        }
+    }
+    else
+    {
+        // Only print existing classes
+        for(size_t i = 0; i < lsize; ++i)
+        {
+            metaclass_t *meta = list[i];
+            if(!meta->duplicate)
+            {
+                print_symclass(meta);
+            }
+        }
+    }
+    free(list);
+    return true;
 }

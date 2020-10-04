@@ -69,8 +69,6 @@ int compare_meta_candidates(const void *a, const void *b);
 int compare_meta_names(const void *a, const void *b);
 int compare_meta_bundles(const void *a, const void *b);
 
-void print_metaclass(metaclass_t *meta, int namelen, opt_t opt);
-
 void add_metaclass(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, void *arg, a64_state_t *state, uint32_t *callsite, bool want_vtabs, sym_t *bsyms, size_t nsyms);
 
 void meta_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind_t fixupKind, bool want_vtabs, void *metas, void *names, sym_t *bsyms, size_t nsyms, a64_state_t *state, uint32_t *fnstart, uint32_t *bl, kptr_t bladdr, void *arg);

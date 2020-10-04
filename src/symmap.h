@@ -33,11 +33,16 @@ typedef struct symmap_class
              reserved  : 31;
 } symmap_class_t;
 
+typedef struct
+{
+    size_t num;
+    symmap_class_t *map;
+} symmap_t;
+
 int compare_symclass(const void *a, const void *b);
 int compare_symclass_name(const void *a, const void *b);
 
-int parse_symmap(char *mem, size_t len, size_t *num, symmap_class_t **entries);
-void print_syment(const char *owner, const char *class, const char *method);
-void print_symmap(metaclass_t *meta);
+int parse_symmap(char *mem, size_t len, symmap_t *symmap);
+bool print_symmap(void *classes, symmap_t *symmap, opt_t opt);
 
 #endif

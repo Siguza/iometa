@@ -64,6 +64,7 @@ extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, C
 #include "cxx.h"
 #include "macho.h"
 #include "meta.h"
+#include "print.h"
 #include "symmap.h"
 #include "util.h"
 
@@ -460,7 +461,6 @@ int main(int argc, const char **argv)
         .overrides = 0,
         .ofilt     = 0,
         .parent    = 0,
-        .radare    = 0,
         .size      = 0,
         .symmap    = 0,
         .vtab      = 0,
@@ -470,6 +470,7 @@ int main(int argc, const char **argv)
     const char *filt_class    = NULL,
                *filt_bundle   = NULL,
                *filt_override = NULL;
+    print_t *print = NULL;
 
     int aoff = 1;
     for(; aoff < argc; ++aoff)
@@ -581,9 +582,14 @@ int main(int argc, const char **argv)
                 }
                 case 'R':
                 {
+                    if(print && print != &radare2_print)
+                    {
+                        ERR("TODO");
+                        return -1;
+                    }
+                    print = &radare2_print;
                     opt.meta      = 1;
                     opt.overrides = 1;
-                    opt.radare    = 1;
                     opt.vtab      = 1;
                     break;
                 }
@@ -653,22 +659,26 @@ int main(int argc, const char **argv)
         ERR("Cannot use filters, sorting or mangling with -M.");
         return -1;
     }
-    if(opt.symmap && opt.radare)
+    if(opt.symmap && print)
     {
-        ERR("Only one of -M and -R may be given.");
+        ERR("Only one of -M or -R may be given.");
         return -1;
     }
     if(opt.extend && opt.parent)
     {
-        ERR("Only one of -e and -p may be given.");
+        ERR("Only one of -e or -p may be given.");
         return -1;
     }
     if(opt.bsort && opt.csort)
     {
-        ERR("Only one of -G and -S may be given.");
+        ERR("Only one of -G or -S may be given.");
         return -1;
     }
 
+    if(!opt.symmap && !print)
+    {
+        print = &iometa_print;
+    }
     if(opt.cfilt)
     {
         filt_class = argv[aoff++];
@@ -691,18 +701,14 @@ int main(int argc, const char **argv)
     r = validate_macho(&kernel, &kernelsize, &hdr, NULL);
     if(r != 0) return r;
 
-    struct
-    {
-        size_t num;
-        symmap_class_t *map;
-    } symmap = { 0, NULL };
+    symmap_t symmap = { 0, NULL };
     if(have_symmap)
     {
         void *symmapMem = NULL;
         size_t symmmapLen = 0;
         r = map_file(argv[aoff++], PROT_READ | PROT_WRITE, &symmapMem, &symmmapLen);
         if(r != 0) return r;
-        r = parse_symmap(symmapMem, symmmapLen, &symmap.num, &symmap.map);
+        r = parse_symmap(symmapMem, symmmapLen, &symmap);
         if(r != 0) return r;
     }
 
@@ -3003,294 +3009,11 @@ int main(int argc, const char **argv)
         }
     }
 
-    metaclass_t **target = NULL;
-    if(filt_class)
+    // Symmap will always need special handling due to maxmap
+    bool ok = opt.symmap ? print_symmap(&metas, &symmap, opt) : print_all(&metas, opt, filt_class, filt_override, filter, pure_virtual, print);
+    if(!ok)
     {
-        // Exact match
-        {
-            size_t num = 0;
-            for(size_t i = 0; i < metas.idx; ++i)
-            {
-                if(strcmp(metas.val[i].name, filt_class) == 0)
-                {
-                    ++num;
-                }
-            }
-            if(num)
-            {
-                target = malloc((num + 1) * sizeof(*target));
-                if(!target)
-                {
-                    ERRNO("malloc(target)");
-                    return -1;
-                }
-                target[num] = NULL;
-                num = 0;
-                for(size_t i = 0; i < metas.idx; ++i)
-                {
-                    if(strcmp(metas.val[i].name, filt_class) == 0)
-                    {
-                        target[num++] = &metas.val[i];
-                    }
-                }
-            }
-        }
-        // Partial match
-        if(!target)
-        {
-            size_t num = 0;
-            for(size_t i = 0; i < metas.idx; ++i)
-            {
-                if(strstr(metas.val[i].name, filt_class))
-                {
-                    ++num;
-                }
-            }
-            if(num)
-            {
-                target = malloc((num + 1) * sizeof(*target));
-                if(!target)
-                {
-                    ERRNO("malloc(target)");
-                    return -1;
-                }
-                target[num] = NULL;
-                num = 0;
-                for(size_t i = 0; i < metas.idx; ++i)
-                {
-                    if(strstr(metas.val[i].name, filt_class))
-                    {
-                        target[num++] = &metas.val[i];
-                    }
-                }
-            }
-        }
-        if(!target)
-        {
-            ERR("No class matching %s.", filt_class);
-            return -1;
-        }
-    }
-    if(opt.symmap)
-    {
-        metaclass_t **list = malloc(metas.idx * sizeof(metaclass_t*));
-        if(!list)
-        {
-            ERRNO("malloc(list)");
-            return -1;
-        }
-        size_t lsize = 0;
-        for(size_t i = 0; i < metas.idx; ++i)
-        {
-            list[lsize++] = &metas.val[i];
-        }
-        qsort(list, lsize, sizeof(*list), &compare_meta_names);
-
-        // Mark duplicates and warn if methods don't match
-        for(size_t i = 1; i < lsize; ++i)
-        {
-            metaclass_t *prev = list[i-1],
-                        *cur  = list[i];
-            if(strcmp(prev->name, cur->name) == 0)
-            {
-                DBG("Duplicate class: %s", cur->name);
-                cur->duplicate = 1;
-                if(prev->nmethods != cur->nmethods)
-                {
-                    WRN("Duplicate classes %s have different number of methods (%lu vs %lu)", cur->name, prev->nmethods, cur->nmethods);
-                }
-                else
-                {
-                    for(size_t j = 0; j < cur->nmethods; ++j)
-                    {
-                        vtab_entry_t *one = &prev->methods[j],
-                                     *two = &cur ->methods[j];
-                        if(strcmp(one->class, two->class) != 0 || strcmp(one->method, two->method) != 0)
-                        {
-                            WRN("Mismatching method names of duplicate class %s: %s::%s vs %s::%s", cur->name, one->class, one->method, two->class, two->method);
-                        }
-                    }
-                }
-            }
-        }
-
-        if(opt.maxmap)
-        {
-            // Merge two sorted lists, ugh
-            for(size_t i = 0, j = 0; i < symmap.num || j < lsize; )
-            {
-                if(j >= lsize || (i < symmap.num && strcmp(symmap.map[i].name, list[j]->name) <= 0))
-                {
-                    symmap_class_t *class = &symmap.map[i++];
-                    metaclass_t *meta = class->metaclass;
-                    if(class->duplicate)
-                    {
-                        if(meta)
-                        {
-                            WRN("Implementation fault: duplicate symclass has metaclass!");
-                        }
-                        continue;
-                    }
-                    if(meta)
-                    {
-                        //if(!meta->duplicate)
-                        {
-                            print_symmap(meta);
-                        }
-                    }
-                    else
-                    {
-                        printf("%s\n", class->name);
-                        for(size_t k = 0; k < class->num; ++k)
-                        {
-                            symmap_method_t *ent = &class->methods[k];
-                            print_syment(class->name, ent->class, ent->method);
-                        }
-                    }
-                }
-                else
-                {
-                    metaclass_t *meta = list[j++];
-                    if(!meta->duplicate && !meta->symclass) // Only print what we haven't printed above already
-                    {
-                        print_symmap(meta);
-                    }
-                }
-            }
-        }
-        else
-        {
-            // Only print existing classes
-            for(size_t i = 0; i < lsize; ++i)
-            {
-                metaclass_t *meta = list[i];
-                if(!meta->duplicate)
-                {
-                    print_symmap(meta);
-                }
-            }
-        }
-    }
-    else
-    {
-        metaclass_t **list = malloc(metas.idx * sizeof(metaclass_t*));
-        if(!list)
-        {
-            ERRNO("malloc(list)");
-            return -1;
-        }
-        size_t lsize = 0;
-        if(opt.parent)
-        {
-            for(metaclass_t **ptr = target; *ptr; ++ptr)
-            {
-                for(metaclass_t *meta = *ptr; meta; )
-                {
-                    if(meta->visited)
-                    {
-                        break;
-                    }
-                    meta->visited = 1;
-                    list[lsize++] = meta;
-                    meta = meta->parentP;
-                }
-            }
-        }
-        else if(target)
-        {
-            for(metaclass_t **ptr = target; *ptr; ++ptr)
-            {
-                (*ptr)->visited = 1;
-                list[lsize++] = *ptr;
-            }
-            if(opt.extend)
-            {
-                for(size_t j = 0; j < lsize; ++j)
-                {
-                    kptr_t addr = list[j]->addr;
-                    for(size_t i = 0; i < metas.idx; ++i)
-                    {
-                        metaclass_t *meta = &metas.val[i];
-                        if(!meta->visited && meta->parent == addr)
-                        {
-                            list[lsize++] = meta;
-                            meta->visited = 1;
-                        }
-                    }
-                }
-            }
-        }
-        else
-        {
-            for(size_t i = 0; i < metas.idx; ++i)
-            {
-                list[lsize++] = &metas.val[i];
-            }
-        }
-        if(filter)
-        {
-            size_t nsize = 0;
-            for(size_t i = 0; i < lsize; ++i)
-            {
-                const char *bundle = list[i]->bundle;
-                for(const char **ptr = filter; *ptr; ++ptr)
-                {
-                    if(strcmp(bundle, *ptr) == 0)
-                    {
-                        list[nsize++] = list[i];
-                    }
-                }
-            }
-            lsize = nsize;
-        }
-        if(filt_override)
-        {
-            size_t slen = strlen(filt_override),
-                   nsize = 0;
-            for(size_t i = 0; i < lsize; ++i)
-            {
-                metaclass_t *m = list[i];
-                for(size_t i = 0; i < m->nmethods; ++i)
-                {
-                    vtab_entry_t *ent = &m->methods[i];
-                    if(ent->overrides && strncmp(ent->method, filt_override, slen) == 0 && ent->method[slen] == '(') // TODO: does this need to be fixed?
-                    {
-                        list[nsize++] = m;
-                        break;
-                    }
-                }
-            }
-            lsize = nsize;
-        }
-        if(opt.bsort || opt.csort)
-        {
-            qsort(list, lsize, sizeof(*list), opt.bsort ? &compare_meta_bundles : &compare_meta_names);
-        }
-        size_t namelen = 0;
-        if(opt.bundle && !opt.overrides) // Spaced out looks weird
-        {
-            for(size_t i = 0; i < lsize; ++i)
-            {
-                size_t nl = strlen(list[i]->name);
-                if(nl > namelen)
-                {
-                    namelen = nl;
-                }
-            }
-        }
-        if(opt.radare)
-        {
-            printf("fs symbols\n");
-            if(pure_virtual)
-            {
-                printf("f sym.___cxa_pure_virtual 0 " ADDR "\n", pure_virtual);
-                printf("fN sym.___cxa_pure_virtual ___cxa_pure_virtual\n");
-            }
-        }
-        for(size_t i = 0; i < lsize; ++i)
-        {
-            print_metaclass(list[i], (int)namelen, opt);
-        }
+        return -1;
     }
 
     return 0;

@@ -139,12 +139,11 @@ typedef struct
              overrides :  1,
              ofilt     :  1,
              parent    :  1,
-             radare    :  1,
              size      :  1,
              symmap    :  1,
              vtab      :  1,
              mangle    :  1,
-             _reserved : 15;
+             _reserved : 16;
 } opt_t;
 
 static inline bool isws(char ch)
