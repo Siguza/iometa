@@ -48,7 +48,9 @@ typedef struct metaclass
     const char *name;
     const char *bundle;
     vtab_entry_t *methods;
+    vtab_entry_t *metamethods;
     size_t nmethods;
+    size_t nmetamethods;
     uint32_t objsize;
     uint32_t methods_done :  1,
              methods_err  :  1,

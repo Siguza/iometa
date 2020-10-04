@@ -135,6 +135,7 @@ typedef struct
              extend    :  1,
              inherit   :  1,
              meta      :  1,
+             metaclass :  1,
              maxmap    :  1,
              overrides :  1,
              ofilt     :  1,
@@ -143,7 +144,7 @@ typedef struct
              symmap    :  1,
              vtab      :  1,
              mangle    :  1,
-             _reserved : 16;
+             _reserved : 15;
 } opt_t;
 
 static inline bool isws(char ch)

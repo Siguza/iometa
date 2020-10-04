@@ -17,7 +17,7 @@
 #include "util.h"
 
 typedef bool (*print_sym_t)(const char *sym, kptr_t addr, void *arg);
-typedef bool (*print_class_t)(metaclass_t *meta, opt_t opt, print_sym_t print_sym, void *arg);
+typedef bool (*print_class_t)(metaclass_t *meta, opt_t opt, metaclass_t *OSMetaClass, print_sym_t print_sym, void *arg);
 
 typedef struct
 {
@@ -30,6 +30,6 @@ typedef struct
 extern print_t iometa_print;
 extern print_t radare2_print;
 
-bool print_all(void *classes, opt_t opt, const char *filt_class, const char *filt_override, const char **filter, kptr_t pure_virtual, print_t *print);
+bool print_all(void *classes, opt_t opt, metaclass_t *OSMetaClass, const char *filt_class, const char *filt_override, const char **filter, kptr_t pure_virtual, kptr_t OSMetaClassConstructor, kptr_t OSMetaClassAltConstructor, print_t *print);
 
 #endif

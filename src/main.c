@@ -407,7 +407,7 @@ out:;
 static void print_help(const char *self)
 {
     fprintf(stderr, "Usage:\n"
-                    "    %s [-aAbBCdeGimMnoOpRsSv] [ClassName] [OverrideName] [BundleName] kernel [SymbolMap]\n"
+                    "    %s [-aAbBCdeGilmMnoOpRsSvz] [ClassName] [OverrideName] [BundleName] kernel [SymbolMap]\n"
                     "\n"
                     "Description:\n"
                     "    Extract and print C++ class information from an arm64 iOS kernel.\n"
@@ -420,11 +420,12 @@ static void print_help(const char *self)
                     "    -A  Synonym for -bimosv\n"
                     "    -b  Print bundle identifier\n"
                     "    -i  Print inherited virtual methods (implies -o)\n"
-                    "    -m  Print MetaClass addresses\n"
+                    "    -l  Print OSMetaClass subclasses\n"
+                    "    -m  Print OSMetaClass addresses\n"
                     "    -M  Print symbol map (implies -o, takes precedence)\n"
                     "    -MM Same as above, and copy input map for missing classes\n"
                     "    -o  Print overridden/new virtual methods\n"
-                    "    -R  Print symbols for radare2 (implies -mov, takes precedence)\n"
+                    "    -R  Print symbols for radare2 (implies -lmov, takes precedence)\n"
                     "    -s  Print object sizes\n"
                     "    -v  Print object vtabs\n"
                     "    -z  Print mangled symbols\n"
@@ -457,6 +458,7 @@ int main(int argc, const char **argv)
         .extend    = 0,
         .inherit   = 0,
         .meta      = 0,
+        .metaclass = 0,
         .maxmap    = 0,
         .overrides = 0,
         .ofilt     = 0,
@@ -538,6 +540,11 @@ int main(int argc, const char **argv)
                     opt.overrides = 1;
                     break;
                 }
+                case 'l':
+                {
+                    opt.metaclass = 1;
+                    break;
+                }
                 case 'm':
                 {
                     opt.meta = 1;
@@ -589,6 +596,7 @@ int main(int argc, const char **argv)
                     }
                     print = &radare2_print;
                     opt.meta      = 1;
+                    opt.metaclass = 1;
                     opt.overrides = 1;
                     opt.vtab      = 1;
                     break;
@@ -1082,6 +1090,7 @@ int main(int argc, const char **argv)
 
     ARRDEF(metaclass_t, metas, NUM_METACLASSES_EXPECT);
     ARRDEF(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
+    metaclass_t *OSMetaClass = NULL;
 
     find_meta_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, bsyms, nsyms, &meta_constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
     if(OSMetaClassAltConstructor)
@@ -1664,7 +1673,7 @@ int main(int argc, const char **argv)
                     ERR("OSMetaClassVtab lies outside all segments.");
                     return -1;
                 }
-                for(size_t i = 0; ovtab[i] != 0; ++i)
+                for(size_t i = 0; is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, ovtab, OSObjectVtab, i); ++i)
                 {
                     if(kuntag(kbase, fixupKind, ovtab[i], NULL, NULL, NULL, NULL) == pure_virtual)
                     {
@@ -2506,6 +2515,231 @@ int main(int argc, const char **argv)
                 }
             }
 
+            if(opt.metaclass)
+            {
+                DBG("Populating MetaClass vtabs...");
+                symmap_class_t *symcls = NULL;
+                size_t nmetameth = -1;
+                if(hdr->filetype != MH_KEXT_BUNDLE)
+                {
+                    for(size_t i = 0; i < metas.idx; ++i)
+                    {
+                        metaclass_t *meta = &metas.val[i];
+                        if(strcmp(meta->name, "OSMetaClass") == 0)
+                        {
+                            if(!meta->methods_done || meta->methods_err || meta->vtab == 0)
+                            {
+                                WRN("Bad OSMetaClass state: %u/%u/" ADDR, meta->methods_done, meta->methods_err, meta->vtab);
+                            }
+                            else
+                            {
+                                OSMetaClass = meta;
+                                nmetameth = meta->nmethods;
+                            }
+                            break;
+                        }
+                    }
+                }
+                else if(symmap.map)
+                {
+                    symcls = bsearch("OSMetaClass", symmap.map, symmap.num, sizeof(*symmap.map), &compare_symclass_name);
+                    if(symcls)
+                    {
+                        while(symcls->duplicate)
+                        {
+                            --symcls;
+                        }
+                        nmetameth = symcls->num;
+                    }
+                }
+                for(size_t i = 0; i < metas.idx; ++i)
+                {
+                    metaclass_t *meta = &metas.val[i];
+                    DBG("Populating vtab for %s::MetaClass", meta->name);
+                    kptr_t *mvtab = addr2ptr(kernel, meta->metavtab);
+                    if(!mvtab)
+                    {
+                        ERR("Vtab of %s::MetaClass lies outside all segments.", meta->name);
+                        return -1;
+                    }
+                    size_t nmeth = 0;
+                    while(is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, mvtab, meta->metavtab, nmeth))
+                    {
+                        ++nmeth;
+                    }
+                    if(nmetameth != -1 && nmeth != nmetameth)
+                    {
+                        WRN("%s::MetaClass has a different amount of methods than the base class (%lu vs %lu).", meta->name, nmeth, nmetameth);
+                        goto done;
+                    }
+                    meta->metamethods = malloc(nmeth * sizeof(*meta->metamethods));
+                    if(!meta->metamethods)
+                    {
+                        ERRNO("malloc(metamethods)");
+                        return -1;
+                    }
+                    meta->nmetamethods = nmeth;
+                    char *mname = NULL;
+                    asprintf(&mname, "%s::MetaClass", meta->name);
+                    if(!mname)
+                    {
+                        ERRNO("asprintf(mname)");
+                        return -1;
+                    }
+                    for(size_t idx = 0; idx < nmeth; ++idx)
+                    {
+                        // TODO: There is a LOT of code duplication here :/
+                        vtab_entry_t *ent  = &meta->metamethods[idx],
+                                     *pent = (OSMetaClass && idx < OSMetaClass->nmethods) ? &OSMetaClass->methods[idx] : NULL;
+                        kptr_t func  = 0;
+                        uint16_t pac = 0;
+                        const char *cxx_sym = NULL,
+                                   *class   = NULL,
+                                   *method  = NULL;
+                        bool structor      = false,
+                             authoritative = false,
+                             overrides     = false,
+                             auth          = false,
+                             is_in_exreloc = false;
+
+                        kptr_t koff = meta->metavtab + sizeof(kptr_t) * idx;
+                        cxx_sym = find_sym_by_addr(koff, exrelocA, nexreloc);
+                        if(cxx_sym)
+                        {
+                            is_in_exreloc = true;
+                            if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
+                            {
+                                bool bind = false;
+                                bool a = false;
+                                uint16_t p = false;
+                                kuntag(kbase, fixupKind, mvtab[idx], &bind, &a, &p, NULL);
+                                if(bind)
+                                {
+                                    auth = a;
+                                    pac  = p;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            func = kuntag(kbase, fixupKind, mvtab[idx], NULL, &auth, &pac, NULL);
+                            cxx_sym = find_sym_by_addr(func, asyms, nsyms);
+                            overrides = !pent || func != pent->addr;
+                        }
+                        if((cxx_sym && strcmp(cxx_sym, "___cxa_pure_virtual") == 0) || (pure_virtual && func == pure_virtual))
+                        {
+                            func = -1;
+                        }
+                        else if(cxx_sym)
+                        {
+                            DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
+                            if(cxx_demangle(cxx_sym, &class, &method, &structor))
+                            {
+                                authoritative = true;
+                            }
+                            else if(is_in_exreloc)
+                            {
+                                WRN("Failed to demangle symbol: %s (from reloc)", cxx_sym);
+                            }
+                            else
+                            {
+                                WRN("Failed to demangle symbol: %s (from symtab, addr " ADDR ")", cxx_sym, func);
+                            }
+                        }
+                        if(!method && symcls && idx < symcls->num)
+                        {
+                            symmap_method_t *smeth = &symcls->methods[idx];
+                            if(!overrides)
+                            {
+                                class = smeth->class;
+                            }
+                            method = smeth->method;
+                            structor = smeth->structor;
+                            if(method)
+                            {
+                                authoritative = true;
+                            }
+                        }
+                        if(!method && pent)
+                        {
+                            method = pent->method;
+                            if(!pent->structor)
+                            {
+                                class = overrides ? mname : pent->class;
+                                authoritative = pent->authoritative;
+                            }
+                            else
+                            {
+                                const char *cls = pent->class,
+                                           *mth = method;
+                                bool dest = mth[0] == '~';
+                                if(dest)
+                                {
+                                    ++mth;
+                                }
+                                size_t clslen = strlen(cls);
+                                if(strncmp(mth, cls, clslen) != 0)
+                                {
+                                    WRN("Bad %sstructor: %s::%s", dest ? "de" : "con", cls, method);
+                                    method = NULL;
+                                }
+                                else
+                                {
+                                    char *strname = mname;
+                                    while(true)
+                                    {
+                                        char *m = strstr(strname, "::");
+                                        if(!m) break;
+                                        strname = m + 2;
+                                    }
+                                    mth += clslen;
+                                    char *meth = NULL;
+                                    asprintf(&meth, "%s%s%s", dest ? "~" : "", strname, mth);
+                                    if(!meth)
+                                    {
+                                        ERRNO("asprintf(structor)");
+                                        return -1;
+                                    }
+                                    method = meth;
+                                    class = mname;
+                                    structor = true;
+                                    authoritative = false;
+                                }
+                            }
+                        }
+                        if(!method)
+                        {
+                            char *meth = NULL;
+                            asprintf(&meth, "fn_0x%lx()", idx * sizeof(kptr_t));
+                            if(!meth)
+                            {
+                                ERRNO("asprintf(method)");
+                                return -1;
+                            }
+                            method = meth;
+                        }
+                        if(!class)
+                        {
+                            class = mname;
+                        }
+                        // Don't bother with PAC verification here. We expect to mostly override abstract methods,
+                        // and those are precisely the one we'd have to skip anyway, so...
+
+                        ent->chain = NULL;
+                        ent->mangled = cxx_sym;
+                        ent->class = class;
+                        ent->method = method;
+                        ent->addr = func;
+                        ent->pac = pac;
+                        ent->structor = !!structor;
+                        ent->authoritative = !!authoritative;
+                        ent->overrides = !!overrides;
+                        ent->auth = !!auth;
+                        ent->reserved = 0;
+                    }
+                }
+            }
+
             if(opt.mangle)
             {
                 for(size_t i = 0; i < metas.idx; ++i)
@@ -2535,6 +2769,59 @@ int main(int argc, const char **argv)
                                 {
                                     ERR("Failed to mangle %s::%s", ent->class, ent->method);
                                     return -1;
+                                }
+                            }
+                        }
+                    }
+                    if(opt.metaclass)
+                    {
+                        for(size_t idx = 0; idx < meta->nmetamethods; ++idx)
+                        {
+                            vtab_entry_t *ent = &meta->metamethods[idx];
+                            if(!ent->mangled)
+                            {
+                                if(ent->structor)
+                                {
+                                    // TODO: See above
+                                    int i = 0;
+                                    char buf[512];
+                                    buf[0] = '\0';
+#define P(fmt, ...) \
+do \
+{ \
+i += snprintf(buf + i, sizeof(buf) - i, (fmt), ##__VA_ARGS__); \
+if(i >= sizeof(buf)) return -1; \
+} while(0)
+                                    P("__ZN");
+                                    const char *strname = ent->class;
+                                    while(true)
+                                    {
+                                        const char *m = strstr(strname, "::");
+                                        if(!m)
+                                        {
+                                            P("%lu%s", strlen(strname), strname);
+                                            break;
+                                        }
+                                        P("%lu%.*s", m - strname, (int)(m - strname), strname);
+                                        strname = m + 2;
+                                    }
+                                    P("D%luEv", 1 - idx);
+#undef P
+                                    ent->mangled = strdup(buf);
+                                    if(!ent->mangled)
+                                    {
+                                        ERRNO("strdup(ent->mangled)");
+                                        return -1;
+                                    }
+                                }
+                                else
+                                {
+                                    ent->mangled = cxx_mangle(ent->class, ent->method);
+                                    if(!ent->mangled)
+                                    {
+                                        ERR("Failed to mangle %s::%s", ent->class, ent->method);
+                                        return -1;
+                                    }
                                 }
                             }
                         }
@@ -3010,7 +3297,7 @@ int main(int argc, const char **argv)
     }
 
     // Symmap will always need special handling due to maxmap
-    bool ok = opt.symmap ? print_symmap(&metas, &symmap, opt) : print_all(&metas, opt, filt_class, filt_override, filter, pure_virtual, print);
+    bool ok = opt.symmap ? print_symmap(&metas, &symmap, opt) : print_all(&metas, opt, OSMetaClass, filt_class, filt_override, filter, pure_virtual, OSMetaClassConstructor, OSMetaClassAltConstructor, print);
     if(!ok)
     {
         return -1;

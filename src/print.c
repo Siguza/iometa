@@ -29,6 +29,10 @@ static bool iometa_print_init(metaclass_t **list, size_t lsize, opt_t opt, void 
         for(size_t i = 0; i < lsize; ++i)
         {
             size_t nl = strlen(list[i]->name);
+            if(opt.metaclass)
+            {
+                nl += 11; // "::MetaClass"
+            }
             if(nl > namelen)
             {
                 namelen = nl;
@@ -39,7 +43,7 @@ static bool iometa_print_init(metaclass_t **list, size_t lsize, opt_t opt, void 
     return true;
 }
 
-static bool iometa_print_class(metaclass_t *meta, opt_t opt, print_sym_t print_sym, void *arg)
+static bool iometa_print_class(metaclass_t *meta, opt_t opt, metaclass_t *OSMetaClass, print_sym_t print_sym, void *arg)
 {
     int namelen = (int)(uintptr_t)arg;
     if(opt.vtab)
@@ -100,6 +104,58 @@ static bool iometa_print_class(metaclass_t *meta, opt_t opt, print_sym_t print_s
             else
             {
                 printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
+            }
+        }
+    }
+    if(opt.metaclass)
+    {
+        if(opt.vtab)
+        {
+            printf("vtab=" ADDR " ", meta->metavtab);
+        }
+        if(opt.size)
+        {
+            printf("size=---------- ");
+        }
+        if(opt.meta)
+        {
+            printf("meta=------------------ parent=------------------ metavtab=------------------ ");
+        }
+        printf("%s%s%-*s%s", colorCyan, meta->name, namelen ? namelen - (int)strlen(meta->name) : 0, "::MetaClass", colorReset);
+        if(opt.bundle)
+        {
+            if(meta->bundle)
+            {
+                printf(" (%s%s%s)", colorBlue, meta->bundle, colorReset);
+            }
+            else
+            {
+                printf(" (%s???%s)", colorRed, colorReset);
+            }
+        }
+        printf("\n");
+        if(opt.overrides)
+        {
+            for(size_t i = 0; i < meta->nmetamethods; ++i)
+            {
+                vtab_entry_t *ent = &meta->metamethods[i];
+                if(!ent->overrides && !opt.inherit)
+                {
+                    continue;
+                }
+                const char *color = ent->addr == -1 ? colorRed : !ent->overrides ? colorGray : "";
+                vtab_entry_t *pent = (OSMetaClass && i < OSMetaClass->nmethods) ? &OSMetaClass->methods[i] : NULL;
+                size_t hex = i * sizeof(kptr_t);
+                int hexlen = 5;
+                for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
+                if(opt.mangle)
+                {
+                    printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->mangled, colorReset);
+                }
+                else
+                {
+                    printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
+                }
             }
         }
     }
@@ -185,7 +241,45 @@ print_t radare2_print =
     .finish = NULL,
 };
 
-static bool default_print_class(metaclass_t *meta, opt_t opt, print_sym_t print_sym, void *arg)
+static bool default_print_entry(vtab_entry_t *ent, opt_t opt, metaclass_t *OSMetaClass, print_sym_t print_sym, void *arg)
+{
+    static char *buf = NULL;
+    static size_t buflen = 0;
+    if(!ent->overrides || ent->addr == -1)
+    {
+        return true;
+    }
+    const char *s;
+    if(opt.mangle)
+    {
+        s = ent->mangled;
+    }
+    else
+    {
+    again:;
+        size_t nl = snprintf(buf, buflen, "%s::%s", ent->class, ent->method);
+        if(nl >= buflen)
+        {
+            ++nl;
+            buf = realloc(buf, nl);
+            if(!buf)
+            {
+                ERRNO("default_print_class: malloc(buf)");
+                return false;
+            }
+            buflen = nl;
+            goto again;
+        }
+        s = buf;
+    }
+    if(!print_sym(s, ent->addr, arg))
+    {
+        return false;
+    }
+    return true;
+}
+
+static bool default_print_class(metaclass_t *meta, opt_t opt, metaclass_t *OSMetaClass, print_sym_t print_sym, void *arg)
 {
     static char *buf = NULL;
     static size_t buflen = 0;
@@ -206,65 +300,50 @@ static bool default_print_class(metaclass_t *meta, opt_t opt, print_sym_t print_
         buflen = nl;
     }
 
-    if(meta->vtab != 0 && meta->vtab != -1)
+    if(opt.vtab && meta->vtab != 0 && meta->vtab != -1)
     {
         if(opt.mangle) snprintf(buf, buflen, "__ZTV%lu%s", len, meta->name);
         else           snprintf(buf, buflen, "vtablefor%s", meta->name);
         if(!print_sym(buf, meta->vtab, arg)) return false;
     }
-    if(meta->addr)
+    if(opt.meta && meta->addr)
     {
         if(opt.mangle) snprintf(buf, buflen, "__ZN%lu%s10gMetaClassE", len, meta->name);
         else           snprintf(buf, buflen, "%s::gMetaClass", meta->name);
         if(!print_sym(buf, meta->addr, arg)) return false;
     }
-    if(meta->metavtab != 0 && meta->metavtab != -1)
+    if(opt.meta && meta->metavtab != 0 && meta->metavtab != -1)
     {
         if(opt.mangle) snprintf(buf, buflen, "__ZTVN%lu%s9MetaClassE", len, meta->name);
         else           snprintf(buf, buflen, "vtablefor%s::MetaClass", meta->name);
         if(!print_sym(buf, meta->metavtab, arg)) return false;
     }
 
-    for(size_t i = 0; i < meta->nmethods; ++i)
+    if(opt.overrides)
     {
-        vtab_entry_t *ent = &meta->methods[i];
-        if(!ent->overrides || ent->addr == -1)
+        for(size_t i = 0; i < meta->nmethods; ++i)
         {
-            continue;
-        }
-        const char *s;
-        if(opt.mangle)
-        {
-            s = ent->mangled;
-        }
-        else
-        {
-        again:;
-            nl = snprintf(buf, buflen, "%s::%s", ent->class, ent->method);
-            if(nl >= buflen)
+            if(!default_print_entry(&meta->methods[i], opt, OSMetaClass, print_sym, arg))
             {
-                ++nl;
-                buf = realloc(buf, nl);
-                if(!buf)
+                return false;
+            }
+        }
+        if(opt.metaclass)
+        {
+            for(size_t i = 0; i < meta->nmetamethods; ++i)
+            {
+                if(!default_print_entry(&meta->metamethods[i], opt, OSMetaClass, print_sym, arg))
                 {
-                    ERRNO("default_print_class: malloc(buf)");
                     return false;
                 }
-                buflen = nl;
-                goto again;
             }
-            s = buf;
-        }
-        if(!print_sym(s, ent->addr, arg))
-        {
-            return false;
         }
     }
 
     return true;
 }
 
-bool print_all(void *classes, opt_t opt, const char *filt_class, const char *filt_override, const char **filter, kptr_t pure_virtual, print_t *print)
+bool print_all(void *classes, opt_t opt, metaclass_t *OSMetaClass, const char *filt_class, const char *filt_override, const char **filter, kptr_t pure_virtual, kptr_t OSMetaClassConstructor, kptr_t OSMetaClassAltConstructor, print_t *print)
 {
     bool success = false;
     ARRCAST(metaclass_t, metas, classes);
@@ -437,16 +516,27 @@ bool print_all(void *classes, opt_t opt, const char *filt_class, const char *fil
         goto out;
     }
     bool ok = true;
-    if(pure_virtual && print->print_symbol)
+    if(print->print_symbol)
     {
-        ok = print->print_symbol("___cxa_pure_virtual", pure_virtual, arg);
+        if(pure_virtual)
+        {
+            ok = print->print_symbol("___cxa_pure_virtual", pure_virtual, arg);
+        }
+        if(ok && OSMetaClassConstructor)
+        {
+            ok = print->print_symbol(opt.mangle ? "__ZN11OSMetaClassC2EPKcPKS_j" : "OSMetaClass::OSMetaClass(char const*, OSMetaClass const*, unsigned int)", OSMetaClassConstructor, arg);
+        }
+        if(ok && OSMetaClassAltConstructor)
+        {
+            ok = print->print_symbol(opt.mangle ? "__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t" : "OSMetaClass::OSMetaClass(char const*, OSMetaClass const*, unsigned int, zone**, char const*, zone_create_flags_t)", OSMetaClassAltConstructor, arg);
+        }
     }
     if(ok)
     {
         print_class_t pr = print->print_class ? print->print_class : default_print_class;
         for(size_t i = 0; i < lsize; ++i)
         {
-            ok = pr(list[i], opt, print->print_symbol, arg);
+            ok = pr(list[i], opt, OSMetaClass, print->print_symbol, arg);
             if(!ok)
             {
                 break;

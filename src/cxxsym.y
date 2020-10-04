@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <stdio.h>              // snprintf
 #include <stdlib.h>             // malloc, free
-#include <string.h>             // strncmp
+#include <string.h>             // strncmp, strstr
 
 #include "cxx.h"
 #include "util.h"
@@ -1028,28 +1028,49 @@ do \
     if(i >= sizeof(buf)) goto out; \
 } while(0)
 
-    int len = (int)strlen(class);
-    P("__ZN%s%s%u%s%u%.*sE", state.vltl ? "V" : "",  state.cnst ? "K" : "", len, class, state.method.len, state.method.len, state.method.ptr);
+    P("__ZN%s%s", state.vltl ? "V" : "",  state.cnst ? "K" : "");
+    type_t cls, space;
+    const char *delim;
+    // TODO: Proper multi-level namespace handling
+    if((delim = strstr(class, "::")))
+    {
+        int len1 = (int)(delim - class);
+        delim += 2;
+        int len2 = (int)strlen(delim);
+        P("%u%.*s%u%s", len1, len1, class, len2, delim);
+        space.next = NULL;
+        space.kind = kName;
+        space.val.name.str.ptr = class;
+        space.val.name.str.len = len1;
+        space.val.name.next = &cls;
+        cls.next = NULL;
+        cls.kind = kName;
+        cls.val.name.str.ptr = delim;
+        cls.val.name.str.len = len2;
+        cls.val.name.next = NULL;
+    }
+    else
+    {
+        int len = (int)strlen(class);
+        P("%u%s", len, class);
+        cls.next = NULL;
+        cls.kind = kName;
+        cls.val.name.str.ptr = class;
+        cls.val.name.str.len = len;
+        cls.val.name.next = NULL;
+    }
+    P("%u%.*sE", state.method.len, state.method.len, state.method.ptr);
     if(!state.args)
     {
         P("v");
     }
     else
     {
-        type_t cls =
-        {
-            .next = NULL,
-            .kind = kName,
-            .val =
-            {
-                .name =
-                {
-                    .str = { class, len },
-                    .next = NULL,
-                },
-            },
-        };
         ARRDEF(type_t*, stack, 32);
+        if(delim)
+        {
+            ARRPUSH(stack, &space);
+        }
         ARRPUSH(stack, &cls);
         bool ok = cxx_mangle_type(buf, sizeof(buf), &i, &stack, state.args);
         ARRFREE(stack);

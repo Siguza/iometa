@@ -77,7 +77,9 @@ void add_metaclass(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, void *arg
     meta->name = name;
     meta->bundle = NULL;
     meta->methods = NULL;
+    meta->metamethods = NULL;
     meta->nmethods = 0;
+    meta->nmetamethods = 0;
     meta->objsize = state->x[3];
     meta->methods_done = 0;
     meta->methods_err = 0;
