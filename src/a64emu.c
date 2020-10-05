@@ -40,12 +40,16 @@ bool is_linear_inst(void *ptr)
            is_ldp_fp_post(ptr) ||
            is_ldp_fp_uoff(ptr) ||
            is_bl(ptr) ||
-           is_mov(ptr) ||
            is_movz(ptr) ||
            is_movk(ptr) ||
            is_movn(ptr) ||
            is_movi(ptr) ||
+           is_and(ptr) ||
            is_orr(ptr) ||
+           is_eor(ptr) ||
+           is_and_reg(ptr) ||
+           is_orr_reg(ptr) ||
+           is_eor_reg(ptr) ||
            is_str_pre(ptr) ||
            is_str_post(ptr) ||
            is_str_uoff(ptr) ||
@@ -932,21 +936,6 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 state->qvalid &= 0xff00; // blindly assuming 128bit shit is handled as needed
             }
         }
-        else if(is_mov(ptr))
-        {
-            mov_t *mov = ptr;
-            if(!(state->valid & (1 << mov->Rm))) // Unset validity
-            {
-                state->valid &= ~(1 << mov->Rd);
-            }
-            else
-            {
-                state->x[mov->Rd] = state->x[mov->Rm];
-                state->valid |= 1 << mov->Rd;
-                state->wide = (state->wide & ~(1 << mov->Rd)) | (((state->wide >> mov->Rm) & 0x1 & mov->sf) << mov->Rd);
-                state->host = (state->host & ~(1 << mov->Rd)) | (((state->host >> mov->Rm) & 0x1) << mov->Rd);
-            }
-        }
         else if(is_movz(ptr))
         {
             movz_t *movz = ptr;
@@ -980,15 +969,99 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             state->q[movi->Rd] = get_movi_imm(movi);
             state->qvalid |= 1 << movi->Rd;
         }
-        else if(is_orr(ptr))
+        else if(is_and(ptr) || is_orr(ptr) || is_eor(ptr))
         {
             orr_t *orr = ptr;
             if(orr->Rn == 31 || (state->valid & (1 << orr->Rn)))
             {
-                state->x[orr->Rd] = (orr->Rn == 31 ? 0 : state->x[orr->Rn]) | get_orr_imm(orr);
+                uint64_t Rd,
+                         Rn = (orr->Rn == 31 ? 0 : state->x[orr->Rn]),
+                         Rm = get_orr_imm(orr);
+                if(is_and(orr))
+                {
+                    Rd = Rn & Rm;
+                }
+                else if(is_orr(orr))
+                {
+                    Rd = Rn | Rm;
+                }
+                else if(is_eor(orr))
+                {
+                    Rd = Rn ^ Rm;
+                }
+                else
+                {
+                    return kEmuErr;
+                }
+                state->x[orr->Rd] = Rd;
                 state->valid |= 1 << orr->Rd;
                 state->wide = (state->wide & ~(1 << orr->Rd)) | (orr->sf << orr->Rd);
                 state->host &= ~(1 << orr->Rd);
+            }
+            else
+            {
+                state->valid &= ~(1 << orr->Rd);
+            }
+        }
+        else if(is_and_reg(ptr) || is_orr_reg(ptr) || is_eor_reg(ptr))
+        {
+            orr_reg_t *orr = ptr;
+            if((orr->Rn == 31 || (state->valid & (1 << orr->Rn))) && (orr->Rm == 31 || (state->valid & (1 << orr->Rm))))
+            {
+                uint64_t Rn = (orr->Rn == 31 ? 0 : state->x[orr->Rn]),
+                         Rm = (orr->Rm == 31 ? 0 : state->x[orr->Rm]);
+                switch(orr->shift)
+                {
+                    case 0b00: Rm =          Rm << orr->imm; break; // LSL
+                    case 0b01: Rm =          Rm >> orr->imm; break; // LSR
+                    case 0b10: Rm = (int64_t)Rm >> orr->imm; break; // ASR
+                    default:
+                        WRN("Bad and/orr/eor shift at " ADDR, addr);
+                        return kEmuErr;
+                }
+                uint64_t Rd;
+                if(is_and_reg(orr))
+                {
+                    Rd = Rn & Rm;
+                }
+                else if(is_orr_reg(orr))
+                {
+                    Rd = Rn | Rm;
+                }
+                else if(is_eor_reg(orr))
+                {
+                    Rd = Rn ^ Rm;
+                }
+                else
+                {
+                    return kEmuErr;
+                }
+                state->x[orr->Rd] = Rd;
+                state->valid |= 1 << orr->Rd;
+                // Because mov is an alias of orr
+                if(orr->sf)
+                {
+                    if(orr->Rn == 31 && orr->imm == 0)
+                    {
+                        state->wide = (state->wide & ~(1 << orr->Rd)) | (((state->wide >> orr->Rm) & 0x1) << orr->Rd);
+                        state->host = (state->host & ~(1 << orr->Rd)) | (((state->host >> orr->Rm) & 0x1) << orr->Rd);
+                    }
+                    else if(orr->Rm == 31)
+                    {
+                        state->wide = (state->wide & ~(1 << orr->Rd)) | (((state->wide >> orr->Rn) & 0x1) << orr->Rd);
+                        state->host = (state->host & ~(1 << orr->Rd)) | (((state->host >> orr->Rn) & 0x1) << orr->Rd);
+                    }
+                    else
+                    {
+                        state->wide |= 1 << orr->Rd;
+                        state->host &= ~(1 << orr->Rd);
+                    }
+                }
+                else
+                {
+                    state->wide &= ~(1 << orr->Rd);
+                    state->host &= ~(1 << orr->Rd);
+                }
             }
             else
             {

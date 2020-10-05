@@ -228,14 +228,14 @@ typedef struct
              sf     :  1;
 } tbz_t;
 
-typedef struct
+/*typedef struct
 {
     uint32_t Rd     :  5,
              op2    : 11,
              Rm     :  5,
              op1    : 10,
              sf     :  1;
-} mov_t;
+} mov_t;*/
 
 typedef struct
 {
@@ -268,7 +268,19 @@ typedef struct
              N      : 1,
              op     : 8,
              sf     : 1;
-} orr_t;
+} and_t, orr_t, eor_t;
+
+typedef struct
+{
+    uint32_t Rd    : 5,
+             Rn    : 5,
+             imm   : 6,
+             Rm    : 5,
+             N     : 1,
+             shift : 2,
+             op    : 7,
+             sf    : 1;
+} and_reg_t, orr_reg_t, eor_reg_t;
 
 typedef struct
 {
@@ -362,7 +374,7 @@ static inline bool is_ldr_lit(ldr_lit_t *ldr)
 
 static inline int64_t get_ldr_lit_off(ldr_lit_t *ldr)
 {
-    return (((int64_t)ldr->imm) << (64 - 19)) >> (64 - 21);
+    return (((int64_t)ldr->imm) << (64 - 19)) >> (64 - 19 - 2);
 }
 
 static inline bool is_ldxr(ldxr_t *ldxr)
@@ -662,13 +674,13 @@ static inline uint32_t get_tbz_bit(tbz_t *tbz)
 
 static inline int64_t get_tbz_off(tbz_t *tbz)
 {
-    return (((int64_t)tbz->imm) << (64 - 14)) >> (64 - 19 - 2);
+    return (((int64_t)tbz->imm) << (64 - 14)) >> (64 - 14 - 2);
 }
 
-static inline bool is_mov(mov_t *mov)
+/*static inline bool is_mov(mov_t *mov)
 {
     return mov->op1 == 0x150 && mov->op2 == 0x1f;
-}
+}*/
 
 static inline bool is_movz(movz_t *movz)
 {
@@ -743,12 +755,37 @@ static inline bool is_ret(ret_t *ret)
            r == 0xd65f0fff;   // retab
 }
 
-static inline bool is_orr(orr_t *orr)
+static inline bool is_and_reg(and_reg_t *and)
 {
-    return orr->op == 0x64;
+    return and->op == 0b0001010 && and->N == 0;
 }
 
-// orr - holy clusterfuck
+static inline bool is_orr_reg(orr_reg_t *orr)
+{
+    return orr->op == 0b0101010 && orr->N == 0;
+}
+
+static inline bool is_eor_reg(eor_reg_t *eor)
+{
+    return eor->op == 0b1001010 && eor->N == 0;
+}
+
+static inline bool is_and(and_t *and)
+{
+    return and->op == 0b00100100;
+}
+
+static inline bool is_orr(orr_t *orr)
+{
+    return orr->op == 0b01100100;
+}
+
+static inline bool is_eor(eor_t *eor)
+{
+    return eor->op == 0b10100100;
+}
+
+// and/orr/eor - holy clusterfuck
 
 extern uint64_t DecodeBitMasks(uint8_t N, uint8_t imms, uint8_t immr, uint8_t bits);
 
