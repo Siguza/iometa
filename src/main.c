@@ -1180,6 +1180,7 @@ int main(int argc, const char **argv)
             metaclass_t *parent = &metas.val[j];
             if(parent->addr == meta->parent)
             {
+                parent->has_children = 1;
                 meta->parentP = parent;
                 break;
             }
@@ -2110,7 +2111,11 @@ int main(int argc, const char **argv)
                 if(meta->vtab == 0)
                 {
                     meta->methods_done = 1;
-                    if(meta->symclass && meta->symclass->num != 0)
+                    // If the symmap has methods for this class (which has no vtab), then there are two possibilities:
+                    // - The class has children, in which case the symmap is always wrong.
+                    // - The class has no children, in which case it's unused and the compiler presumably optimised the vtab out.
+                    //   In that case we wanna silence this warning, because if it had children, the symmap would probably be right.
+                    if(meta->symclass && meta->symclass->num != 0 && meta->has_children)
                     {
                         WRN("Symmap entry for %s has %lu methods, but class has no vtab.", meta->name, meta->symclass->num);
                     }

@@ -74,12 +74,7 @@ So let's start with how these lists are organised. Originally I had planned to s
 > \[WRN\] Symmap entry for AppleBCMWLANIO80211APSTAInterface has 88 methods, vtab has 83.  
 > \[WRN\] Symmap entry for AppleBCMWLANProximityInterface has 88 methods, vtab has 83.
 
-You can reproduce that by attempting to use an A7 symbol map on an A8 cache or vice versa. Basically different device generations have, under the same name, different classes implementing different methods. In order to account for that, each SoC generation gets its own file per OS version. With maps provided on this repo, you should only ever see two kinds of warnings:
-
-> \[WRN\] Symmap entry for \<Class\> has X methods, vtab has 0.  
-> \[WRN\] Symmap entry for \<Class\> has X methods, but class has no vtab.
-
-Both are symptoms of the same condition, namely the symbol map holding information on a class when the kernel effectively optimised that class out of existence for that device. And I can live with that.
+You can reproduce that by attempting to use an A7 symbol map on an A8 cache or vice versa. Basically different device generations have, under the same name, different classes implementing different methods. In order to account for that, each SoC generation gets its own file per OS version. With the maps provided in this repo, you should never get any warnings (if using iometa >= 1.6.4) - if you do, please report them to me.
 
 Then the next split is by kernelcache format. This is `A8-dense.txt` vs `A8-legacy.txt`. The reason these need a split is optimisation, namely abstract classes having been optimised out. The problem arises when you have a class hierarchy like so:
 

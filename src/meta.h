@@ -56,7 +56,8 @@ typedef struct metaclass
              methods_err  :  1,
              visited      :  1,
              duplicate    :  1,
-             reserved     : 28;
+             has_children :  1,
+             reserved     : 27;
 } metaclass_t;
 
 typedef struct
