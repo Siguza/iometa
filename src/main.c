@@ -691,13 +691,13 @@ int main(int argc, const char **argv)
     {
         filt_class = argv[aoff++];
     }
-    if(opt.bfilt)
-    {
-        filt_bundle = argv[aoff++];
-    }
     if(opt.ofilt)
     {
         filt_override = argv[aoff++];
+    }
+    if(opt.bfilt)
+    {
+        filt_bundle = argv[aoff++];
     }
     bool want_vtabs = opt.vtab || opt.overrides || opt.ofilt;
 
