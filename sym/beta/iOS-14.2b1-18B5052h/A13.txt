@@ -6189,7 +6189,7 @@ AppleTriStarIC
 - setConDetMode(IOAccDockConDetMode)
 - setDPDNTermination(bool)
 - doChallengeCrypto(int, unsigned char const*, unsigned char*)
--
+- getIdCommandExpected()
 AppleTriStarUSBDataMonitor
 AppleTypeCPhy
 - createTypeCPhyUSB2Interface(IOService*)
