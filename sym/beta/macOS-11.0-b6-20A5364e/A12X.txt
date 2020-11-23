@@ -1509,10 +1509,10 @@ AppleARMPWMInOutPulseController
 - _setPropertiesGated(OSObject*)
 - initWithRegistryEntry(IORegistryEntry*, AppleARMPWM*)
 AppleARMParamFIFO
--
--
--
--
+- queueCommand(IOMemoryMap*, unsigned long long, unsigned int)
+- programFIFO(IOMemoryMap*)
+- getCurrentState(AppleARMParamFIFO::State*)
+- setCompletionAction(bool, int (*)(OSObject*, void*, int), OSObject*, void*)
 AppleARMPassthroughPowerSource
 AppleARMPerformanceController
 - _perfDivToFixed(unsigned int)
