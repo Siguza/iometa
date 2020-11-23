@@ -521,7 +521,7 @@ And that's about it. Every now and then you'll come across methods whose names a
         <td align="center">tvOS 14.5</td>
     </tr>
     <tr>
-        <td rowspan="14" align="center">A12X</td>
+        <td rowspan="15" align="center">A12X</td>
         <td rowspan="4">iPad Pro 3 (11.0")</td>
         <td>iPad8,1</td>
         <td>J317AP</td>
@@ -576,10 +576,14 @@ And that's about it. Every now and then you'll come across methods whose names a
         <td>J421AP</td>
     </tr>
     <tr>
-        <td rowspan="2">DTK</td>
+        <td rowspan="3">DTK</td>
+        <td>ADP3,1</td>
+        <td>J273AP</td>
+        <td rowspan="3" align="center">N/A</td>
+    </tr>
+    <tr>
         <td>ADP3,2</td>
         <td>J273aAP</td>
-        <td rowspan="2" align="center">N/A</td>
     </tr>
     <tr>
         <td>iProd99,1</td>
@@ -609,7 +613,28 @@ And that's about it. Every now and then you'll come across methods whose names a
         <td align="center">iOS 13.4</td>
     </tr>
     <tr>
-        <td rowspan="2" align="center">A14</td>
+        <td rowspan="6" align="center">A14</td>
+        <td>iPhone 12 mini</td>
+        <td>iPhone13,1</td>
+        <td>D52gAP</td>
+        <td rowspan="4" align="center">iOS 14.1</td>
+    </tr>
+    <tr>
+        <td>iPhone 12</td>
+        <td>iPhone13,2</td>
+        <td>D53gAP</td>
+    </tr>
+    <tr>
+        <td>iPhone 12 Pro</td>
+        <td>iPhone13,3</td>
+        <td>D53pAP</td>
+    </tr>
+    <tr>
+        <td>iPhone 12 Pro Max</td>
+        <td>iPhone13,4</td>
+        <td>D54pAP</td>
+    </tr>
+    <tr>
         <td rowspan="2">iPad Air 4</td>
         <td>iPad13,1</td>
         <td>J307AP</td>
@@ -703,7 +728,7 @@ And that's about it. Every now and then you'll come across methods whose names a
         <td>N141bAP</td>
     </tr>
     <tr>
-        <td rowspan="8" align="center">S5</td>
+        <td rowspan="9" align="center">S5</td>
         <td rowspan="4">Apple Watch Series 5</td>
         <td>Watch5,1</td>
         <td>N144sAP</td>
@@ -738,6 +763,12 @@ And that's about it. Every now and then you'll come across methods whose names a
     <tr>
         <td>Watch5,12</td>
         <td>N142bAP</td>
+    </tr>
+    <tr>
+        <td>Homepod mini</td>
+        <td>AudioAccessory5,1</td>
+        <td>B520AP</td>
+        <td align="center">audioOS 14.1</td>
     </tr>
     <tr>
         <td rowspan="4" align="center">S6</td>
