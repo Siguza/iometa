@@ -52,12 +52,12 @@ typedef struct metaclass
     size_t nmethods;
     size_t nmetamethods;
     uint32_t objsize;
-    uint32_t methods_done :  1,
-             methods_err  :  1,
-             visited      :  1,
-             duplicate    :  1,
-             has_children :  1,
-             reserved     : 27;
+    uint32_t methods_done   :  1,
+             methods_err    :  1,
+             visited        :  1,
+             duplicate      :  1,
+             has_dependents :  1,
+             reserved       : 27;
 } metaclass_t;
 
 typedef struct

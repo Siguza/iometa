@@ -85,7 +85,7 @@ void add_metaclass(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, void *arg
     meta->methods_err = 0;
     meta->visited = 0;
     meta->duplicate = 0;
-    meta->has_children = 0;
+    meta->has_dependents = 0;
     meta->reserved = 0;
     if(want_vtabs)
     {

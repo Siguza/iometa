@@ -1180,7 +1180,6 @@ int main(int argc, const char **argv)
             metaclass_t *parent = &metas.val[j];
             if(parent->addr == meta->parent)
             {
-                parent->has_children = 1;
                 meta->parentP = parent;
                 break;
             }
@@ -1189,6 +1188,22 @@ int main(int argc, const char **argv)
         {
             ERR("Failed to find parent of %s (m: " ADDR ", p: " ADDR ")", meta->name, meta->addr, meta->parent);
             return -1;
+        }
+    }
+    for(size_t i = 0; i < metas.idx; ++i)
+    {
+        metaclass_t *meta = &metas.val[i];
+        if(meta->vtab != 0)
+        {
+            // Propagate through entire hierarchy
+            for(metaclass_t *p = meta->parentP; p; p = p->parentP)
+            {
+                if(p->vtab || p->has_dependents)
+                {
+                    break;
+                }
+                p->has_dependents = 1;
+            }
         }
     }
 
@@ -2115,7 +2130,7 @@ int main(int argc, const char **argv)
                     // - The class has children, in which case the symmap is always wrong.
                     // - The class has no children, in which case it's unused and the compiler presumably optimised the vtab out.
                     //   In that case we wanna silence this warning, because if it had children, the symmap would probably be right.
-                    if(meta->symclass && meta->symclass->num != 0 && meta->has_children)
+                    if(meta->symclass && meta->symclass->num != 0 && meta->has_dependents)
                     {
                         WRN("Symmap entry for %s has %lu methods, but class has no vtab.", meta->name, meta->symclass->num);
                     }
@@ -2193,6 +2208,7 @@ int main(int argc, const char **argv)
                          is_in_exreloc = false;
 
                     kptr_t koff = meta->vtab + sizeof(kptr_t) * idx;
+                    // TODO: handle multiple symbols for same addr
                     cxx_sym = find_sym_by_addr(koff, exrelocA, nexreloc);
                     if(cxx_sym)
                     {
