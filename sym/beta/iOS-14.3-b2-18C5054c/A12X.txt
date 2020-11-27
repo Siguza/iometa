@@ -28,10 +28,10 @@ AGX3DChannelG11
 - AGXChannel::encodeInvalidateUSCInstCache()
 - AGXChannel::encodeInvalidateDynamicConstantCache()
 - AGXChannel::encodeInvalidatePDSCache(_AGFIDataMasterType)
-- AGX3DChannel::init(AGXCommandQueue const*, int, int, unsigned long long)
+- AGX3DChannel::init(AGXCommandQueue const*, AGXWorkQueue*, int, int, unsigned long long)
 - AGXChannel::prepare()
 - AGXChannel::complete()
-- AGXChannel::setPriority(AGFIContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
+- AGXChannel::setPriority(eAGXContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
 - AGXChannel::resetChannelState()
 - AGX3DChannel::describeAllocationsForPID(IOGPUAllocationInfo*, int)
 - AGXChannel::getPriority()
@@ -220,10 +220,10 @@ AGXCLChannelG11
 - AGXChannel::encodeInvalidateUSCInstCache()
 - AGXChannel::encodeInvalidateDynamicConstantCache()
 - AGXChannel::encodeInvalidatePDSCache(_AGFIDataMasterType)
-- AGXCLChannel::init(AGXCommandQueue const*, int, int, unsigned long long)
+- AGXCLChannel::init(AGXCommandQueue const*, AGXWorkQueue*, int, int, unsigned long long)
 - AGXChannel::prepare()
 - AGXChannel::complete()
-- AGXChannel::setPriority(AGFIContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
+- AGXChannel::setPriority(eAGXContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
 - AGXChannel::resetChannelState()
 - AGXCLChannel::describeAllocationsForPID(IOGPUAllocationInfo*, int)
 - AGXChannel::getPriority()
@@ -289,7 +289,7 @@ AGXFirmware
 - setGPUMaxPower(unsigned int)
 - getGPUMaxPower()
 - allocateSharedData(sharedDataDescriptor*, bool)
-- updateSubmitInProgress(bool, AGFIContextPriorityType)
+- updateSubmitInProgress(bool, eAGXContextPriorityType)
 - submitTAChannel(AGXChannel*, unsigned int, unsigned int, unsigned int)
 - submit3DChannel(AGXChannel*, unsigned int, unsigned int, unsigned int)
 - submitCLChannel(AGXChannel*, unsigned int, unsigned int, unsigned int)
@@ -374,7 +374,7 @@ AGXFirmware
 - joinPMPowerManagement(IOService*, IOService*)
 - setAbsTimeOffset()
 - getMCacheRegistersBaseAddress()
-- setChannelPriority(_AGFIChannelState*, AGFIContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
+- setChannelPriority(_AGFIChannelState*, eAGXContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
 - enableConsistentGPUPerfState(bool, unsigned int)
 - isConsistentGPUPerfStateEnabled() const
 - wasConsistentGPUPerfStateMaintained() const
@@ -602,10 +602,10 @@ AGXTAChannelG11
 - AGXChannel::encodeInvalidateUSCInstCache()
 - AGXChannel::encodeInvalidateDynamicConstantCache()
 - AGXChannel::encodeInvalidatePDSCache(_AGFIDataMasterType)
-- AGXTAChannel::init(AGXCommandQueue const*, int, int, unsigned long long)
+- AGXTAChannel::init(AGXCommandQueue const*, AGXWorkQueue*, int, int, unsigned long long)
 - AGXChannel::prepare()
 - AGXChannel::complete()
-- AGXChannel::setPriority(AGFIContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
+- AGXChannel::setPriority(eAGXContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
 - AGXChannel::resetChannelState()
 - AGXTAChannel::describeAllocationsForPID(IOGPUAllocationInfo*, int)
 - AGXChannel::getPriority()
@@ -4722,71 +4722,71 @@ AppleM2ScalerCSCDriver
 - swap_signal(unsigned int)
 - initForPM(IOService*)
 AppleM2ScalerCSCHal
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
+- completionQueueEmpty()
+- init(unsigned int, socVersion, IOService*, IOService*, IOWorkLoop*, SCALER_RUNTIME_PROPERTIES const*)
+- mapRegisterMemory(IOService*)
+- stop(IOWorkLoop*, IOMapper*)
+- setBufferPhysicalAddresses(M2ScalerCSCRequest*, DestinationOrSource, unsigned long long) const
+- clipForBlit(DestinationOrSource, VerticalOrHorizontal, M2ScalerCSCRequest*) const
+- executeTransform_gatedContext(M2ScalerCSCRequest*)
+- configureStart_gatedContext(M2ScalerCSCRequest*)
+- startScaler_gatedContext(M2ScalerCSCRequest*)
+- disableInterruptEventSource_gatedContext()
+- enableInterruptEventSource_gatedContext()
+- moreFramesToGo()
+- interruptFilter_interruptContext(OSObject*, IOFilterInterruptEventSource*)
+- getFrameCount()
+- interruptOccurred_gatedContext(IOInterruptEventSource*, int)
+- powerUpScaler_gatedContext()
+- setActive_gatedContext(bool)
+- setClockByWorkload(AppleM2ScalerCSCDriver*, SCALER_PROPERTIES_EXTENTS const*)
+- setTransformFormat(DestinationOrSource, M2ScalerCSCRequest*) const
+- validateDimensions(DestinationOrSource, M2ScalerCSCRequest*) const
+- isTiledSpanMisaligned(transformData*) const
+- isTiledAddressMisaligned(DestinationOrSource, transformData*) const
+- validateAndAdjustTransformFormat(DestinationOrSource, M2ScalerCSCRequest*)
+- validateMappingSize(DestinationOrSource, M2ScalerCSCRequest*)
+- validateSourceToDestRelationship(M2ScalerCSCRequest*) const
+- executePostMappingWorkarounds(M2ScalerCSCRequest*)
+- tiledBufferAllocChunkValidity(DestinationOrSource, M2ScalerCSCRequest*) const
+- validateXYOffsets(DestinationOrSource, M2ScalerCSCRequest*) const
+- validateXAlignment(DestinationOrSource, M2ScalerCSCRequest*) const
+- validateAlphaOverride(M2ScalerCSCRequest*) const
+- validateBorderFill(M2ScalerCSCRequest*) const
+- validateHistogram(M2ScalerCSCRequest*) const
+- validateScalingRatios(M2ScalerCSCRequest*)
+- resetScaler()
+- isScalerRunning()
+- reserveScaler_gatedContext()
+- unReserveScaler_gatedContext()
+- printRegs() const
+- getMaxSourceDestWidthHeight(M2ScalerCSCRequest*, unsigned int*, unsigned int*, unsigned int*, unsigned int*) const
+- iterateOnFrames_gatedContext(AppleM2ScalerCSCDriver*, bool, int, bool)
+- prepareNullKickoffInterrupt()
+- setMapperCacheAttributes_gatedContext(IOMapper*, IOSurface*, IOMemoryDescriptor*) const
+- dumpRegistersIfStable_gatedContext()
+- computeHardwareRotationMode(M2ScalerCSCRequest*)
+- initStandardFlipRotates()
+- recordRegisters(RecordedRequest*)
+- shallActivateCSC(M2ScalerCSCRequest*, bool) const
+- saveTiledBufferUsage_gatedContext(M2ScalerCSCRequest*)
+- configureTiledCompression_gatedContext(M2ScalerCSCRequest*)
+- setTiledCompressedMemAddresses(DestinationOrSource, M2ScalerCSCRequest*)
+- validateAddressingFormat(M2ScalerCSCRequest*)
+- validateCompressionFormat(M2ScalerCSCRequest*)
+- pipeCheckXYOffsets(DestinationOrSource, M2ScalerCSCRequest*, pipeUnitExchange*) const
+- pipeCheckSrcDstIssues(M2ScalerCSCRequest*, pipeUnitExchange*) const
+- tagTransformRegisters(M2ScalerCSCRequest*)
+- startDpe()
+- stopDpe()
+- initPowerAndClock()
+- turnOffPowerAndClock()
+- disableClockAndPower_gatedContext()
+- detectHardwareVersion()
+- disableInterrupts()
+- enableInterrupts()
+- isScalerInterrupt()
+- resetInterrupts()
 AppleM2ScalerCSCHalMSR
 - validateWdmaCfg(M2ScalerCSCRequest*)
 - perfChecksumStatsInit()
@@ -5873,8 +5873,8 @@ AppleSEPPanicBuffer
 - initWithOwner(AppleSEPSharedMemoryBuffer*)
 AppleSEPSharedMemoryBuffer
 AppleSEPSharedMemoryChannel
--
--
+- initWithOwnerAndName(AppleSEPSharedMemoryBuffer*, unsigned int)
+- _updateBuffer()
 AppleSEPTesting
 AppleSEPTestingService
 AppleSEPTraceBuffer
@@ -6585,8 +6585,8 @@ AppleUSB20XHCIPort
 - testMode(StandardUSBXHCI::tXHCITestMode)
 AppleUSB20XHCIRemovablePort
 AppleUSB20XHCITypeCPort
--
--
+- cableNotification(void*, unsigned int, IOService*, void*, unsigned long)
+- cableChangeOccurred(IOTimerEventSource*)
 AppleUSB30AccessoryHub
 AppleUSB30AccessoryHubPort
 AppleUSB30CameraKitHub
@@ -6605,8 +6605,8 @@ AppleUSB30XHCIPort
 - enableComplianceGated()
 AppleUSB30XHCIRemovablePort
 AppleUSB30XHCITypeCPort
--
--
+- cableNotification(void*, unsigned int, IOService*, void*, unsigned long)
+- cableChangeOccurred(IOTimerEventSource*)
 AppleUSBALSService
 AppleUSBAudioComposite
 AppleUSBAudioControlInterface
@@ -7087,7 +7087,7 @@ AppleUSBHostControllerIsochEndpoint
 AppleUSBHostControllerIsochListElement
 AppleUSBHostControllerListElement
 AppleUSBHostDARTDMACommand
--
+- initWithSpecification(bool (*)(IODMACommand*, IODMACommand::Segment64, void*, unsigned int), unsigned int, unsigned char, unsigned long long, IODMACommand::MappingOptions, unsigned long long, unsigned int, IOMapper*, void*)
 AppleUSBHostDMABufferMemoryDescriptor
 - initInTaskWithOptions(task*, unsigned int, unsigned long, unsigned long, unsigned int, IOMapper*)
 AppleUSBHostDMACommand
@@ -7096,7 +7096,7 @@ AppleUSBHostDMACommand
 AppleUSBHostDMACommandPool
 - getCommand(unsigned int, unsigned int)
 - returnCommand(IODMACommand*)
-- initWithSpecification(IOWorkLoop*, bool (*)(IODMACommand*, IODMACommand::Segment64, void*, unsigned int), unsigned char, unsigned long long, IODMACommand::MappingOptions, unsigned long long, unsigned int, unsigned int, IOMapper*)
+- initWithSpecification(IOWorkLoop*, bool (*)(IODMACommand*, IODMACommand::Segment64, void*, unsigned int), unsigned int, unsigned char, unsigned long long, IODMACommand::MappingOptions, unsigned long long, unsigned int, unsigned int, IOMapper*)
 AppleUSBHostDeviceIdler
 - initWithDeviceAndWorkLoop(IOUSBHostDevice*, IOWorkLoop*)
 - enable()
@@ -7480,10 +7480,10 @@ AppleUSBXDCI
 - applyTunablesTag(unsigned long long, char const*)
 - controllerReset()
 AppleUSBXDCIARM
--
--
--
--
+- initCableChangeNotification()
+- initCableChangeNotificationThreadCall(thread_call*)
+- cableNotification(void*, unsigned int, IOService*, void*, unsigned long)
+- cableChangeOccurred(IOTimerEventSource*)
 AppleUSBXDCIEndpoint
 AppleUSBXDCIEventHandler
 - initRegisters()
@@ -11931,55 +11931,55 @@ IOPCI2PCIBridge
 - saveBridgeState()
 - restoreBridgeState()
 IOPCIBridge
+- isDTNub(IOPCIDevice*)
+- probeBus(IOService*, unsigned char)
+- firstBusNum()
+- lastBusNum()
+- spaceFromProperties(OSDictionary*, IOPCIAddressSpace*)
+- constructProperties(IOPCIAddressSpace)
+- createNub(OSDictionary*)
+- initializeNub(IOPCIDevice*, OSDictionary*)
+- publishNub(IOPCIDevice*, unsigned int)
+- addBridgeMemoryRange(unsigned long long, unsigned long long, bool)
+- addBridgeIORange(unsigned long long, unsigned long long)
+- constructRange(IOPCIAddressSpace*, unsigned long long, unsigned long long, OSArray*)
+- matchNubWithPropertyTable(IOService*, OSDictionary*, int*)
+- compareNubName(IOService const*, OSString*, OSString**) const
+- pciMatchNub(IOPCIDevice*, OSDictionary*, int*)
+- matchKeys(IOPCIDevice*, char const*, unsigned int, unsigned char)
+- getNubResources(IOService*)
+- getNubAddressing(IOPCIDevice*)
+- getDTNubAddressing(IOPCIDevice*)
+- configure(IOService*)
+- ioDeviceMemory()
+- configRead32(IOPCIAddressSpace, unsigned char)
+- configWrite32(IOPCIAddressSpace, unsigned char, unsigned int)
+- configRead16(IOPCIAddressSpace, unsigned char)
+- configWrite16(IOPCIAddressSpace, unsigned char, unsigned short)
+- configRead8(IOPCIAddressSpace, unsigned char)
+- configWrite8(IOPCIAddressSpace, unsigned char, unsigned char)
+- getBridgeSpace()
+- findPCICapability(IOPCIAddressSpace, unsigned char, unsigned char*)
+- setDevicePowerState(IOPCIDevice*, unsigned long)
+- saveDeviceState(IOPCIDevice*, unsigned int)
+- restoreDeviceState(IOPCIDevice*, unsigned int)
+- createAGPSpace(IOAGPDevice*, unsigned int, unsigned long long*, unsigned long long*)
+- destroyAGPSpace(IOAGPDevice*)
+- getAGPRangeAllocator(IOAGPDevice*)
+- getAGPStatus(IOAGPDevice*, unsigned int)
+- resetAGPDevice(IOAGPDevice*, unsigned int)
+- getAGPSpace(IOAGPDevice*, unsigned long long*, unsigned long long*)
+- commitAGPMemory(IOAGPDevice*, IOMemoryDescriptor*, unsigned long long, unsigned int)
+- releaseAGPMemory(IOAGPDevice*, IOMemoryDescriptor*, unsigned long long, unsigned int)
+- addBridgePrefetchableMemoryRange(unsigned long long, unsigned long long, bool)
+- extendedFindPCICapability(IOPCIAddressSpace, unsigned int, unsigned long long*)
+- setDeviceASPMState(IOPCIDevice*, IOService*, unsigned int)
+- checkLink(unsigned int)
+- enableLTR(IOPCIDevice*, bool)
+- createEventSource(IOPCIDevice*, OSObject*, void (*)(OSObject*, IOPCIEventSource*, IOPCIEvent const*), unsigned int)
 -
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
--
+- deviceMemoryRead(IOMemoryDescriptor*, unsigned long long, IOMemoryDescriptor*, unsigned long long, unsigned long long)
+- deviceMemoryRead(IOMemoryDescriptor*, unsigned long long, void*, unsigned long long)
 IOPCIConfigurator
 IOPCIDevice
 - configRead32(IOPCIAddressSpace, unsigned char)
