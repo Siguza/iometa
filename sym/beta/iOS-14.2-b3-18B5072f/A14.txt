@@ -1,3 +1,5 @@
+ABPCallee
+-
 ACMAccessoryCacheKernelService
 ACMBridgeKernelService
 ACMFirstResponderKernelService
@@ -20,16 +22,32 @@ AEARuntimeRegisterPatch
 AEARuntimeRegisterPatchForI2C
 - searchPatchRegisterList(unsigned int)
 - setRegisterAddressMask(unsigned int)
+AFKEndpoint
+AFKEndpointInterface
+AFKEndpointInterfaceClient
+AFKEndpointInterfaceUserClient
+AFKFirmwareService
+AFKMailboxSharedMemoryEndpoint
+- handleAssertion(bool)
+- getPowerProvider() const
+AFKMailboxSharedMemoryEndpointInterface
+- open(IOService*, void (IOService*, AFKEndpointInterface*, void*, int, unsigned long long, void const*, unsigned long) block_pointer, void (IOService*, AFKEndpointInterface*, unsigned int, unsigned long long, void const*, unsigned long, unsigned int) block_pointer, void (IOService*, AFKEndpointInterface*, AFKEndpointInterface::CommandContext*, unsigned int, unsigned long long, void const*, unsigned long, unsigned int) block_pointer)
+- enqueueCommand(void*, unsigned int, unsigned long long, void const*, unsigned long, unsigned long, unsigned int)
+- abortCommand(void*)
+- enqueueReport(unsigned int, unsigned long long, void const*, unsigned long, unsigned int)
+- enqueueResponse(AFKEndpointInterface::CommandContext*, int, unsigned long long, void const*, unsigned long, unsigned int)
+AFKRemoteMemoryDescriptorAllocator
+AFKSharedDataQueue
 AGX3DChannel
-AGX3DChannelG12
+AGX3DChannelG13
 - AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
 - AGXChannel::encodeInvalidateUSCInstCache()
 - AGXChannel::encodeInvalidateDynamicConstantCache()
 - AGXChannel::encodeInvalidatePDSCache(_AGFIDataMasterType)
-- AGX3DChannel::init(AGXCommandQueue const*, AGXWorkQueue*, int, int, unsigned long long)
+- AGX3DChannel::init(AGXCommandQueue const*, int, int, unsigned long long)
 - AGXChannel::prepare()
 - AGXChannel::complete()
-- AGXChannel::setPriority(eAGXContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
+- AGXChannel::setPriority(AGFIContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
 - AGXChannel::resetChannelState()
 - AGX3DChannel::describeAllocationsForPID(IOGPUAllocationInfo*, int)
 - AGXChannel::getPriority()
@@ -192,9 +210,14 @@ AGXAccelerator
 - setPropertyQoSMode(OSDictionary*, OSObject*)
 - setPropertyNoiseSuppressionGPUIdlePowerOffState(OSDictionary*, OSObject*)
 - setPropertyDefaultQoSTargets(OSDictionary*, OSObject*)
-AGXAcceleratorG12
-AGXAcceleratorG12P_A0
-AGXAcceleratorG12P_B0
+AGXAcceleratorG13
+- probePowerUpGPU() const
+- AGXFamilyAccelerator::getProbeScore()
+- getSupportedRevisions() const
+- readChipInfo(AGXGPUCoreConfig*) const
+- getFirstMMUFaultStatus(AGXAccelerator::MMUFaultInfo&)
+AGXAcceleratorG13P_A0
+AGXAcceleratorG13P_B0
 AGXAllocation
 AGXAllocationList2
 AGXArmFirmware
@@ -212,19 +235,19 @@ AGXArmFirmwareChinookCommon
 - AGXArmFirmware::endSleepTransition()
 - AGXArmFirmware::isQB() const
 - AGXArmFirmware::setupMMUConfig()
-AGXArmFirmwareChinookV4
+AGXArmFirmwareChinookV6
 AGXArmFirmwareMapper
 AGXBlockFence
 AGXCLChannel
-AGXCLChannelG12
+AGXCLChannelG13
 - AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
 - AGXChannel::encodeInvalidateUSCInstCache()
 - AGXChannel::encodeInvalidateDynamicConstantCache()
 - AGXChannel::encodeInvalidatePDSCache(_AGFIDataMasterType)
-- AGXCLChannel::init(AGXCommandQueue const*, AGXWorkQueue*, int, int, unsigned long long)
+- AGXCLChannel::init(AGXCommandQueue const*, int, int, unsigned long long)
 - AGXChannel::prepare()
 - AGXChannel::complete()
-- AGXChannel::setPriority(eAGXContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
+- AGXChannel::setPriority(AGFIContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
 - AGXChannel::resetChannelState()
 - AGXCLChannel::describeAllocationsForPID(IOGPUAllocationInfo*, int)
 - AGXChannel::getPriority()
@@ -259,12 +282,8 @@ AGXDeviceUserClient
 - getSettingsFromKMD(AGXSettingsFromKMD*)
 AGXEventMachine
 AGXFamilyAccelerator
-- probePowerUpGPU() const
-- getProbeScore()
-- getSupportedRevisions() const
-- readChipInfo(AGXGPUCoreConfig*) const
 AGXFastRenderTarget
-AGXFastRenderTargetG12
+AGXFastRenderTargetG13
 - halValidateInput(AGXFastRenderTargetInfoRec const*)
 - halComputeGeometry()
 AGXFirmware
@@ -294,7 +313,7 @@ AGXFirmware
 - setGPUMaxPower(unsigned int)
 - getGPUMaxPower()
 - allocateSharedData(sharedDataDescriptor*, bool)
-- updateSubmitInProgress(bool, eAGXContextPriorityType)
+- updateSubmitInProgress(bool, AGFIContextPriorityType)
 - submitTAChannel(AGXChannel*, unsigned int, unsigned int, unsigned int)
 - submit3DChannel(AGXChannel*, unsigned int, unsigned int, unsigned int)
 - submitCLChannel(AGXChannel*, unsigned int, unsigned int, unsigned int)
@@ -379,7 +398,7 @@ AGXFirmware
 - joinPMPowerManagement(IOService*, IOService*)
 - setAbsTimeOffset()
 - getMCacheRegistersBaseAddress()
-- setChannelPriority(_AGFIChannelState*, eAGXContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
+- setChannelPriority(_AGFIChannelState*, AGFIContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
 - enableConsistentGPUPerfState(bool, unsigned int)
 - isConsistentGPUPerfStateEnabled() const
 - wasConsistentGPUPerfStateMaintained() const
@@ -423,7 +442,7 @@ AGXFirmware
 - updatePerfStateCap(OSObject*)
 - setPPMControllerTarget(unsigned int)
 - setCLPCDeadlineControlEffort(unsigned int)
-AGXFirmwareKextG12RTBuddy
+AGXFirmwareKextG13RTBuddy
 AGXFirmwareKextRTBuddy
 - initRTBuddyEndpoint(AGXAccelerator*, AGXArmFirmware*, char const*)
 - bootFirmware(IOMemoryMap*)
@@ -446,7 +465,7 @@ AGXFirmwareKextRTBuddy
 - powerStateChange(unsigned long, unsigned long)
 AGXGFXDVAccessor
 AGXGart
-AGXGartG12
+AGXGartG13
 - AGXSecureGart::init(AGXAccelerator*, task*, unsigned long long)
 - AGXSecureGart::allocPageTables(unsigned long long, unsigned long long)
 - AGXSecureGart::freePageTables(unsigned long long, unsigned long long)
@@ -476,6 +495,36 @@ AGXIOFenceData
 AGXInvalidChannel
 - init(AGXAccelerator*)
 AGXLegacyGart
+AGXLegacyGartG13
+- AGXLegacyGart::init(AGXAccelerator*, task*, unsigned long long)
+- AGXLegacyGart::allocPageTables(unsigned long long, unsigned long long)
+- AGXLegacyGart::freePageTables(unsigned long long, unsigned long long)
+- AGXLegacyGart::getPageTableEntry(unsigned long long)
+- AGXLegacyGart::mapWithAddress(IOMemoryDescriptor*, unsigned long long, unsigned long long, unsigned char)
+- AGXLegacyGart::unmapWithAddress(IOMemoryDescriptor*, unsigned long long, unsigned long long)
+- AGXLegacyGart::isGartInvalidateNeeded(unsigned int*)
+- AGXLegacyGart::getLatestInvalStatus() const
+- AGXLegacyGart::getLatestInvalStatusUnlocked()
+- AGXLegacyGart::getDummyPagePhysicalAddress()
+- AGXLegacyGart::getGartPhysicalBaseAddress(unsigned int)
+- AGXLegacyGart::allocate(unsigned long long, unsigned long long, unsigned int, IOGPURangeElement*)
+- AGXLegacyGart::deallocate(unsigned long long, unsigned int, unsigned long long, IOGPURangeElement*)
+- AGXLegacyGart::isPageFaultExpected(unsigned long long, unsigned int)
+- AGXGart::isHWSoftFaultEnabled() const
+- registerContextID(int, _AGXGartContextIDSelect)
+- AGXGart::commitUnmaps()
+- AGXGart::freeOrphanedToAllocGPUVirtualAddress()
+- AGXGart::getCodeGartRangeInfo(unsigned long long*, unsigned long long*)
+- AGXGart::getOptions()
+- AGXLegacyGart::updatePageTableEntry(unsigned long long, unsigned long long, unsigned char, bool)
+- AGXLegacyGart::clearPageTableEntry(unsigned long long)
+- AGXLegacyGart::isPageTableEntryEmpty(unsigned long long)
+- AGXLegacyGart::isMappedToDummyPage(unsigned long long)
+- encodePCEFlags()
+- encodePDEFlags()
+- encodePTEFlags(unsigned int)
+- AGXLegacyGart::allocateGart()
+- AGXLegacyGart::freeGart()
 AGXLegacyMemoryMap
 - AGXMemoryMap::isStandardFWMapping() const
 - AGXMemoryMap::notifyFirmwareOfMapping()
@@ -484,6 +533,16 @@ AGXLegacyMemoryMap
 - AGXMemoryMap::__validateMapping()
 - AGXMemoryMap::setSleepLockException(bool)
 AGXLegacySharedGartTableBacking
+AGXLegacySharedGartTableBackingG13
+- AGXLegacySharedGartTableBacking::init(AGXAccelerator*)
+- AGXLegacySharedGartTableBacking::allocPageDirectory(unsigned long long)
+- AGXLegacySharedGartTableBacking::freePageDirectory(unsigned long long)
+- AGXLegacySharedGartTableBacking::allocPageTable(unsigned long long, unsigned long long)
+- AGXLegacySharedGartTableBacking::freePageTable(unsigned long long, unsigned long long)
+- AGXLegacySharedGartTableBacking::getPageTableDesc(unsigned long long, unsigned long long)
+- AGXLegacySharedGartTableBacking::getPageTablePtr(unsigned long long, unsigned long long)
+- AGXLegacySharedGartTableBacking::setDummyInfo(unsigned long long*, unsigned long long)
+- initGartInfo()
 AGXMTLCounterSampler
 - init(AGXAccelerator*)
 AGXMemoryMap
@@ -576,7 +635,7 @@ AGXRenderTargetMemory
 - setTileWalkOrder(AGXWalkOrder)
 - halValidateInput(AGXRenderTargetInfoRec const*)
 - halComputeGeometry(unsigned int, unsigned int)
-AGXRenderTargetMemoryG12
+AGXRenderTargetMemoryG13
 AGXResource
 - addToAperture()
 - removeFromAperture()
@@ -592,7 +651,7 @@ AGXSecureMemoryMap
 - setSleepLockException(bool)
 - getCPUMemoryMap() const
 AGXSecureMonitor
-AGXSecureMonitorG12
+AGXSecureMonitorG13
 - readGPTBATBaseAddress() const
 - issueTLBIInternal(unsigned int, unsigned long long, unsigned long long, unsigned int)
 - issueDSBInternal(unsigned int)
@@ -611,7 +670,7 @@ AGXShared
 - setRDEBufferMap(AGXMemoryMap*)
 - setSourceBufferMap(unsigned int, AGXMemoryMap*)
 AGXSharedGartTableBacking
-AGXSharedGartTableBackingG12
+AGXSharedGartTableBackingG13
 - AGXSecureSharedGartTableBacking::init(AGXAccelerator*)
 - AGXSecureSharedGartTableBacking::allocPageDirectory(unsigned long long)
 - AGXSecureSharedGartTableBacking::freePageDirectory(unsigned long long)
@@ -624,22 +683,22 @@ AGXSharedGartTableBackingG12
 AGXSpillBufferManager
 AGXStatistics
 AGXTAChannel
-AGXTAChannelG12
+AGXTAChannelG13
 - AGXChannel::writeChannelCommandPointer(unsigned long long, AGFIChannelCommandType*)
 - AGXChannel::encodeInvalidateUSCInstCache()
 - AGXChannel::encodeInvalidateDynamicConstantCache()
 - AGXChannel::encodeInvalidatePDSCache(_AGFIDataMasterType)
-- AGXTAChannel::init(AGXCommandQueue const*, AGXWorkQueue*, int, int, unsigned long long)
+- AGXTAChannel::init(AGXCommandQueue const*, int, int, unsigned long long)
 - AGXChannel::prepare()
 - AGXChannel::complete()
-- AGXChannel::setPriority(eAGXContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
+- AGXChannel::setPriority(AGFIContextPriorityType, unsigned int, eIOGPUCommandQueueQosLevel)
 - AGXChannel::resetChannelState()
 - AGXTAChannel::describeAllocationsForPID(IOGPUAllocationInfo*, int)
 - AGXChannel::getPriority()
 - AGXTAChannel::getGuiltyDMType() const
 - encodeTACommandSKUStream(AGFIChannelCommandTA*, AGXTACommandDescriptor*, unsigned long long, IOGPUEvent const*)
 - generateSKURegisterList(AGFIChannelCommandTA*, AGXTACommandDescriptor*)
-- AGXTAChannel::generatePreparseBarrierRegister(AGFIBarrierState*, AGXTACommandDescriptor const*, _AGFIChannelStampUpdateInfo const*)
+- generatePreparseBarrierRegister(AGFIBarrierState*, AGXTACommandDescriptor const*, _AGFIChannelStampUpdateInfo const*)
 - encodeTAFinishWFI()
 AGXTAChannelGen2
 AGXTACommandDescriptor
@@ -677,7 +736,6 @@ AGXWorkQueue
 - resetChannelState()
 - scrubEvents()
 AHSActiveSessionEvent
-AHSCallanSymbols
 AHSCommandQueue
 AHSEvent
 AHSEventCollection
@@ -816,6 +874,18 @@ AUC
 - hdcp_get_reply(unsigned char*, unsigned long*)
 - hdcp_ConnectionWatchdog_will_stop(ConnectionWatchdog*)
 AUCUserClient
+AWCAccessoryManager
+AWCAuthCPRelayInterface
+- c26Receive(void const*, unsigned long)
+AWCButtonServiceMatchingEventSource
+AWCDebugTunnel
+- c26Receive(void const*, unsigned long)
+AWCImageDownloader
+AWCOOBPInterface
+- c26Receive(void const*, unsigned long)
+AWCSKextLog
+AWCSmartCoverStateEventSource
+AWCSystemStateEventSource
 AppleA7IOP
 - initialize()
 - postMailbox(unsigned int, void*, unsigned int, bool)
@@ -868,10 +938,6 @@ AppleAD5860
 - _readReg(unsigned char)
 - _multiByteReadReg(unsigned char, unsigned int, unsigned char*)
 - _maskWriteReg(unsigned char, unsigned char, unsigned char)
-AppleAD81006
-- getUID() const
-- _createReporters()
-- _destroyReporters()
 AppleAGXFunctionMetrology
 AppleAJPEGHal
 - checkHardwareVersion(bool, bool&, bool&, bool&)
@@ -1166,7 +1232,6 @@ AppleARMFunctionIISActive
 - interestNotification(void*, unsigned int, IOService*, void*, unsigned long)
 AppleARMFunctionIISRoute
 AppleARMFunctionMCA2Config
-- shouldZeroFillFifo() const
 AppleARMFunctionPerfAdvise
 - registerAction(OSObject*, int (*)(OSObject*, bool, bool, unsigned int))
 - unregisterAction()
@@ -1336,19 +1401,6 @@ AppleARMIODevice
 - isDMACoherent(unsigned int)
 AppleARMLightEmUp
 AppleARMMIPIDSIController
-- enableInterface(bool)
-- enableHighSpeedMode(bool)
-- enableVideo(bool)
-- sendShortCommand(unsigned char, unsigned char, unsigned char)
-- sendLongCommand(unsigned char, unsigned char const*, unsigned long long)
-- receiveShortCommand(unsigned char, unsigned char*)
-- receiveLongCommand(unsigned char, unsigned char*, unsigned long long*)
-- setLPMEnable(bool)
-- getSupportLPM()
-- getDisplayTiming(bool, display_timing_t*)
-- newDeviceWithRegistryEntry(IORegistryEntry*, IOService*)
-- publishBelow(IORegistryEntry*)
-- compareNubName(IOService const*, OSString*, OSString**) const
 AppleARMMIPIDSIDevice
 - initWithRegistryEntry(IORegistryEntry*, IOService*)
 - enableInterface(bool)
@@ -1546,6 +1598,24 @@ AppleASCANS2
 AppleASCWrapV2
 AppleASCWrapV4
 AppleASCWrapV4SEP
+AppleASMedia1042USBXHCI
+AppleASMedia1042USBXHCICommandRing
+AppleASMedia3142USBXHCI
+- validateFirmware(unsigned char const*, unsigned int, unsigned char const**)
+- loadFirmware(unsigned char const*, unsigned int)
+- loadFirmwareGated(unsigned char const*, unsigned int)
+- waitForIndirectWriteToComplete()
+- indirectWrite(unsigned short, unsigned char)
+- indirectRead(unsigned short, unsigned char*)
+- waitForReset()
+- setProgramAddress(unsigned short)
+- programRAM(unsigned short, unsigned int, unsigned char)
+- getFirmwareVersion(unsigned long long*)
+- waitForControlWriteComplete()
+- waitForControlReadReady()
+- sendCommand(unsigned char, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)
+AppleASMediaUSBXHCI
+AppleASMediaUSBXHCIStreamingEndpoint
 AppleAVD
 - createWorkLoop()
 AppleAVDUserClient
@@ -2479,6 +2549,137 @@ AppleBaseband
 - startModemThread()
 - modemThreadMainLoop()
 AppleBasebandI19
+AppleBasebandM20
+- toggleBBPMUPin(unsigned int)
+- toggleBBPMUPin(unsigned int, unsigned int*, unsigned int*)
+-
+AppleBasebandN71
+- waitForResetGated(unsigned int) const
+AppleBasebandPCI
+- openService(IOService*)
+- closeService(IOService*)
+- mapBar(unsigned long long*, unsigned int*, unsigned long long*, unsigned int*)
+- unmapBar()
+- saveDeviceState(unsigned int)
+- restoreDeviceState(unsigned int)
+- registerWorkLoop(IOWorkLoop*)
+- registerMSI(unsigned char, OSObject*, void (*)(OSObject*, IOInterruptEventSource*, int))
+- registerAER(OSObject*, void (*)(OSObject*, IOPCIEventSource*, IOPCIEvent const*))
+- getMapper()
+-
+- getInLowPower()
+- notifyTerminateAck(IOService*)
+- setPowerOn(bool)
+- enableL1SS()
+- enableASPM(bool)
+- enableHostMemProtection(unsigned long long, unsigned long long)
+- getCurrentLinkSpeed(unsigned int*)
+- gatherEPConfigRegSpace()
+- willTerminateGated(IOService*, unsigned int)
+- setPowerStateGated(unsigned long, IOService*)
+- getInLowPowerGated()
+- notifyTerminateAckGated(IOService*)
+- openServiceGated(IOService*)
+- closeServiceGated(IOService*)
+- mapBarGated(unsigned long long*, unsigned int*, unsigned long long*, unsigned int*)
+- unmapBarGated()
+- saveDeviceStateGated(unsigned int)
+- restoreDeviceStateGated(unsigned int)
+- validateMSIIndex(unsigned char)
+- enableL1SSGated()
+- enableASPMGated(void*)
+- enableHostMemProtectionGated(unsigned long long, unsigned long long)
+- getCurrentLinkSpeedGated(unsigned int*)
+- serialEPConfigRead(IOPCIDevice*, unsigned long long, unsigned int*, unsigned int)
+AppleBasebandPCIBHIDevice
+- initWithInfo()
+- getABPDevice() const
+- getMapper() const
+- errorFunction(abpErrorType, void*, void*)
+- prepareDMATransfer(IOMemoryDescriptor*, IODMACommand**)
+- clearDMATransfer(IODMACommand**)
+- getDMATransferPhysicalAddress(IODMACommand*, unsigned long long*)
+- createSetupDevice()
+- createSetupInterface()
+- terminateInterface()
+AppleBasebandPCIBHIInterface
+- initWithInfo()
+- closeGated(IOService*, unsigned int)
+- createSetupChannel()
+- errorFunction(abpErrorType, void*, void*)
+- synchronousFunction(void*, int, unsigned long long, void*)
+- sendImageGated(AppleBasebandPCIBHIInterface::tParams*)
+- sendImageCompletionFunction(int, unsigned int, unsigned int)
+- sendImageCompletionGated(int, unsigned int, unsigned int)
+- readRegisterGated(AppleBasebandPCIBHIInterface::rParams*)
+AppleBasebandPCIControl
+- getABPControl() const
+- getMapper() const
+- getMemoryPolicyInfo() const
+- errorFunction(abpErrorType, void*, void*)
+- prepareDMATransfer(IOMemoryDescriptor*, IODMACommand**)
+- clearDMATransfer(IODMACommand**)
+- getDMATransferPhysicalAddress(IODMACommand*, unsigned long long*)
+- enableUnlockPort()
+- disableLockPort()
+- portDeepSleep(bool)
+- deviceWakeDeadTimeSample()
+- deviceWakeDeadTimeWait()
+- queueLogBuffer(IOMemoryDescriptor*, IOABPCompletion*, bool)
+- setBootStage(abpBootStage)
+- loggerKnob(unsigned int, unsigned int, void*, void*)
+- getDeviceDescriptorDict()
+- getLinkSpeedDict()
+- pcieResetSeperationROMWA()
+- setPowerStateGated(unsigned long, IOService*)
+- powerStateWillChangeToGated(unsigned long, unsigned long, IOService*)
+- powerStateDidChangeToGated(unsigned long, unsigned long, IOService*)
+- createSetupControl()
+- createSetupPort()
+- terminateDevice()
+- createDeviceFunction(bool, unsigned int)
+- linkStateUpFunction(unsigned long long*, unsigned int*, unsigned long long*, unsigned int*)
+- sleepAckFunction()
+- deviceWakeFunction(bool)
+- timerFunction(void (*)(void*, void*), unsigned long long, void*, void*)
+- portManualEnableFunction(bool, bool)
+- portChangeFunction(bool, int)
+- portQuiesceWaitFunction(bool, void*)
+- asyncFunction(void (*)(void*, void*), void*, void*)
+- timerCompletion(IOTimerEventSource*)
+- asyncThreadCallGated()
+- serviceNotifier(void*, IOService*, IONotifier*)
+- serviceRegisterGated(IOService*, void*)
+- pciMessage(void*, unsigned int, IOService*, void*, unsigned long)
+- basebandMessage(void*, unsigned int, IOService*, void*, unsigned long)
+- systemPowerMessage(void*, unsigned int, IOService*, void*, unsigned long)
+- handleTLPCompletionTimeoutGated()
+- handleAER(IOPCIEventSource*, IOPCIEvent*)
+- enableUnlockPortGated()
+- disableLockPortGated()
+- setupDARTWindowGated()
+- handlePCIMessage(unsigned int)
+- pciMessageGated(AppleBasebandPCIControl::pciMessageData*)
+- setupBasebandService()
+- releaseBasebandService()
+- requestPortOffCycle()
+- requestPortOffCycleGated()
+-
+- setLinkSpeed(OSNumber*)
+- setLinkSpeedGated(OSNumber*)
+-
+-
+- linkSpeedCheck(IOTimerEventSource*)
+- getLinkSpeedForKey(char const*)
+- getInitialLinkSpeed()
+- getDesiredLinkSpeed()
+-
+AppleBasebandPCIControlUserClient
+- clientCloseGated()
+- openGated(IOService*, unsigned int, void*)
+- closeGated(IOService*, unsigned int)
+- readLogs(unsigned long long, unsigned long long, bool, IOABPCompletion*)
+- loggerKnob(unsigned int, unsigned int, void*, void*)
 AppleBasebandPCIEDevice
 - findPCIControl()
 - checkPCIDriverIsUp()
@@ -2489,6 +2690,254 @@ AppleBasebandPCIEDevice
 - updatePCIDriverIsUp(bool)
 - notifyCompletionTimeoutAsync()
 - notifyCompletionTimeoutThreadGated()
+AppleBasebandPCIIOCommand
+- initWithPool(AppleBasebandPCIIOCommandPool*)
+- prepare(AppleBasebandPCIRequest*, AppleBasebandPCIIOCommand*)
+- prepare(IOABPCompletion*, AppleBasebandPCIIOCommand*)
+- cancel()
+- complete()
+- getCompletionSize()
+- setIO(unsigned long long, unsigned long long, bool, bool, abpIOQueue*)
+- setEOT()
+- setChunks(unsigned short)
+- setNext(AppleBasebandPCIIOCommand*)
+- getName() const
+- finish()
+- cleanCommandParamters()
+- ioCompletionFunction(int, unsigned int)
+AppleBasebandPCIIOCommandPool
+AppleBasebandPCIInterface
+- prepareImageCommand(IOMemoryDescriptor*, IODMACommand**)
+- finishImageCommand(IODMACommand**)
+- sendImage(IODMACommand**, unsigned int, void**, IOABPCompletion*)
+- readRegister(unsigned int, unsigned char*, unsigned int*)
+- prepareMemoryCommand(IOMemoryDescriptor*, AppleBasebandPCIIODirection, AppleBasebandPCIMemoryCommand**, bool)
+- prepareMemoryCommand(__mbuf*, unsigned long long, AppleBasebandPCIIODirection, AppleBasebandPCIMemoryCommand**, bool)
+- finishMemoryCommand(AppleBasebandPCIMemoryCommand**)
+- write(AppleBasebandPCIMemoryCommand**, IOABPCompletion*)
+- write(AppleBasebandPCISkywalkPacket*, AppleBasebandPCISkywalkPacket*, IOABPCompletion*)
+- read(AppleBasebandPCIMemoryCommand**, unsigned long long*, void**, IOABPCompletion*)
+- read(AppleBasebandPCISkywalkPacket*, AppleBasebandPCISkywalkPacket*, IOABPCompletion*)
+- abortChannel(abpDirection, IOABPCompletion*)
+- startChannel(abpDirection, IOABPCompletion*)
+- timeSync(IOMemoryDescriptor*, IOABPCompletion*)
+- getCommandGate() const
+- getIOCommand()
+- getMaxChunkSize() const
+- getMapper() const
+- compareProp(OSDictionary*, OSSymbol const*)
+AppleBasebandPCIMAVControl
+AppleBasebandPCIMAVPDPManager
+AppleBasebandPCIMHIDevice
+- initWithInfo()
+- getABPDevice() const
+- isTypeNoCopyMemoryCommand(unsigned long long) const
+- getMemoryCommand(unsigned long long, bool)
+- getRequest()
+- getIOCommand()
+- getChannelProperties(unsigned int) const
+- assignChannelMemory(unsigned long long*, unsigned long long*, unsigned int, unsigned int)
+- errorFunction(abpErrorType, void*, void*)
+- triggerAsync(bool, unsigned int)
+- getReporter() const
+- getMapper() const
+- createPools()
+- teardownPools()
+- createSetupDevice()
+- allocateDeviceMemory()
+- computeDeviceMemory()
+- freeDeviceMemory()
+- setupDeviceParams(abpMHIDeviceParams*)
+- printDeviceParams(abpMHIDeviceParams*)
+- clearDeviceParams(abpMHIDeviceParams*)
+- createSetupInterfaces(abpMAVDeviceExecEnv)
+- createSetupInterface(OSArray*, abpMAVDeviceExecEnv, unsigned int)
+- terminateInterfaces()
+- allocateChannelMemory(OSArray*, abpMAVDeviceExecEnv)
+- computeChannelMemory(OSArray*, abpMAVDeviceExecEnv)
+- freeChannelMemory()
+- timerFunction(void (*)(void*, void*), unsigned long long, void*, void*)
+- timerCompletion(IOTimerEventSource*)
+- execEnvChangeFunction(abpMAVDeviceExecEnv)
+- mStateChangeFunction(abpMHIState, abpMHIState)
+- asyncCallCountUpdate()
+- asyncCompletion(IOInterruptEventSource*, int)
+AppleBasebandPCIMHIInterface
+- initWithInfo(unsigned int)
+- asyncCompletion(unsigned int)
+- getRequest()
+- openGated(IOService*, unsigned int, void*)
+- closeGated(IOService*, unsigned int)
+- createSetupInterface()
+- setupChannel(OSDictionary*)
+- printChannelParams(abpMHIChannelParams*)
+- validateProperties()
+- errorFunction(abpErrorType, void*, void*)
+- asyncFunction(abpMHIChannelDirection, void (*)(void*, void*), void*, void*)
+- synchronousFunction(void*, int, unsigned long long, void*)
+- writeGated(AppleBasebandPCIMHIInterface::tParams*)
+- readGated(AppleBasebandPCIMHIInterface::tParams*)
+- startChannels()
+- abortChannels()
+- abortChannelGated(AppleBasebandPCIMHIInterface::tParams*)
+- startChannelGated(AppleBasebandPCIMHIInterface::tParams*)
+- userLogKnob(void*, void*)
+- isValidDirectionForInterface(AppleBasebandPCIIODirection)
+AppleBasebandPCIMemoryCommand
+- initWithInfo(AppleBasebandPCIMemoryCommandPool*, AppleBasebandPCIMemoryPolicy*, unsigned long long, unsigned long long, unsigned long long)
+- isAlive() const
+- getPa() const
+- getPlayMemSize() const
+- getNext() const
+- prepare(IOMemoryDescriptor*, AppleBasebandPCIIODirection, AppleBasebandPCIMemoryCommand*, unsigned int, unsigned int)
+- prepare(__mbuf*, unsigned long long, AppleBasebandPCIIODirection)
+- transferDone(unsigned long long)
+- cancel()
+- complete()
+- readData(void*, unsigned long long)
+- setNext(AppleBasebandPCIMemoryCommand*)
+- prepareOut(IOMemoryDescriptor*)
+- prepareIn(IOMemoryDescriptor*)
+- prepareOut(__mbuf*)
+- prepareIn()
+- bounceOut(IOMemoryDescriptor*)
+- bounceIn(IOMemoryDescriptor*, unsigned long long*)
+- bounceOut(__mbuf*)
+- bounceIn(__mbuf*, unsigned long long)
+- finish()
+- cleanCommandParamters()
+- getName() const
+AppleBasebandPCIMemoryCommandPool
+- initWithInfo(IOWorkLoop*, unsigned long long, AppleBasebandPCIMemoryPolicyInfo*)
+- getCmdSize() const
+AppleBasebandPCIMemoryPolicy
+- initWithInfo(AppleBasebandPCIMemoryPolicyInfo*, unsigned int)
+- prepareMemory(IOMemoryDescriptor*, bool)
+- completeMemory()
+- getVirtualAddress(unsigned long long*)
+- getPhysicalAddress(unsigned long long*)
+- setZombie()
+- getZombie() const
+- updateUse(bool)
+- readData(unsigned long long, void*, unsigned long long)
+- getName() const
+- allocatePrepareMemory()
+- prepareDMATransfer(IOMemoryDescriptor*)
+- clearDMATransfer()
+AppleBasebandPCIMemoryPolicyInfo
+- initWithInfo(unsigned long long, IOMapper*)
+- setMapper(IOMapper*)
+- getMapper() const
+- addNode(AppleBasebandPCIMemoryPolicy*, unsigned long long)
+- removeNode(AppleBasebandPCIMemoryPolicy*, unsigned long long)
+- moveNode(bool, AppleBasebandPCIMemoryPolicy*)
+- getName() const
+AppleBasebandPCIMessageQueueBase
+-
+-
+-
+AppleBasebandPCIPDPManagerBase
+- reportMessage(abpPDPMessageType, void*)
+- createMediaInterface(unsigned int, IOWorkLoop*)
+-
+AppleBasebandPCIPDPQMAPSkywalk
+AppleBasebandPCIPDPSkywalkInterface
+AppleBasebandPCIPool
+- stop()
+- gatedStop()
+- allocateReturnCommand()
+- getName() const
+AppleBasebandPCIQMAPControl
+AppleBasebandPCIRequest
+- initWithPool(AppleBasebandPCIRequestPool*)
+- prepare(AppleBasebandPCIInterface*, AppleBasebandPCIMemoryCommand*, IOABPCompletion*, bool, bool)
+- cancel()
+- complete(int, unsigned long long)
+- getIOQueue()
+- cancelCompletion()
+- cleanRequestParamters()
+- completeGatedFunction(void*, void*, void*)
+- getName() const
+AppleBasebandPCIRequestPool
+AppleBasebandPCISkywalkInterfaceBase
+-
+- allocQueues()
+- rxQueueCallbackGated(IOSkywalkRxCompletionQueue*, IOSkywalkPacket**, unsigned int, void*)
+- txQueueCallbackGated(IOSkywalkTxSubmissionQueue*, IOSkywalkPacket* const*, unsigned int, void*)
+- txCompletionCallbackGated(IOSkywalkTxCompletionQueue*, IOSkywalkPacket**, unsigned int, void*)
+- queryFreeSpace(IOSkywalkTxSubmissionQueue*, unsigned int*)
+- createMatchingServiceDict()
+- pciRegisterGated()
+- handlePCIServicePublishGated()
+- handlePCIServiceTerminateGated()
+- handleServiceOpen()
+- updateEnabled()
+- computeEnablementState()
+AppleBasebandPCISkywalkMemorySegment
+- map()
+- unmap()
+- invalidateMapping()
+AppleBasebandPCISkywalkPacket
+AppleBasebandPCISkywalkPacketBufferPool
+AppleBasebandPCISkywalkProvider
+- requestRxGated(AppleBasebandPCIPDPSkywalkInterface*, IOSkywalkPacket**, unsigned int)
+- requestTxGated(AppleBasebandPCIPDPSkywalkInterface*, IOSkywalkPacket* const*, unsigned int)
+- requestTxCompletionGated(AppleBasebandPCIPDPSkywalkInterface*, IOSkywalkPacket**, unsigned int)
+-
+- initUserDefaults(OSDictionary*)
+- allocateStats(unsigned int*)
+- deleteStats()
+- openGated(IOService*, unsigned int, void*)
+- closeGated(IOService*, unsigned int)
+- outputComplete(void*, int, unsigned long long, void*)
+- readComplete(void*, int, unsigned long long, void*)
+- setPowerStateGated(unsigned long, IOService*)
+- enterLowPowerGated()
+- exitLowPowerGated()
+- queueRxBuffersGated(IOSkywalkRxSubmissionQueue*, IOSkywalkPacket* const*, unsigned int, void*)
+- rawTxCacheSize()
+- isFlowControlled(unsigned int)
+- createRxSubmissionQueue()
+AppleBasebandPCIStewieSkywalkInterface
+AppleBasebandPCITraceBackend
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+AppleBasebandPCITraceBackendRaw
+AppleBasebandPCITraceBuffer
+-
+AppleBasebandPCITraceBufferQueue
+AppleBasebandPCITraceCodeRegistry
+AppleBasebandPCITracePipeRegistry
+AppleBasebandPCITraceUserClient
+AppleBasebandPCIUserClient
+- clientCloseGated()
+- openGated(IOService*, unsigned int, void*)
+- closeGated(IOService*, unsigned int)
+- write(unsigned long long, unsigned long long, IOABPCompletion*)
+- write(IOMemoryDescriptor*)
+- write(void const*, unsigned int)
+- read(unsigned long long, unsigned long long, IOABPCompletion*)
+- read(IOMemoryDescriptor*, unsigned long long*)
+- read(void const*, unsigned int*)
+- sendImage(unsigned long long, unsigned int, IOABPCompletion*)
+- sendImage(IOMemoryDescriptor*, unsigned long long*)
+- sendImage(void const*, unsigned int, unsigned long long*)
+- registerRead(unsigned int, void*, unsigned int*)
+- abortChannel(abpDirection, IOABPCompletion*)
+- startChannel(abpDirection, IOABPCompletion*)
+- timeSync(unsigned long long, unsigned long long, IOABPCompletion*)
 AppleBasebandPlatform
 - quiesceBackpoweringPins()
 - restoreBackpoweringPins()
@@ -2615,28 +3064,13 @@ AppleCBTL1610
 AppleCBTL1610Companion
 AppleCBTL1612
 - enterTestMode(bool)
-- skipLdcmConDetConfig()
 AppleCBTL1614
 AppleCBTL1614Device
-AppleCLCD
+AppleCIODPTX
+AppleCLCD2
 AppleCLPC
 AppleCLPCUserClient
 AppleCLPCWorkLoop
-AppleCS35L25Amp
-- addPDMMonitorSelector(unsigned int*, unsigned int*, unsigned int)
-- getNumTxControls()
-- getNumTxControlsPrimary()
-- getNumTxControlsSecondary()
-- _setPDMMonChannelEnable(unsigned int, unsigned int, unsigned int)
-- setPDN_PDMMON(unsigned char, unsigned int)
-- enableConvoy(bool)
-- configureBoostConverter()
-- configureVPBR()
-- enableInterrupt(bool, bool, bool)
-- configureInterrupts(bool, bool, bool)
-- logAmpErrors(unsigned char**)
-AppleCS35L25PDMFunction
-AppleCS35L26Amp
 AppleCS35L27Amp
 - _configureAllAmps()
 - _updateSpeakerAmpState(CS35L27AmpState)
@@ -2677,22 +3111,15 @@ AppleCS35L27Amp
 - _enableExternalSpeakerMCAUnderflow(CS35L27AmpDeviceID, bool)
 - _enableExternalASPBusMaster(CS35L27AmpDeviceID, bool)
 - _updateAmpConfigFromEDT(IOService*)
-AppleCS42L75Audio
-- _configureASPClocking(AppleCS42L7xAudio::kCS42L7xASP, bool)
-- _enableSecASPSDInOut(bool, AppleCS42L7xAudio::CS42L7xSecASPClient)
-- _enableMikeyBusASPSDIn(bool)
-- _enableMikeyBusASPSDOut(bool)
-- setMikeyBusInterruptEnable(bool)
-- _configurePCMBusForSecondary(unsigned int, unsigned int, bool)
-AppleCS42L75AudioDSP
-- _handleStart(IOService*)
-- _verifyMultipleWord(unsigned int, unsigned char const*, unsigned long long, AppleCS42L75AudioDSP::RegisterAddressRange*)
-- _writeAndVerifyMultipleWord(unsigned int, unsigned char const*, unsigned long long, unsigned int)
-- _writeReg(unsigned int, unsigned int, unsigned int)
-- _readReg(unsigned int, unsigned int&, unsigned int)
-- _maskWriteReg(unsigned int, unsigned int, unsigned int, unsigned int)
-- _writeMultipleWord(unsigned int, unsigned char const*, unsigned long long, bool)
-- _readMultipleWord(unsigned int, unsigned char*, unsigned long long, bool)
+AppleCS37L90Boost
+- Ping()
+- _readMultiple(unsigned int, unsigned int, unsigned char*, unsigned long long)
+- _writeMultiple(unsigned int, unsigned int, unsigned char const*, unsigned long long)
+- _writeMultipleAll(unsigned int, unsigned char const*, unsigned long long)
+- _read32Reg(unsigned int, unsigned int, unsigned int&)
+- _write32Reg(unsigned int, unsigned int, unsigned int)
+- _write32RegAll(unsigned int, unsigned int)
+AppleCS37L90BoostFunction
 AppleCS42L75MicBiasFunction
 AppleCS42L75TDMClockFunction
 AppleCS42L77Audio
@@ -2940,7 +3367,6 @@ AppleCSI2CAudio
 AppleCSI2CController
 AppleCSI2CDevice
 AppleCSI2CMultipleAudio
-- init(OSDictionary*, unsigned int)
 AppleCSMikeyBusI2CInterface
 - otpGetI2C() const
 - i2cTransferComplete()
@@ -2976,7 +3402,6 @@ AppleCallistoPacket
 - firstFragment() const
 - finalFragment() const
 AppleCallistoTelegramStream
-AppleChestnutDisplayPMU
 AppleConvergedIPCBBControl
 AppleConvergedIPCBTAdapter
 - openInterface(IOService*, unsigned int, void*)
@@ -3445,6 +3870,231 @@ AppleCotaBTM
 AppleCredentialManager
 AppleCredentialManagerUserClient
 AppleDAPF
+AppleDCPDPTXRemoteHDCPAuthSessionProxy
+AppleDCPDPTXRemoteHDCPInterfaceProxy
+AppleDCPDPTXRemotePortProxy
+- displayRequest()
+- displayRelease()
+- hotPlugDetectChangeOccurred(bool)
+- interruptRequestOccurred()
+- connectTo(IODPTXPortAttributes)
+- validateConnection(IODPTXPortAttributes, unsigned int*) const
+- setOwner(void*, void (*)(void*, void*), void (*)(void*, void*), void (*)(void*, void*, bool), void (*)(void*, void*))
+- getSupportsHPD() const
+- forceHotPlugDetect()
+- inactiveSinkDetected()
+AppleDCPDPTXRemotePortUFP
+AppleDCPExpert
+- getSupportsPowerManagement()
+- setPowerAssertion(bool, IOService*)
+- registerCallback(void (*)(OSObject*, void*, RTBuddyPowerState, RTBuddyPowerState), void*, IOService*)
+- unregisterCallback(void (*)(OSObject*, void*, RTBuddyPowerState, RTBuddyPowerState), IOService*)
+- getSupportsStandaloneMode()
+- getSupportsSystemPowerTree()
+AppleDCPLinkService
+AppleDCPLinkServiceSoC
+-
+AppleDP2HDMI
+- getSupportsCSCBypass() const
+- getSupportsColorProcessingPipelineBypass() const
+- getSupportsRGB709ConversionToYCbCr444() const
+- getSupportsRGBBT2020ConversionToYCbCr444() const
+- getSupportsCSC() const
+- getSupportsDitheringControl() const
+- getSupportedDitheringAlgorithm() const
+- setCSCBypassEnabled(bool)
+- setColorProcessingPipelineBypassEnabled(bool)
+- getCSCBypassEnabled(bool*)
+- getColorProcessingPipelineBypassEnabled(bool*)
+- getConversionToYCbCr444Enabled(bool*)
+- getOutputColorDepthConversionEnabled(bool*, unsigned char*)
+- setDitheringEnabled(bool, unsigned char, unsigned char)
+- getDitheringEnabled(bool*)
+- getDitheringAlgorithmAndNoiseDistribution(unsigned char*, unsigned char*)
+- setVideoFormatIDCode(unsigned char)
+- getVideoFormatIDCode(unsigned char*)
+- setExternalFilterThreshold(unsigned int)
+- getExternalFilterThreshold(unsigned int*) const
+AppleDPTX
+- addRegisterSet(char const*, IOAVRegisterSetType, unsigned long long, unsigned long long, unsigned long long, unsigned int, OSObject*, int (*)(OSObject*, IOAVRegisterSet const*, IOAVRegisterSet::Range const*, void*, void*), void*)
+- getRegisterSetSize() const
+- getDefaultPixelClockLimit() const
+- getPixelClockToVideoClockRatio(AppleDPTXNub const*) const
+- getPixelClockToVideoClockRatio(IOAVVideoLinkData const*) const
+- getPixelClockLimit() const
+- setPixelClockLimit(unsigned int)
+- setupCalibration(IOService*)
+- handleMapRegisters(IOService*)
+- handlePowerOn()
+- handlePowerOff()
+- setDeviceClockAndPowerEnabled(bool)
+- reset()
+- enableDevicePower(AppleDPTXNub const*, bool)
+- enableDeviceClock(AppleDPTXNub const*, bool)
+- validateLink(AppleDPTXNub const*, IOAVLinkData const*)
+- prepareLink(AppleDPTXNub const*, IOAVLinkData const*)
+- startLink(AppleDPTXNub const*, IOAVLinkData const*)
+- didStartLink(AppleDPTXNub const*, IOAVLinkData const*)
+- willStopLink(AppleDPTXNub const*, IOAVLinkData const*)
+- stopLink(AppleDPTXNub const*, IOAVLinkData const*)
+- completeLink(AppleDPTXNub const*, IOAVLinkData const*)
+- willEnableALPM(AppleDPTXNub const*, IOAVVideoLinkData const*)
+- didEnableALPM(AppleDPTXNub const*, IOAVVideoLinkData const*)
+- willDisableALPM(AppleDPTXNub const*, IOAVVideoLinkData const*)
+- didDisableALPM(AppleDPTXNub const*, IOAVVideoLinkData const*)
+- updateLinkRateDependentShadowRegisters(AppleDPTXNub const*, bool)
+- validateConnection(AppleDPTXNub const*, IODPTXPortAttributes, unsigned int*)
+- connectTo(AppleDPTXNub const*, IODPTXPortAttributes)
+- bringConnectionUp(AppleDPTXNub const*)
+- takeConnectionDown(AppleDPTXNub const*)
+- isTunneled() const
+- getIOService()
+- getNubResources(AppleDPTXNub*)
+- getDisplayLocation() const
+- getALPMData() const
+- getDisplaySplitCapability() const
+AppleDPTXAbstractAudioLinkDelegate
+- initAudio()
+- quiesceAudio()
+- handleValidateLink(IOAVController*, IOAVDevice*, IOAVAudioLinkData*)
+- handlePrepareLink(IOAVController*, IOAVDevice*, IOAVAudioLinkData*)
+- handleStartLink(IOAVController*, IOAVDevice*, IOAVAudioLinkData*)
+- handleDidStartLink(IOAVController*, IOAVDevice*, IOAVAudioLinkData*)
+- handleWillStopLink(IOAVController*, IOAVDevice*, IOAVAudioLinkData*)
+- handleStopLink(IOAVController*, IOAVDevice*, IOAVAudioLinkData*)
+- handleCompleteLink(IOAVController*, IOAVDevice*, IOAVAudioLinkData*)
+AppleDPTXAudioLinkDelegate
+- handleStartLink(IOAVController*, IOAVDevice*, IOAVAudioLinkData*, IODPLinkTrainingData*)
+AppleDPTXController
+- getDefaultMaxLinkRate() const
+- getDefaultMaxTrainingPattern() const
+- getPixelClockToVideoClockRatio() const
+- getLinkSymbolClock(unsigned long long) const
+- getLinkBandwidth(unsigned int, unsigned long long) const
+- getUsableLinkBandwidth(unsigned int, unsigned long long) const
+- getALPMData() const
+- getAudioLinkDelegateClass() const
+- getBISTTypeForTestMode(IOAVVideoTestMode, unsigned int*) const
+- getTestModeForBISTType(unsigned int, IOAVVideoTestMode*) const
+- setupCalibration(IOService*)
+- handleInterrupt(IOInterruptEventSource*)
+- handlePlugEvent(bool)
+- handleUnplugEvent(bool)
+- handlePowerOn(bool)
+- handlePowerOff()
+- handleSetProperties(OSObject*)
+- initRegisters()
+- initInterrupts()
+- quiesce()
+- readMVid() const
+- readNVid() const
+- getVideoStreamClock() const
+- getVideoFrameIntervalMS(IOAVVideoLinkData const*) const
+- willSetLaneCount(IODPDevice*, unsigned int)
+- handleSetLaneCount(IODPDevice*, unsigned int)
+- didSetLaneCount(IODPDevice*, unsigned int)
+- handleSetTrainingPattern(IODPDevice*, IODPTrainingPattern, bool)
+- handleGetTrainingPattern(IODPDevice*, bool*) const
+- handleSetQualityPattern(IODPDevice*, IODPQualityPattern, bool)
+- handleGetQualityPattern(IODPDevice*, bool*) const
+- handleTxOutputEnabled()
+- getGenericSDPInfo() const
+- setSDPEnabled(IODPSecondaryDataPacket const*, bool)
+- setPPSData(IOAVDSCParameters) const
+- setPPSEnabled(bool)
+- handleStartInfoFrame(IODPDevice*, IOAVInfoFrame const*)
+- handleStopInfoFrame(IODPDevice*, IOAVInfoFrame const*)
+- getDSCEnabled(bool*) const
+- disableVideoStream()
+- enableVideoStream()
+- initVideo(IODPDevice*, IOAVVideoLinkData const*)
+- configureVideoMode(IODPDevice*, IOAVVideoLinkData const*)
+- configureBSWatchdog(IODPDevice*, IOAVVideoLinkData const*)
+- configureVideoMN(IODPDevice*, IOAVVideoLinkData const*, int)
+- configureVideoMSA(IODPDevice*, IOAVVideoLinkData const*)
+- configureVideoColor(IODPDevice*, IOAVVideoLinkData const*)
+- configureVideoBIST(IODPDevice*, IOAVVideoLinkData const*)
+- configureVideoDSC(IODPDevice*, IOAVVideoLinkData const*)
+- setBandwidthRatio(unsigned int)
+- handleValidateLink(IODPDevice*, IOAVLinkData*)
+- handlePrepareLink(IODPDevice*, IOAVLinkData*)
+- handleStartLink(IODPDevice*, IOAVLinkData*)
+- handleDidStartLink(IODPDevice*, IOAVLinkData*)
+- handleWillStopLink(IODPDevice*, IOAVLinkData*)
+- handleStopLink(IODPDevice*, IOAVLinkData*)
+- handleCompleteLink(IODPDevice*, IOAVLinkData*)
+- prepareVideoLink(IODPDevice*, IOAVVideoLinkData*)
+- startVideoLink(IODPDevice*, IOAVVideoLinkData*)
+- didStartVideoLink(IODPDevice*, IOAVVideoLinkData*)
+- willStopVideoLink(IODPDevice*, IOAVVideoLinkData*)
+- stopVideoLink(IODPDevice*, IOAVVideoLinkData*)
+- completeVideoLink(IODPDevice*, IOAVVideoLinkData*)
+- validateALPMParameters(IODPDevice*, IODPLinkPowerManagementData const*, int, int)
+- calculateALPMWakeupLines(IODPDevice*, IODPLinkPowerManagementData const*, int)
+- calculateALPMWakeupCRSymbols(IODPDevice*, IODPLinkPowerManagementData const*, int)
+- calculateALPMWakeupLockSymbols(IODPDevice*, IODPLinkPowerManagementData const*, int, IODPTrainingPattern)
+- calculateALPMSleepStandbyDelay(IODPLinkPowerManagementData const*, int)
+- setALPMParameters(IODPDevice*, IODPLinkPowerManagementData const*, int, int)
+- startALPM(IODPDevice*, IOAVVideoLinkData const*)
+- stopALPM(IODPDevice*, IOAVVideoLinkData const*)
+- willEnableALPM(IODPDevice*, IOAVVideoLinkData const*)
+- enableALPM(IODPDevice*, IOAVVideoLinkData const*)
+- didEnableALPM(IODPDevice*, IOAVVideoLinkData const*)
+- willDisableALPM(IODPDevice*, IOAVVideoLinkData const*)
+- disableALPM(IODPDevice*, IOAVVideoLinkData const*)
+- didDisableALPM(IODPDevice*, IOAVVideoLinkData const*)
+- setAUXAccessWindow(unsigned int, unsigned int)
+- useAUXAccessWindowWithALPM(IODPDevice*, IOAVVideoLinkData const*) const
+- handleProtectLink(IODPDevice*, IOAVContentProtection)
+- handleUnprotectLink(IODPDevice*)
+- willSetHDCPMode(IODPDevice*, IOAVContentProtection)
+- didSetHDCPMode(IODPDevice*, IOAVContentProtection)
+- handleSetupContentProtection(IODPDevice*, IOAVCPConfiguration, OSMetaClass const*)
+- handleShutdownContentProtection(IODPDevice*)
+- setSerializerForProperty(char const*, IOService*, bool (*)(void*, void*, OSSerialize*), void*)
+- setASSREnabledGated(IODPDevice*, bool*)
+- getASSREnabledGated(IODPDevice*, bool*) const
+- getSlaveVideoLinkDataFromRegisters(IOAVVideoLinkData*) const
+- setLaneMap(IODPLaneMap)
+- updateLinkRateDependentShadowRegisters(bool)
+- handleUpdateLinkRate(IODPTXPort*, IODPDevice*, IOAVVideoLinkData const*, unsigned int, unsigned int, unsigned char const*, unsigned int)
+- updateLinkRateDependentParameters(IODPDevice*, IOAVVideoLinkData const*, unsigned long long)
+- updateALPMParameters(IODPDevice*, unsigned long long, IOAVVideoLinkData const*)
+- updateBandwidthRatio(IODPDevice*, unsigned long long, IOAVVideoLinkData const*)
+- updateMVid(IODPDevice*, unsigned long long, IOAVVideoLinkData const*)
+- handleEnableWorkaround(OSString*)
+- disableWorkarounds()
+- handleVSync(IODPDevice*)
+- getVSyncRequired() const
+- getAudioCodingTypeSupported(IODPCodingType) const
+- setPower(bool)
+- setLinkRate(IODPDevice*, unsigned char)
+- setLaneCount(IODPDevice*, unsigned int)
+AppleDPTXCrossbarUFP
+AppleDPTXHDCP1Controller
+AppleDPTXHDCP2Controller
+AppleDPTXHDCPController
+- getIOService()
+- initHDCP(IODPDevice*, OSMetaClass const*, IOHDCPAuthPolicy)
+- disableHDCP(IODPDevice*)
+- deviceRemoved(IODPDevice*, bool)
+- protectLink(IODPDevice*)
+- unprotectLink(IODPDevice*)
+- initInterrupts()
+- handleInterrupt()
+- handleR0PrimeAvailable(IODPDevice*)
+- handleVPrimeAvailable(IODPDevice*)
+- hdcp2HPrimeAvailable(IODPDevice*)
+- hdcp2PairingInfoAvailable(IODPDevice*)
+- hdcp2ReceiverIDListAvailable(IODPDevice*, bool*)
+- getAuthenticatedContentType()
+- getContentTypeCapability()
+- getM0(unsigned char*)
+AppleDPTXNub
+- getIOService()
+- getAVRoot() const
+- getPixelClockToVideoClockRatio() const
+- getDisplaySplitCapability() const
 AppleDeviceManagementHIDEventService
 - getBatteryState()
 - processBatteryState(unsigned char*, unsigned long long)
@@ -3754,6 +4404,18 @@ AppleEmbeddedAudioResourceManager
 - _loadProgramSpecificResource(IOService*)
 - _externalClientRequestCallGated(OSDictionary*)
 - _getKernelClientInterfaceGivenResource(OSDictionary*)
+AppleEmbeddedBluetoothForce
+- newUserClientGated(task*, void*, OSDictionary*, IOUserClient**)
+- handleInterruptReport(unsigned long long, IOMemoryDescriptor*, IOHIDReportType, unsigned int)
+AppleEmbeddedBluetoothMultitouch
+- buildMTDevice()
+- buildMTDeviceWL()
+- getMultitouchReportInfo(unsigned char, unsigned char*, unsigned int*)
+- getMultitouchReportInfoWL(unsigned char, unsigned char*, unsigned int*)
+- setKeyholeReport(unsigned char, unsigned char, unsigned char*, unsigned int)
+- setKeyholeReportWL(unsigned char, unsigned char, unsigned char*, unsigned int)
+- getKeyholeReport(unsigned char, unsigned char, unsigned char*, unsigned int*)
+- getKeyholeReportWL(unsigned char, unsigned char, unsigned char*, unsigned int*)
 AppleEmbeddedButtonController
 - triggerHPDetectGated(bool)
 - completeHPDetect(bool, OSDictionary*, OSSymbol const*)
@@ -4003,6 +4665,8 @@ AppleEmbeddedUSBNub
 - forcePowerGated(AppleEmbeddedUSBNub::tPowerState, bool)
 - initWithProvider(IOService*, IORegistryEntry*)
 AppleEmbeddedUSBNubT8027
+AppleEmbeddedUSBXHCIFL1100
+AppleEventLogHandler
 AppleExternalPowerManager
 - init(IOService*, unsigned int)
 AppleExternalPowerProvider
@@ -4052,22 +4716,22 @@ AppleGenericMultitouchHIDDeviceBase
 - inputReport(unsigned char, void const*, unsigned long)
 - getConfigManager() const
 AppleGenericMultitouchHIDSPI
-AppleH10CamIn
-AppleH10CamInFrameReceiver
-- init(AppleH10CamIn*, int (*)(void*, unsigned int, unsigned int, unsigned long long*), void*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, H10ISPFrameFormat, unsigned int, unsigned int, unsigned int, unsigned int, bool, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned short, unsigned short, eCIspFIDFlowType, unsigned int, unsigned int, OSArray*)
-AppleH10CamInFrameReceiverBuffer
-- init(IOSurfaceRoot*, unsigned int, unsigned int, H10ISPFrameFormat, unsigned int, unsigned int, kern_allocation_name*)
-- getSurfaceID()
-- getSurface()
-AppleH10CamInFrameReceiverBufferPool
-- init(IOSurfaceRoot*, AppleH10CamInFrameReceiverBufferPoolType, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, H10ISPFrameFormat, bool, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, kern_allocation_name*)
-AppleH10CamInUserClient
-- init(task*, OSDictionary*)
-AppleH10CamInWorkLoop
-AppleH10PearlCam
 AppleH10PearlCamInterface
 - PearlCam_QueuePearlCamMessage(PearlCamMessage*)
-AppleH10PearlCamUserClient
+AppleH13CamIn
+AppleH13CamInFrameReceiver
+- init(AppleH13CamIn*, int (*)(void*, unsigned int, unsigned int, unsigned long long*), void*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, H13ISPFrameFormat, unsigned int, unsigned int, unsigned int, unsigned int, bool, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, eCIspFIDFlowType, unsigned int, unsigned int, OSArray*)
+AppleH13CamInFrameReceiverBuffer
+- init(IOSurfaceRoot*, unsigned int, unsigned int, H13ISPFrameFormat, unsigned int, unsigned int, kern_allocation_name*)
+- getSurfaceID()
+- getSurface()
+AppleH13CamInFrameReceiverBufferPool
+- init(IOSurfaceRoot*, AppleH13CamInFrameReceiverBufferPoolType, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, H13ISPFrameFormat, bool, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, kern_allocation_name*)
+AppleH13CamInUserClient
+- init(task*, OSDictionary*)
+AppleH13CamInWorkLoop
+AppleH13PearlCam
+AppleH13PearlCamUserClient
 - init(task*, OSDictionary*)
 AppleHIDKeyboardDeviceManagement
 AppleHIDKeyboardEventDriver
@@ -4346,6 +5010,78 @@ AppleHIDTransportProtocolZ2
 AppleHIDTransportSMCNotifier
 - smcNotification(OSSymbol const*, OSObject*, unsigned long)
 - deviceNotificationHandler(void*, IOService*, IONotifier*)
+AppleHPM
+- publishHPMDevices()
+- setupPowerManagement()
+- destroyPowerManagement()
+- sleep()
+- wake()
+- poweredStart()
+- setRID(unsigned char)
+- getCommandGate()
+- hpmIECSWrite(unsigned long long, unsigned int, void*, unsigned long long, unsigned int)
+- hpmIECSWrite(unsigned long long, unsigned int, IOMemoryDescriptor*, unsigned long long, unsigned int)
+- hpmIECSRead(unsigned long long, unsigned int, void*, unsigned long long*, unsigned int)
+- hpmIECSRead(unsigned long long, unsigned int, IOMemoryDescriptor*, unsigned long long*, unsigned int)
+- remoteIECSRead(unsigned long long, unsigned int, IOMemoryDescriptor*, unsigned long long*, unsigned int)
+- remoteIECSWrite(unsigned long long, unsigned int, IOMemoryDescriptor*, unsigned long long, unsigned int)
+- hpmIECSCommand(unsigned long long, unsigned int, unsigned int, unsigned int)
+- enterDebugMode(AppleHPM::DebugMode)
+- hpmSendVDM(unsigned long long, unsigned int*, unsigned long long, unsigned int)
+- hpmGetVDM(unsigned long long, unsigned int*, unsigned long long*, unsigned int)
+- AppleVDMReadRegister(unsigned long long, unsigned short, unsigned short, unsigned long long*, void*, unsigned int)
+- AppleVDMWriteRegister(unsigned long long, unsigned short, unsigned short, unsigned long long, void*, unsigned int)
+- AppleVDMSendStreamStartEnd(unsigned long long, unsigned short, AppleVDMStreamCommand, unsigned long long, bool, unsigned int)
+- AppleVDMSendStreamRead(unsigned long long, unsigned short, unsigned long long*, void*, unsigned int)
+- AppleVDMSendStreamWrite(unsigned long long, unsigned short, void*, unsigned long long, unsigned int)
+- hpmEnterExitFirmwareUpdateMode(unsigned int)
+- startPowerSavingsTimer()
+- cancelPowerSavingsTimer()
+- powerSavingsTimerCallback(IOTimerEventSource*)
+- exitPowerSavings(bool)
+- earlySleep()
+- isAwake()
+- wakeForActivity()
+- isRTPCAvailable()
+- hpmIECSSendVDM(unsigned long long, AppleHPMSOPType, IOMemoryDescriptor*, unsigned char, unsigned int)
+- hpmIECSReceiveVDM(unsigned long long, IOMemoryDescriptor*, unsigned char*, unsigned char*, AppleHPMSOPType*, unsigned int)
+- hpmIECSReceiveVDMAttention(unsigned long long, IOMemoryDescriptor*, unsigned char*, unsigned char*, AppleHPMSOPType*, unsigned int)
+- setInUse(bool)
+AppleHPMARM
+AppleHPMAsyncEventSource
+AppleHPMBusController
+- publishBelow(IORegistryEntry*)
+- controllerInterruptAction(IOInterruptEventSource*, int)
+- newDeviceWithRegistryEntry(IORegistryEntry*, IOService*)
+- getCommandGate()
+- hpmCheckIn()
+AppleHPMBusDevice
+- initWithRegistryEntry(IORegistryEntry*, IOService*)
+AppleHPMCommandGate
+AppleHPMDevice
+- initWithHPMBus(AppleHPM*)
+- setI2CAddress(unsigned int)
+- getI2CAddress()
+- setVersion(unsigned int)
+- setVendorID(unsigned int)
+- setDeviceID(unsigned int)
+- setBoardID(unsigned int)
+- setUUID(unsigned char*)
+- setRID(unsigned char)
+- setRouteString(unsigned long long)
+- setRevision(unsigned char)
+- setRevisionID(unsigned char)
+- hpmEnterExitFirmwareUpdateMode(unsigned int)
+AppleHPMEmbedded
+AppleHPMUserClient
+- checkArguments(IOExternalMethodArguments*, unsigned int, unsigned int, unsigned int, unsigned int)
+- iecsRead(IOExternalMethodArguments*)
+- iecsWrite(IOExternalMethodArguments*)
+- iecsCommand(IOExternalMethodArguments*)
+- sendVDM(IOExternalMethodArguments*)
+- receiveVDM(IOExternalMethodArguments*)
+- receiveVDMAttention(IOExternalMethodArguments*)
+- enterExitFirmwareUpdateMode(IOExternalMethodArguments*)
 AppleHSAIDSerial
 AppleHSAIDSerialUserClient
 AppleHapticsExternalSecondaryAudio
@@ -4369,9 +5105,12 @@ AppleHapticsSupport
 - setAveragePowerBudget(AHS::Util::From<AppleHapticsSupport>, unsigned int, unsigned int*)
 - setPeakPowerBudget(AHS::Util::From<AppleHapticsSupport>, unsigned int, unsigned int*)
 - controllerVersionCoefficientKey() const
-AppleHapticsSupportCallan
+AppleHapticsSupportArcEEPROM
 AppleHapticsSupportLEAP
 AppleHapticsSupportUserClient
+AppleHighVoltageCharger
+AppleHighVoltageChargerUserClient
+AppleHighVoltageChargingData
 AppleHydraBuiltIn
 AppleI2CAudio
 AppleI2CMultipleAudio
@@ -4419,6 +5158,11 @@ AppleIPDormancyHandler
 AppleISL29023
 AppleImage4
 AppleImage4UserClient
+AppleIntelCNLUSBXHCI
+AppleIntelICLUSBXHCI
+AppleIntelUSBXHCI
+- regOr32ResetSafe(unsigned long long, unsigned int, unsigned int)
+AppleIntelUSBXHCICommandRing
 AppleInterruptController
 - _readReg32(unsigned int)
 - _writeReg32(unsigned int, unsigned int)
@@ -4443,9 +5187,30 @@ AppleKeyStoreCommand
 AppleKeyStoreUserClient
 AppleKrakenBuiltIn
 AppleLEAPController
+AppleLEAPController_T8101
 AppleLMBacklight
 AppleLMBacklightFunctionEnable
 AppleLMBacklightFunctionUpdate
+AppleLPDPTX
+- getRegOffset(AppleLPDPTX::Register) const
+- parseALPMData(unsigned int const*, unsigned int, IODPLinkPowerManagementData*)
+AppleLPDPTXPort
+- handleSetTunables()
+- phyPowerDown()
+- phyPowerUp()
+- pllPowerDown()
+- pllPowerUp()
+- pllConfigureFrequency(unsigned long long, bool*)
+- getMaxLaneCount() const
+- getMaxLinkRate() const
+- activate()
+- deactivate()
+- setDriveSettings(IODPDriveSettings*, unsigned int)
+- getDriveSettings(IODPDriveSettings*, unsigned int) const
+- getLinkRate(unsigned char*) const
+- setLinkRate(unsigned char)
+- getActiveLaneCount() const
+- setActiveLaneCount(unsigned int)
 AppleLVBOOST
 AppleM2ScalerCSCDriver
 - clientClosed(IOSurfaceAcceleratorClient*)
@@ -4549,7 +5314,30 @@ AppleM68Buttons
 - _shutdownDebugTimerAction(IOTimerEventSource*)
 - _shutdownNVRAMSyncTimerAction(IOTimerEventSource*)
 - dispatchEventExt(IOHIDEvent*)
+AppleMAX98709Amp
+-
+-
+-
+-
 AppleMAXI2CAudio
+AppleMAXMultiAmp
+- getRevId(unsigned int, unsigned char*)
+- handleAmpInterrupt(unsigned char)
+- configureSpeaker()
+- setAmpGain(unsigned char, bool, unsigned int)
+- enableAmpOutput(bool)
+- globalEnable(bool)
+- initializeSpeakerConfig(IOService*)
+- SetVolumeControl()
+- getAmpOnDelay()
+- getAmpOffDelay()
+- turnOffAmp(bool)
+- routeInputSources()
+- enableAmpInput(bool)
+- _readMultiple(unsigned int, unsigned int, unsigned char*, unsigned long long)
+- configureSerialPort()
+- _readReg(unsigned int, unsigned short)
+- _writeReg(unsigned int, unsigned short, unsigned char)
 AppleMCA
 - getDMABurstSize(AppleARMIISConfig const*, unsigned int) const
 - getFIFODepth(AppleARMIISConfig const*, unsigned int) const
@@ -4583,19 +5371,13 @@ AppleMCA
 - setMCLKClkEnabled(AppleARMIISConfig*, bool)
 AppleMCA2Cluster
 - filterCaptureClusterContext(unsigned int)
-- newControllerWithRegistryEntry(IORegistryEntry*, IOService*)
 - initClusterPreflightGated()
 - interruptDebug(AppleMCA2Controller*, unsigned int, char*, unsigned long*)
-AppleMCA2Cluster_T8030
+AppleMCA2Cluster_T8101
 AppleMCA2Controller
-- newFifoWithController(AppleMCA2Controller*, unsigned int)
-- checkChannelSwap(unsigned int, unsigned int, unsigned int)
-AppleMCA2Controller_T8030
+AppleMCA2Controller_T8101
 AppleMCA2DeviceClock
 AppleMCA2Fifo
-- setIISConfig(AppleARMIISDevice*, AppleARMIISConfig*, AppleMCATiming*)
-- flush(unsigned int)
-- flushCheckSAC(unsigned int)
 AppleMCA2MCLK
 AppleMCA2MCLKPin
 AppleMCA2NCO
@@ -4639,7 +5421,6 @@ AppleMCA2Switch_SerDesCfg
 AppleMCA2Switch_SyncGenCfg
 AppleMCA2Switch_SyncGenCtl
 AppleMCA2Switch_SyncGenSel
-AppleMCA2Switch_T8030
 AppleMCA2Switch_TxCfg
 - setIISConfig(AppleARMIISDevice*, AppleARMIISConfig*, AppleMCATiming*, AppleMCA2::SyncGenConfig*, unsigned int*, unsigned int*)
 - validIISConfig(AppleARMIISDevice*, AppleARMIISConfig*, AppleMCATiming*, AppleMCA2::SyncGenConfig*)
@@ -4651,6 +5432,11 @@ AppleMCA2Switch_i2sCfg
 AppleMCA2Switch_i2sSel
 AppleMCA2Tx
 AppleMCCUserClient
+AppleMCDP2900
+AppleMCDP29XX
+- setSerializerForProperty(char const*, IOService*, bool (*)(void*, void*, OSSerialize*), void*)
+- getSupportsHBRAudio()
+AppleMCDP29XXHDCPMessageTransport
 AppleMMIOSerial
 - isConsoleDevice(IOService*)
 - initForPM(IOService*)
@@ -4720,12 +5506,12 @@ AppleMesaSEPDriver
 - establishDiffieHellmanSession()
 - provisionSensorWithRootKey(unsigned char*, unsigned long, unsigned char*, unsigned long)
 - checkSeaCookieTransitioning(MesaFactorySeaCookieMessageType)
-- cacheCaptureData(bool)
+- cacheCaptureData()
 - getPreImage(IOMemoryDescriptor*, unsigned int*)
 - prepareSerialisedTemplates(void const*, unsigned long, IOMemoryDescriptor*, unsigned int*)
 - getSerialisedTemplates(void const*, unsigned long, IOMemoryDescriptor*, unsigned int*)
 - diagnostics(void const*, unsigned long, IOMemoryDescriptor*, unsigned int*)
-- messageBioLog(biolog_message_type_t, unsigned long long, unsigned char*, unsigned long, unsigned long long, unsigned int, biodevice_v1_t*)
+- messageBioLog(biolog_message_type_t, unsigned long long, unsigned char*, unsigned long, unsigned long long, unsigned int)
 AppleMesaSEPDriverInterface
 - ResetSensorAndCheckProvisioning()
 - ProcessMessage(asd_message_t)
@@ -5292,7 +6078,6 @@ ApplePMGR
 - readReg32(ApplePMGR::RegMap, unsigned int, unsigned int)
 - writeReg32(ApplePMGR::RegMap, unsigned int, unsigned int, unsigned int)
 - waitReg32(ApplePMGR::RegMap, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)
-- _writeBridgeReg32(unsigned char, unsigned int, unsigned int)
 ApplePMGRFunctionAssertReset
 ApplePMGRFunctionCLPCEnabled
 ApplePMGRFunctionCPUIdle
@@ -5344,7 +6129,7 @@ ApplePPM
 - initLocal(IOService*)
 - addNewEntity(ApplePPMEntity*)
 - setBatteryModelSystemCapability(PowerLevelProfile*)
-- setSystemCapability(int const*, int)
+- setSystemCapability(int const*)
 - setEnableAutoControl(bool)
 - admissionCheckOfValue(ApplePPMEntity*, unsigned int, unsigned int*)
 - admissionCheckOfValue(UniqueClientID_t, unsigned int, unsigned int*)
@@ -5426,9 +6211,6 @@ ApplePPMEntity
 - getClientPrintableName()
 - logCurrentPowerLevel()
 ApplePPMEntityBaseband
-- init(ApplePPM*, ApplePPMClientProperties*)
-- txHistogramSize()
-- updateCurrentPowerLevel()
 ApplePPMEntityCLPC
 ApplePPMKernelClient
 - admissionCheckWithValue(unsigned int, unsigned int, unsigned int*)
@@ -5442,9 +6224,9 @@ ApplePPMKernelClient
 ApplePPMPolicy
 ApplePPMPolicyCPMS
 - getClientBudget(UniqueClientID_t, int*)
+- controlEffortForLane(int)
 - updateOpenLoopControlEfforts()
 - updateServoTargets(int*)
-- controlEffortForLane(int)
 - createPowerServo(CPMSPPMLaneInput, float, float)
 - anyServosEngaged()
 - copyPowerServoControlEfforts()
@@ -5498,7 +6280,6 @@ ApplePPMSystemCapabilityMonitor
 - enableDynamicInitialConditions()
 - updateUseFilteredRssI3I4(bool)
 - getUseFilteredRssI3I4()
-- sendAsbLpemData()
 ApplePPMUserClient
 - openUserClient(UniqueClientID_t)
 - admissionCheckOfValue(UniqueClientID_t, unsigned int, unsigned int*)
@@ -5523,15 +6304,51 @@ ApplePPMUserClient
 - getPreThrottleTable(int, CPMSPreThrottleTable*)
 - setPreThrottleTable(int, CPMSPreThrottleTable*)
 - cleanUpPPMUserClient()
+ApplePS186
+AppleParadeDP815TCON
+- readRegister(unsigned char, unsigned char, unsigned char*)
+- writeRegister(unsigned char, unsigned char, unsigned char)
+- readRegisters(unsigned char, unsigned char, unsigned char*, unsigned int)
+- writeRegisters(unsigned char, unsigned char, unsigned char const*, unsigned int)
+- masterI2CWriteAt(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned char*, unsigned int)
+- masterI2CWrite(AppleTCONComponent::DeviceDescriptor*, unsigned char*, unsigned int)
+- masterI2CReadAt(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned char*, unsigned int)
+- masterI2CRead(AppleTCONComponent::DeviceDescriptor*, unsigned char*, unsigned int)
+AppleParadeDP825TCON
+- readRegister(unsigned char, unsigned char, unsigned char*)
+- writeRegister(unsigned char, unsigned char, unsigned char)
+- readRegisters(unsigned char, unsigned char, unsigned char*, unsigned int)
+- writeRegisters(unsigned char, unsigned char, unsigned char const*, unsigned int)
+- masterI2CWriteAt(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned char*, unsigned int)
+- masterI2CWrite(AppleTCONComponent::DeviceDescriptor*, unsigned char*, unsigned int)
+- masterI2CReadAt(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned char*, unsigned int)
+- masterI2CRead(AppleTCONComponent::DeviceDescriptor*, unsigned char*, unsigned int)
+AppleParadeDP855TCON
+- readRegisters(unsigned int, unsigned char*, unsigned int)
+- writeRegisters(unsigned int, unsigned char const*, unsigned int)
+- readRegister(unsigned int, unsigned char*)
+- writeRegister(unsigned int, unsigned char)
+- masterI2CWriteAt(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned char const*, unsigned int)
+- masterI2CWrite(AppleTCONComponent::DeviceDescriptor*, unsigned char const*, unsigned int)
+- masterI2CReadAt(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned char*, unsigned int)
+- masterI2CRead(AppleTCONComponent::DeviceDescriptor*, unsigned char*, unsigned int)
+- masterSPIWriteAt(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned char const*, unsigned int)
+- masterSPIErase(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned int)
+- masterSPIReadAt(AppleTCONComponent::DeviceDescriptor*, unsigned int, unsigned char*, unsigned int)
+- masterSPIReadID(AppleTCONComponent::DeviceDescriptor*, unsigned char*, unsigned int)
+AppleParrot
+- readRegister(unsigned char, unsigned char*)
+- writeRegister(unsigned char, unsigned char)
+- applyTunables()
+- softReset()
+- trigger()
+- dump()
+- portReset(unsigned int)
+ApplePassthroughPPM
+ApplePassthroughPPMSystemCapabilityMonitor
 ApplePearlCamQMsgFunction
 ApplePearlSEPDriver
 ApplePearlUserClient
-ApplePinotLCD
-- _lcdEnable(bool, void*, void (*)(void*, bool), unsigned long long*)
-- _lcdErrorOccurred(void*, void*, int)
-- _sendNoOpCommand()
-- _enableSleepMode(bool)
-- _enableDisplayMode(bool)
 AppleProxAnalyticsReporter
 AppleProxHIDEventDriver
 - setReport(DopplerFeatureReport*, unsigned long, IOHIDReportType, unsigned int)
@@ -5546,6 +6363,12 @@ AppleProxHIDEventDriver
 - triggerBaselineCapture(unsigned char)
 - printPacket(char const*, unsigned char*, unsigned long)
 AppleR5IOPT8006
+AppleRSM
+- _readReg32(unsigned int)
+- _writeReg32(unsigned int, unsigned int)
+- _andReg32(unsigned int, unsigned int)
+- _orReg32(unsigned int, unsigned int)
+AppleRSMDeviceChannel
 AppleRegStmAPIODMA
 AppleS5L8920XFPWM
 - _stopPWM(unsigned int, bool)
@@ -5566,7 +6389,6 @@ AppleS5L8960XWatchDogTimer
 - _readModifyWrite32(unsigned long long, unsigned int, unsigned int)
 - _readModifyWriteMapped32(unsigned long long, unsigned int, unsigned int)
 - _readReg32(unsigned int)
-- _readLogicalReg32(unsigned long long, unsigned long long)
 - _writeReg32(unsigned int, unsigned int)
 - _writeScratchReg(unsigned int)
 - _readScratchReg()
@@ -5609,6 +6431,11 @@ AppleSEPEndpoint
 AppleSEPEndpointService
 AppleSEPFirmware
 AppleSEPGenericTransfer
+AppleSEPHDCPEndpoint
+AppleSEPHDCPInterface
+- init(AppleSEPHDCPEndpoint*, SEPHDCPInterfaceInfo*)
+AppleSEPHDCPManager
+- launchInterfaces()
 AppleSEPHilo
 AppleSEPHiloService
 AppleSEPLogger
@@ -5623,8 +6450,7 @@ AppleSEPPanicBuffer
 - initWithOwner(AppleSEPSharedMemoryBuffer*)
 AppleSEPSharedMemoryBuffer
 AppleSEPSharedMemoryChannel
-- initWithOwnerAndName(AppleSEPSharedMemoryBuffer*, unsigned int)
-- _updateBuffer()
+- initWithOwnerAndIndex(AppleSEPSharedMemoryBuffer*, int)
 AppleSEPTesting
 AppleSEPTestingService
 AppleSEPTraceBuffer
@@ -5702,6 +6528,31 @@ AppleSPIBiometricSensor
 - _setPollingInterval(unsigned int)
 - isChipPowered()
 - isInterruptsSupported()
+AppleSPIMCController
+- _executeSPICommandNULL(AppleARMSPICommand*)
+- _executeSPICommandDMA(AppleARMSPICommand*)
+- _executeSPICommandPIO(AppleARMSPICommand*)
+- _execSetController()
+- _dmaWait(AppleARMSPICommand*, unsigned int*, unsigned long long, char const*)
+- _dmaAbort(AppleARMSPICommand*, int, char const*, char const*)
+- _dmaStop(IODMAEventSource*, unsigned int*, unsigned long long, char const*)
+- _dmaEventAction(IODMAEventSource*, IODMACommand*, int, unsigned long long)
+- _interruptActionSubr()
+- _interruptActionDone(bool, unsigned int*)
+- _interruptAction(IOInterruptEventSource*, int)
+- _interruptPoll(unsigned int)
+- _iesInit()
+- _iesControl()
+- _setCS(bool)
+- _setInternalCS(bool)
+- _configureHardwareDelay()
+- _getTxFIFOCount()
+- _getTxFIFOSpace()
+- _getRxFIFOCount()
+- _getRxFIFOSpace()
+- _readReg32(unsigned int)
+- _writeReg32(unsigned int, unsigned int)
+AppleSPIMCControllerStats
 AppleSPMIBacklight
 AppleSPMIBacklightEnableFunction
 AppleSPMIBacklightUpdateFunction
@@ -5800,6 +6651,9 @@ AppleSSEInterface
 - getSignedSepScores(unsigned char, OSData*, OSData*, OSData*, OSData*, OSData*, OSData*, OSData**, OSData**, OSData**)
 - getSignedSepScores(unsigned int, unsigned char, OSData*, OSData*, OSData*, OSData*, OSData*, OSData*, OSData**, OSData**, OSData**)
 AppleSSEUserClient
+AppleSTDP2700
+- sendMailboxMessage(unsigned char, void const*, unsigned long, void*, unsigned long*)
+AppleSTDP2700UpdatePlaceholder
 AppleSamsungSPIController
 - _executeSPICommandNULL(AppleARMSPICommand*)
 - _executeSPICommandDMA(AppleARMSPICommand*)
@@ -5899,24 +6753,12 @@ AppleStockholmSPMI
 - _rxInterruptHandler(IOInterruptEventSource*, int)
 - _rxMbufInterruptHandler(IOInterruptEventSource*, int)
 AppleStockholmSPMINotification
-AppleSummitLCD
-- _lcdEnable(bool, void*, void (*)(void*, bool), unsigned long long*)
-- _mipiLinkEnable(bool)
-- _lcdErrorOccurred(void*, void*, int)
-- _sendNoOpCommand()
-- _enableSleepMode(bool)
-- _enableLPMMode(bool)
-- _enableDisplayMode(bool)
 AppleSynopsysDRDUSBXHCI
 - regReadSram32(unsigned int)
 - regWriteSram32(unsigned int, unsigned int)
 - regWriteSram64(unsigned int, unsigned long long)
 - printPeriodicSchedule()
 AppleSynopsysDRDUSBXHCICommandRing
-AppleSynopsysMIPIDSIController
-AppleSynopsysMIPIDSIFrameDoneFunction
-AppleSynopsysMIPIDSIProgramPartialFrameFunction
-AppleSynopsysMIPIDSIResetClockFunction
 AppleSynopsysOTG3Device
 AppleSynopsysOTGDevice
 - connectedToUSBHost()
@@ -5943,6 +6785,11 @@ AppleSynopsysOTGDevice
 - coreSoftReset(unsigned int)
 AppleT333Packet
 AppleT333Stream
+AppleT7000USBOTG3Device
+- initCableChangeNotification()
+- initCableChangeNotificationThreadCall(thread_call*)
+- cableNotification(void*, unsigned int, IOService*, void*, unsigned long)
+- cableChangeOccurred(IOTimerEventSource*)
 AppleT700XTempSensor
 - enableTempSensor()
 - disableTempSensor()
@@ -5974,40 +6821,36 @@ AppleT8015SPMIController
 AppleT8015TempSensor
 AppleT8020DART
 AppleT8020MTRTempSensor
-AppleT8027TypeCPhy
-- applyTunablesUSB2(OSData const*)
-- exitResetUSB2()
 AppleT8027USB20XHCITypeCPort
-AppleT8027USB3Phy
-- configurePowerLevel(unsigned int, AppleTypeCPhyPowerLevel)
-- configureMode(unsigned int, AppleTypeCPhyUSBMode)
 AppleT8027USBArbitrator
-AppleT8027USBPhy
-- applyTunables(OSData const*)
-- applyUSB3PhySettings()
-- enableLowLeakageMode(bool)
-- systemPowerChange(void*, unsigned int, IOService*, void*, unsigned long)
-- systemPowerChangeThreadCall(void*, void*)
-- performJitterImprovemetSequence()
 AppleT8027USBXDCI
 AppleT8027USBXHCI
 AppleT8027USBXHCICommandRing
 - initWithParameters(AppleT8027USBXHCI*, AppleUSBXHCIInterrupter*, unsigned int, IOMapper*)
 - addEndpointWithDummy(unsigned int, unsigned int, StandardUSBXHCI::StandardUSBXHCISlotContext*, StandardUSBXHCI::StandardUSBXHCIEndpointContext*)
 - dropEndpointWithDummy(unsigned int, unsigned int, StandardUSBXHCI::StandardUSBXHCISlotContext*, StandardUSBXHCI::StandardUSBXHCIEndpointContext*)
-AppleT8030AMCPerfFunction
-AppleT8030MemCacheController
-AppleT8030MemCacheFlushFunction
-AppleT8030MemCacheModeFunction
-AppleT8030MemCachePanicFunction
-AppleT8030PCIe
-AppleT8030PCIePort
-AppleT8030PMGR
+AppleT8030SOCTuner
+AppleT8030USBXHCI
+- setNextPeriodicConfigureEndpointDeadline(unsigned long long)
+AppleT8030USBXHCICommandRing
+- initWithParameters(AppleT8030USBXHCI*, AppleUSBXHCIInterrupter*, unsigned int, IOMapper*)
+AppleT8030USBXHCITransferRing
+AppleT8101AMCPerfFunction
+AppleT8101GPIOIC
+AppleT8101MemCacheController
+AppleT8101MemCacheFlushFunction
+AppleT8101MemCacheModeFunction
+AppleT8101MemCachePanicFunction
+AppleT8101PCIe
+AppleT8101PCIePort
+AppleT8101PMGR
 - getAPWakeupSourcesValidMasks()
+- calculateWakeUpTime()
 - getLeakageScaleFactor(double, double, double)
 - getLeakageScaleFactor(double, double, double, double, double, double, double)
-- initACCDPE()
 - applyCPUEnergyAccumulatorsTuning(unsigned int)
+- restoreSOCDPE()
+- initDPE(IOService*)
 - getPerfDomainIDToComplex(unsigned char)
 - getVoltageRailToComplex(ApplePMGR::VoltageRail)
 - getComplexToVoltageRail(unsigned int)
@@ -6020,23 +6863,48 @@ AppleT8030PMGR
 - writeAESClkCfgReg(unsigned int)
 - readAESPSReg()
 - writeAESPSReg(unsigned int)
+- panicOnDvcDoneErr()
 - _getVideoClockPllOffset(unsigned int)
 - _getVideoClockSourceSel(unsigned int)
 - _setVideoClock(unsigned int, unsigned int, unsigned int, bool)
 - _enableWaitSEPPG(bool)
-AppleT8030PPM
-AppleT8030PPMEntityBaseband
-AppleT8030PPMSystemCapabilityMonitor
-AppleT8030PlatformErrorHandler
-AppleT8030SOCTuner
-AppleT8030TypeCPhy
-AppleT8030USBXHCI
-- setNextPeriodicConfigureEndpointDeadline(unsigned long long)
-AppleT8030USBXHCICommandRing
-- initWithParameters(AppleT8030USBXHCI*, AppleUSBXHCIInterrupter*, unsigned int, IOMapper*)
-AppleT8030USBXHCITransferRing
-AppleT803xIO
-AppleT803xPCIe
+AppleT8101PlatformErrorHandler
+AppleT8101SPMIController
+- _waitForResponse(bool, unsigned long long)
+- _runInterruptMode(unsigned long long)
+- _runPolledMode(unsigned long long)
+- _panicCleanup(unsigned int, unsigned int)
+- _publishWakeReason(unsigned int)
+- _readReg32(unsigned char, unsigned int)
+- _writeReg32(unsigned char, unsigned int, unsigned int)
+- handleRespInterrupt(IOInterruptEventSource*, int)
+- handleFaultInterrupt(IOInterruptEventSource*, int)
+- handleFaultInterruptPrimary(void*, IOService*, int)
+AppleT8101TypeCPhy
+AppleT8101USB20XHCILightningPort
+- parrotSoftResetWorkaroundInit(IOService*)
+- isParrotSoftResetWorkaroundNeeded()
+AppleT8101USB20XHCITypeCPort
+AppleT8101USBPhy
+AppleT8101USBXHCI
+- systemPowerStateWillChangeToGated(unsigned long, unsigned long, IOService*)
+AppleT8101USBXHCIDevice
+AppleT8101USBXHCIEndpoint
+AppleT8101USBXHCIFL1100
+AppleT8101USBXHCIFL1100Bootstrap
+AppleT8103AMCPerfFunction
+AppleT8103MemCacheController
+AppleT8103MemCacheFlushFunction
+AppleT8103MemCacheModeFunction
+AppleT8103MemCachePanicFunction
+AppleT8103USBOTG3Device
+- readReg(unsigned long long, unsigned int)
+- writeReg(unsigned long long, unsigned int, unsigned int)
+AppleT8103USBXDCI
+AppleT8103USBXHCIFL1100
+AppleT810XLPDPTX
+AppleT810xIO
+AppleT810xPCIe
 - dtRegMapApcieAxi2AfIndex() const
 - dtRegMapPMGRFuseIndex() const
 - dtRegMapPortPhyGlueIndex(unsigned int) const
@@ -6049,7 +6917,7 @@ AppleT803xPCIe
 - _readPhyIPReg(unsigned int)
 - _writePhyIPReg(unsigned int, unsigned int)
 - _readFuseReg(unsigned int)
-AppleT803xPCIePort
+AppleT810xPCIePort
 - _initializeRootComplex()
 - _initializeRefclkBuffer()
 - _resetPortHardware()
@@ -6062,27 +6930,87 @@ AppleT803xPCIePort
 - _writePhyIPLaneReg(unsigned int, unsigned int)
 - _readLTSSMDbgReg(unsigned int)
 - _writeLTSSMDbgReg(unsigned int, unsigned int)
-AppleT8101GPIOIC
-AppleT8101SPMIController
-- _waitForResponse(bool, unsigned long long)
-- _runInterruptMode(unsigned long long)
-- _runPolledMode(unsigned long long)
-- _panicCleanup(unsigned int, unsigned int)
-- _publishWakeReason(unsigned int)
-- _readReg32(unsigned char, unsigned int)
-- _writeReg32(unsigned char, unsigned int, unsigned int)
-- handleRespInterrupt(IOInterruptEventSource*, int)
-- handleFaultInterrupt(IOInterruptEventSource*, int)
-- handleFaultInterruptPrimary(void*, IOService*, int)
-AppleT8101USB20XHCILightningPort
-- parrotSoftResetWorkaroundInit(IOService*)
-- isParrotSoftResetWorkaroundNeeded()
-AppleT8101USB20XHCITypeCPort
-AppleT8101USBXHCI
-- systemPowerStateWillChangeToGated(unsigned long, unsigned long, IOService*)
-AppleT8101USBXHCIDevice
-AppleT8101USBXHCIEndpoint
-AppleT8103USBXDCI
+- _applyrcTunables()
+AppleTCA7408GPIOIC
+AppleTCAGPIOIC
+- _setGPIODirection(unsigned int, unsigned char)
+- _setGPIOData(unsigned int, unsigned char)
+- _getGPIOData(unsigned int, unsigned int*)
+- _reset()
+AppleTCAGPIOICFunction
+AppleTCController
+- genericStart(IOService*)
+- poweredStart()
+- setupPowerManagement(IOService*)
+- forceUSB23On(unsigned int)
+- readReg(unsigned short, unsigned char*, unsigned char)
+- writeReg(unsigned short, unsigned char*, unsigned char)
+- execute4Cc(unsigned short, unsigned char*, unsigned char*, unsigned char)
+- hpmInterruptAction(IOInterruptEventSource*, int)
+- setInterruptMask()
+- getAndClearInterrupt(unsigned char, unsigned char*, unsigned char)
+- setPowerStateHPM(unsigned char)
+- processInterruptEvents(unsigned char*, unsigned short)
+- processStatusRegisters()
+- setCurrentModeFlags(unsigned int, unsigned int)
+- processModeFlags()
+- setAccessoryID(IOAccResistorID*)
+- sendDpStatusUpdates()
+- clearDpIRQ()
+- forcePortEvaluation()
+- setPinConfiguration(unsigned int)
+- resetDataControl()
+- repeaterReset(unsigned char)
+- disablePort(bool)
+- printConnectedTransports()
+- configureBasePort()
+- createDPPortObject(IOPortTransportStateDisplayPort**)
+- removeDPPortObject(IOPortTransportStateDisplayPort**, bool)
+- configureDPPortObject(IOPortTransportStateDisplayPort*, bool)
+- communicateDPStateChange()
+- createUSB2PortObject(IOPortTransportStateUSB2**)
+- removeUSB2PortObject(IOPortTransportStateUSB2**)
+- setUSB2PortObjectInactive(IOPortTransportStateUSB2*)
+- configureUSB2PortObject(IOPortTransportStateUSB2*, bool)
+- createUSB3PortObject(IOPortTransportStateUSB3**)
+- removeUSB3PortObject(IOPortTransportStateUSB3**, bool)
+- configureUSB3PortObject(IOPortTransportStateUSB3*, bool)
+- createTBTPortObject()
+- configureTBTPortObject()
+- removeTBTPortObject()
+- createTunnelHandles()
+- createTunnelManager()
+- createTunnelClient(IOTBTTunnelClientInterface**, unsigned int, unsigned char)
+- createTunnelClientCallBacks(IOTBTTunnelClientInterface*)
+- tunnelClientChange(IOTBTTunnelClientInterface*)
+- setLDCMPinsInternal(unsigned char, unsigned char)
+- ldcmInterruptAction()
+- tAMETimeout(IOTimerEventSource*)
+- starttAMETimeoutTimer()
+- stoptAMETimeoutTimer()
+AppleTCControllerType1
+- configureDP()
+- setupDPController()
+- communicateDPHPDChange(bool)
+- communicateDPIRQ()
+AppleTCControllerType10
+AppleTCControllerTypeSim
+- configureDP()
+- setupDPController()
+AppleTCON
+- handleStart(IOService*)
+- handleStop(IOService*)
+- initPages()
+- publishMemoryDevicesBelow(IOService*)
+- setModel()
+- readMemory(AppleTCONComponent*, unsigned int, unsigned char*, unsigned int)
+- writeMemory(AppleTCONComponent*, unsigned int, unsigned char const*, unsigned int)
+AppleTCONComponent
+- getDescriptor() const
+- getAddress() const
+- getInterfaceType() const
+- hasWriteProtection() const
+- hasReadProtection() const
 AppleTCS3490
 AppleTHS7383
 AppleTII2CAudio
@@ -6272,6 +7200,12 @@ AppleUSB30HubPort
 - warmReset(bool)
 - clearPipeStallGated(IOUSBHostPipe*)
 - getPortSpeed() const
+AppleUSB30XHCICardReaderPort
+- devicePower(bool)
+- deviceReset(bool)
+- setDevicePower(bool)
+- setDeviceReset(bool)
+- cardReaderEnumerationRetry(IOTimerEventSource*)
 AppleUSB30XHCILightningPort
 AppleUSB30XHCIPort
 - serializePortLink(void*, OSSerialize*)
@@ -6280,6 +7214,7 @@ AppleUSB30XHCIRemovablePort
 AppleUSB30XHCITypeCPort
 - cableNotification(void*, unsigned int, IOService*, void*, unsigned long)
 - cableChangeOccurred(IOTimerEventSource*)
+AppleUSBALSService
 AppleUSBAudioComposite
 AppleUSBAudioControlInterface
 AppleUSBAudioDevice
@@ -6496,6 +7431,24 @@ AppleUSBAudioStream
 - getCachedSyncType()
 - CheckOtherStreamWrapFrame()
 AppleUSBAudioStreamNode
+AppleUSBCController
+- getCommandGate()
+- hpmEnterExitFirmwareUpdateMode(unsigned int)
+- interruptAction(IOInterruptEventSource*, int)
+- setSystemPowerState(unsigned char)
+- pollTimeoutGated()
+- powerDelayTimeoutGated()
+- modeCheck() const
+- updateCachedRegisters(bool, bool, bool*, bool*)
+- hpmSetAppConfigOverrides()
+- readRegs(unsigned char, unsigned char*, unsigned long long) const
+- readRegsGated(unsigned char, unsigned char*, unsigned long long) const
+- writeRegs(unsigned char, unsigned char const*, unsigned long long) const
+- writeRegsGated(unsigned char, unsigned char const*, unsigned long long) const
+- hpmIECSCommand(unsigned long long, unsigned int, unsigned int, unsigned int) const
+- SleepWakeThreadEntry(unsigned int)
+- PowerStateThreadEntry(unsigned int)
+- remoteWakeSafetyTimeoutGated()
 AppleUSBCDCCompositeDevice
 AppleUSBCDCControl
 - sendMER(StandardUSB::DeviceRequest&, void*, IOUSBHostCompletion*)
@@ -6620,6 +7573,16 @@ AppleUSBEthernetHost
 - signalTransmitQueue()
 - stopTransmitQueue()
 AppleUSBEthernetHostAQM
+AppleUSBFirmwareIORequest
+- getRequestType() const
+- getDeviceAddress() const
+- getEndpointDescriptor() const
+- prepare(bool, IOUSBFirmwareSetupCompletion*, unsigned short, StandardUSB::EndpointDescriptor const*, AppleUSBRequestCompleter*)
+- prepare(IOMemoryDescriptor*, unsigned int, bool, IOUSBFirmwareCompletion*, unsigned int, unsigned short, StandardUSB::EndpointDescriptor const*, AppleUSBRequestCompleter*)
+- getTimeStamp() const
+AppleUSBFirmwareIORequestPool
+AppleUSBFirmwareRequest
+AppleUSBHostBillboardDevice
 AppleUSBHostBouncedDMACommand
 - setMemoryDescriptor(IOMemoryDescriptor const*, bool, unsigned int, unsigned long long)
 AppleUSBHostBulkHIDDevice
@@ -6740,7 +7703,6 @@ AppleUSBHostControllerIsochEndpoint
 AppleUSBHostControllerIsochListElement
 AppleUSBHostControllerListElement
 AppleUSBHostDARTDMACommand
-- initWithSpecification(bool (*)(IODMACommand*, IODMACommand::Segment64, void*, unsigned int), unsigned int, unsigned char, unsigned long long, IODMACommand::MappingOptions, unsigned long long, unsigned int, IOMapper*, void*)
 AppleUSBHostDMABufferMemoryDescriptor
 - initInTaskWithOptions(task*, unsigned int, unsigned long, unsigned long, unsigned int, IOMapper*)
 AppleUSBHostDMACommand
@@ -6749,7 +7711,7 @@ AppleUSBHostDMACommand
 AppleUSBHostDMACommandPool
 - getCommand(unsigned int, unsigned int)
 - returnCommand(IODMACommand*)
-- initWithSpecification(IOWorkLoop*, bool (*)(IODMACommand*, IODMACommand::Segment64, void*, unsigned int), unsigned int, unsigned char, unsigned long long, IODMACommand::MappingOptions, unsigned long long, unsigned int, unsigned int, IOMapper*)
+- initWithSpecification(IOWorkLoop*, bool (*)(IODMACommand*, IODMACommand::Segment64, void*, unsigned int), unsigned char, unsigned long long, IODMACommand::MappingOptions, unsigned long long, unsigned int, unsigned int, IOMapper*)
 AppleUSBHostDeviceIdler
 - initWithDeviceAndWorkLoop(IOUSBHostDevice*, IOWorkLoop*)
 - enable()
@@ -7110,6 +8072,207 @@ AppleUSBRequestPool
 - gatedStop()
 AppleUSBSampleBufferMonitor
 AppleUSBTopCaseHIDDriver
+AppleUSBVHCIBufferQueue
+- close()
+- registerCompletionAction(void (*)(OSObject*, void*), OSObject*, void*)
+- transferBuffer(IOMemoryDescriptor*, unsigned long long, unsigned long long, unsigned int)
+- cancelBuffers()
+- getPendingBufferCount(unsigned int)
+- getNextEvent()
+- checkForEvents()
+AppleUSBVHCICommandQueue
+- stop()
+- notifyServiceState(AppleUSBVHCICommandQueue::tServiceState)
+- notifyCommandComplete(StandardUSBVHCI::VHCIMessage const*)
+- initWithMessageQueue(AppleUSBVHCIMessageQueue*)
+- executeCommand(StandardUSBVHCI::VHCIMessage*, unsigned int)
+- sendCommand(StandardUSBVHCI::VHCIMessage*)
+- abortCommand(StandardUSBVHCI::VHCIMessage*)
+- manuallyProcessInterrupts()
+AppleUSBVHCIDeviceController
+- initWithDescription(unsigned char, OSDictionary*)
+- setPowerStateGated(unsigned long, IOService*)
+- interruptOccurred(IOInterruptEventSource*, int)
+- stopThreadCall(thread_call*)
+- stopThreadCallGated()
+AppleUSBVHCIDeviceEndpoint
+AppleUSBVHCIDevicePipe
+- getFirmware() const
+- getDevice() const
+- setTransferQueue(AppleUSBVHCIFirmwareTransferQueue*)
+- getTransferQueue() const
+- deferRequest(AppleUSBFirmwareRequest*)
+- getDeferredRequest()
+- initWithParametersAndOwners(IOUSBDeviceController*, int, int, int, int, int, AppleUSBVHCIFirmware*)
+AppleUSBVHCIEventQueue
+- enable()
+- disable()
+- getNextEvent()
+AppleUSBVHCIFirmware
+- manuallyProcessInterrupts(AppleUSBVHCIFirmware::tInterruptMask, bool)
+- createPipe(tCreatePipeParameters&, IOUSBDeviceController*)
+- registerPipe(IOUSBDevicePipe*)
+- unregisterPipe(IOUSBDevicePipe*)
+- io(AppleUSBFirmwareRequest*)
+- abort(unsigned short, unsigned char, int)
+- updateEndpointStatus(unsigned short, unsigned char, int)
+- createDevice(IOUSBDeviceController*, unsigned short&)
+- destroyDevice(unsigned short)
+- sendSystemMessage(StandardUSBVHCI::VHCIMessage*)
+- releaseDeviceAddress(IOUSBDeviceController*)
+- getHardwareState() const
+- hardwareException(unsigned int)
+- setPowerStateGated(unsigned long, IOService*)
+- systemWillShutdownGated(unsigned int)
+- createPipeGated(tCreatePipeParameters&, IOUSBDeviceController*, IOUSBDevicePipe*&)
+- registerPipeGated(IOUSBDevicePipe*)
+- unregisterPipeGated(IOUSBDevicePipe*)
+- interruptOccurred(IOInterruptEventSource*, int)
+- processInterrupts(AppleUSBVHCIFirmware::tInterruptMask, bool)
+- ioGated(AppleUSBFirmwareRequest*)
+- abortGated(unsigned short, unsigned char, int)
+- updateEndpointStatusGated(unsigned short, unsigned char, int)
+- createDeviceGated(IOUSBDeviceController*, unsigned short&)
+- destroyDeviceGated(unsigned short)
+- releaseDeviceAddressGated(IOUSBDeviceController*)
+- createCommandQueue()
+- hardwareExceptionThreadCall(unsigned int)
+- hardwareExceptionThreadCallGated(unsigned int)
+- createMessageQueue(AppleUSBVHCIFirmware::tQueueIndex) const
+- createEventQueue(AppleUSBVHCIFirmware::tQueueIndex) const
+- createTransferQueue(StandardUSBVHCI::VHCIMessage const*)
+- createBufferQueue(StandardUSBVHCI::VHCIMessage*)
+AppleUSBVHCIFirmwareCommandQueue
+- endpointRequestState(unsigned short, unsigned char, StandardUSBVHCI::tVHCIEndpointState, AppleUSBVHCITransferQueue*)
+- endpointSetState(unsigned short, unsigned char, StandardUSBVHCI::tVHCIEndpointState, AppleUSBVHCITransferQueue*)
+- notifyHostCommand(StandardUSBVHCI::VHCIMessage const*)
+- initWithParameters(AppleUSBVHCIMessageQueue*, AppleUSBVHCIFirmware*)
+AppleUSBVHCIFirmwareControlRequest
+AppleUSBVHCIFirmwareControlRequestPool
+AppleUSBVHCIFirmwareCxQueue
+- halt()
+- initWithParameters(unsigned short, unsigned int, StandardUSBVHCI::VHCIMessage const*, AppleUSBVHCIBufferQueue*, AppleUSBVHCIMessageQueue*, AppleUSBVHCIFirmwareCommandQueue*, AppleUSBVHCIFirmware*)
+- processCommand0070(StandardUSBVHCI::VHCIMessage const*)
+- getEndpointType() const
+- getDeviceAddress() const
+- getEndpointAddress() const
+- getEndpointMaxPacketSize() const
+- getEndpointMaxESIT() const
+- pauseRequests()
+- getCurrentStage() const
+- getCurrentDeviceRequest() const
+- initWithParameters(unsigned short, StandardUSBVHCI::VHCIMessage const*, AppleUSBVHCIBufferQueue*, AppleUSBVHCIMessageQueue*, AppleUSBVHCIFirmwareCommandQueue*, AppleUSBVHCIFirmware*)
+AppleUSBVHCIFirmwareDevice
+- destroy()
+- getTransferQueue(tEndpointDirection, unsigned char)
+- getTransferQueue(unsigned char)
+- processEvent(StandardUSBVHCI::VHCIMessage const*)
+- initWithParameters(AppleUSBVHCIFirmware*, AppleUSBVHCIMessageQueue*)
+- getEndpointIndex(tEndpointDirection, unsigned char) const
+- getEndpointIndex(unsigned char) const
+AppleUSBVHCIFirmwarePort
+- createDevice(unsigned char, OSDictionary*)
+- destroyDevice()
+- connect()
+- disconnect()
+- remoteWake()
+- notifyEvent(StandardUSBVHCI::VHCIMessage const*)
+- getFirmware() const
+- getWakeEvents()
+- getPortStatus()
+- reportPortStatus()
+- initWithParameters(unsigned int, AppleUSBVHCIFirmware::tDeviceFunction)
+- closeGated(IOService*, unsigned int)
+- setPowerStateGated(unsigned long, IOService*)
+- createDeviceGated(unsigned char, OSDictionary*)
+- destroyDeviceGated()
+- connectGated()
+- disconnectGated()
+- remoteWakeGated()
+- processEvent(IOInterruptEventSource*, int)
+AppleUSBVHCIFirmwarePortClient
+AppleUSBVHCIFirmwarePortUserClient
+- getProcessID() const
+AppleUSBVHCIFirmwareRSM
+- pullReceiveData(AppleUSBVHCIRSMBufferQueue*)
+- rsmReceiveCallback(IORSMChannel*, void const*, unsigned long long, unsigned char)
+AppleUSBVHCIFirmwareRequest
+- getRequestType() const
+- getDeviceAddress() const
+- getEndpointDescriptor() const
+- prepare(AppleUSBFirmwareRequest*, AppleUSBVHCITransferQueue*)
+- update(StandardUSBVHCI::VHCIMessage*)
+- hasTimedOut()
+- getDeadline()
+- initWithPoolAndProtocol(AppleUSBRequestPool*, unsigned short)
+- getEndpointMaxPacketSize() const
+- pause()
+- finish(StandardUSBVHCI::VHCIMessage const*)
+- finish(StandardUSBVHCI::VHCIMessage*)
+- getRequestState() const
+- update0070(StandardUSBVHCI::VHCIMessage*)
+AppleUSBVHCIFirmwareRequestPool
+- initWithWorkLoopAndProtocol(IOWorkLoop*, unsigned short)
+AppleUSBVHCIFirmwareTransferQueue
+AppleUSBVHCIFirmwareTxRxQueue
+- halt()
+- initWithParameters(unsigned short, unsigned int, StandardUSBVHCI::VHCIMessage const*, AppleUSBVHCIBufferQueue*, AppleUSBVHCIMessageQueue*, AppleUSBVHCIFirmwareCommandQueue*, AppleUSBVHCIFirmware*)
+- processCommand0070(StandardUSBVHCI::VHCIMessage const*)
+- getEndpointType() const
+- getDeviceAddress() const
+- getEndpointAddress() const
+- getEndpointMaxPacketSize() const
+- getEndpointMaxESIT() const
+- pauseRequests()
+- initWithParameters(unsigned short, StandardUSBVHCI::VHCIMessage const*, AppleUSBVHCIBufferQueue*, AppleUSBVHCIMessageQueue*, AppleUSBVHCIFirmwareCommandQueue*, AppleUSBVHCIFirmware*)
+AppleUSBVHCIMessageQueue
+- enable()
+- disable()
+- sendMessage(StandardUSBVHCI::VHCIMessage const*, unsigned int)
+- indexIsPending(unsigned int) const
+- transportPendingCount() const
+AppleUSBVHCIRSMBufferQueue
+- registerPullReceiveDataAction(void (*)(OSObject*, AppleUSBVHCIRSMBufferQueue*), OSObject*)
+- receiveData(IORSMReceiveQueueEntry*)
+- generateEvents()
+- getChannelData() const
+- initWithParameters(AppleUSBVHCIBufferQueue::tBufferQueueRole, IORSMChannel*, StandardUSBVHCI::VHCIMessage const*, IOInterruptEventSource*)
+- outCompletion(IOMemoryDescriptor**, int)
+AppleUSBVHCIRSMEventQueue
+- receiveEvent(StandardUSBVHCI::VHCIMessage const*)
+- initWithParameters(unsigned char)
+AppleUSBVHCIRSMMessageQueue
+- processCompletions()
+- initWithParameters(IORSMChannel*, unsigned char, IOInterruptEventSource*)
+- completion(AppleUSBVHCIMessageQueue::tMessageRecord*, int)
+AppleUSBVHCITransferQueue
+- sendMessage(StandardUSBVHCI::VHCIMessage*)
+- storeMessage(StandardUSBVHCI::VHCIMessage const*, unsigned int)
+- transferBuffer(IOMemoryDescriptor*, unsigned long long, unsigned long long, unsigned int)
+- transferBufferWithStatus(IOMemoryDescriptor*, unsigned long long, unsigned long long, unsigned int, int)
+- cancelBuffers()
+- getPendingBufferCount(unsigned int)
+- getNextEvent()
+- processEvent(StandardUSBVHCI::VHCIMessage const*)
+- close()
+- getState() const
+- enqueueRequest(AppleUSBRequest*)
+- abortRequest(int)
+- abortAllRequests(int, IOService*)
+- hasRequests()
+- updateStatus(int)
+- getDebugLoggingMask() const
+- getCommand() const
+- initWithParameters(unsigned short, unsigned int, StandardUSBVHCI::VHCIMessage const*, AppleUSBVHCIBufferQueue*, AppleUSBVHCIMessageQueue*, IOWorkLoop*)
+- pollForCompletions(unsigned int)
+- activateRequests()
+- completeRequest(AppleUSBRequest*)
+- processEvent0070(StandardUSBVHCI::VHCIMessage const*)
+- setQueueState(StandardUSBVHCI::tVHCIEndpointState)
+- intervalTimeout(IOTimerEventSource*)
+- timeout(IOTimerEventSource*)
+- adjustTimeout()
+- completionAction(void*)
 AppleUSBXDCI
 - handleUSBConnectionDone()
 - initDeviceController()
@@ -7181,6 +8344,10 @@ AppleUSBXHCI
 - regOr64(unsigned long long, unsigned int, unsigned long long)
 - regAnd32(unsigned long long, unsigned int, unsigned int)
 - regAnd64(unsigned long long, unsigned int, unsigned long long)
+AppleUSBXHCIAR
+- callAcpiRtpcMethod(unsigned int)
+AppleUSBXHCIARIsochronousRequest
+AppleUSBXHCIARIsochronousRequestPool
 AppleUSBXHCIARM
 - applyTunables(OSData*)
 - copyPhandleDriver(char const*, char const*) const
@@ -7188,6 +8355,8 @@ AppleUSBXHCIARM
 - createUSB3Port(tUSBPortType, IODeviceMemory*, StandardUSBXHCI::StandardUSBXHCIProtocolCapability*, IORegistryEntry*)
 - systemPowerChange(void*, unsigned int, IOService*, void*, unsigned long)
 - systemPowerChangeThreadCall(AppleUSBXHCIARM::tSystemPowerNotifyParams*)
+AppleUSBXHCIARRequest
+AppleUSBXHCIARRequestPool
 AppleUSBXHCICommandRing
 - notifyHardware(AppleUSBXHCICommandRing::tHardwareState)
 - initRegisters()
@@ -7257,6 +8426,23 @@ AppleUSBXHCIEndpoint
 - initWithParametersAndTransferRing(AppleUSBXHCI*, AppleUSBXHCIDevice*, AppleUSBXHCICommandRing*, IOUSBHostPipe::StandardUSBDescriptors&, AppleUSBXHCITransferRing*)
 - createTransferRing(unsigned int)
 - configureEndpointContext(IOUSBHostPipe::StandardUSBDescriptors&)
+AppleUSBXHCIFL1100
+AppleUSBXHCIFL1100Boot
+- pciPowerStateWillChangeToGated(unsigned long, unsigned long, IOService*)
+- pciPowerStateDidChangeToGated(unsigned long, unsigned long, IOService*)
+- rootPciPowerStateWillChangeToGated(unsigned long, unsigned long, IOService*)
+- cableChangeNotificationHandler(void*, IOService*)
+- cableChangeNotificationThreadCall(void*, void*)
+- discoverPCI()
+- discoverPCIGated()
+- powerOnPCI()
+- powerOnPCIGated()
+- powerOffPCI()
+- powerOffPCIGated()
+- controllerMessage(void*, unsigned int, IOService*, void*, unsigned long)
+- systemPowerChange(void*, unsigned int, IOService*, void*, unsigned long)
+- systemPowerChangeThreadCall(AppleUSBXHCIFL1100Boot::tSystemPowerNotifyParams*)
+AppleUSBXHCIFL1100CommandRing
 AppleUSBXHCIInterrupter
 - initRegisters()
 - saveRegisters()
@@ -7274,6 +8460,23 @@ AppleUSBXHCIIsochronousRequest
 - setStartFrame(unsigned long long)
 AppleUSBXHCIIsochronousRequestPool
 AppleUSBXHCIIsochronousTransferRing
+AppleUSBXHCILPT
+AppleUSBXHCILPTCommandRing
+- setAddress(unsigned int, StandardUSBXHCI::StandardUSBXHCISlotContext*, StandardUSBXHCI::StandardUSBXHCIEndpointContext*)
+- resetEndpoint(unsigned int, unsigned int)
+- initWithParameters(AppleUSBXHCI*, AppleUSBXHCIInterrupter*, unsigned int, IOMapper*, unsigned int)
+AppleUSBXHCILPTH
+AppleUSBXHCILPTHB
+AppleUSBXHCIPCI
+- pciWakeInterruptOccurred(IOInterruptEventSource*, int)
+- pciWakeInitializeForRTD3()
+- inhibitD3Timer(IOTimerEventSource*)
+- systemPowerStateWillChangeToGated(unsigned long, unsigned long, IOService*)
+- setASPMEnable(bool)
+- setASPMEnableGated(bool)
+- powerAssertionTimeout(IOTimerEventSource*)
+AppleUSBXHCIPPT
+AppleUSBXHCIParkingCommandRing
 AppleUSBXHCIPipe
 - initWithDescriptorsAndOwners(StandardUSB::EndpointDescriptor const*, StandardUSB::SuperSpeedEndpointCompanionDescriptor const*, AppleUSBHostController*, IOUSBHostDevice*, IOUSBHostInterface*, unsigned char, unsigned short, AppleUSBXHCIRequest*)
 - getController()
@@ -7306,6 +8509,9 @@ AppleUSBXHCIRequest
 - addTD(AppleUSBXHCITD*, unsigned int, unsigned int, unsigned int)
 - translateCompletionCode(unsigned int) const
 AppleUSBXHCIRequestPool
+AppleUSBXHCISPT
+- getProtocolCapabilityOverride()
+AppleUSBXHCISPTLP
 AppleUSBXHCISparseRequest
 AppleUSBXHCISparseRequestPool
 AppleUSBXHCIStream
@@ -7323,6 +8529,8 @@ AppleUSBXHCIT8101Request
 AppleUSBXHCIT8101RequestPool
 AppleUSBXHCITDPool
 - initWithParameters(AppleUSBXHCI*, unsigned int, IOMapper*)
+AppleUSBXHCITR
+- callAcpiRtpcMethod(unsigned int)
 AppleUSBXHCITransferRing
 - getDequeuePointer()
 - getEndpointContext()
@@ -7348,7 +8556,10 @@ AppleUSBXHCITransferRing
 - initWithParameters(AppleUSBXHCI*, unsigned int, unsigned int, StandardUSBXHCI::StandardUSBXHCIEndpointContext const*, unsigned int, AppleUSBXHCICommandRing*)
 - timeout(IOTimerEventSource*)
 - adjustTimeout(bool)
+AppleUSBXHCIWPT
 AppleVTempDispatcher
+AppleWirelessChargingDevice
+AppleWirelessChargingEventService
 AppleWirelessPowerPacket
 AppleWirelessPowerTelegramStream
 Audio2Control
@@ -7502,8 +8713,18 @@ Audio2Stream
 - setStartingChannelNumber(unsigned int)
 Audio2ToggleControl
 - init(bool, unsigned int, char const*, unsigned int, unsigned int, unsigned int)
+AudioDMAChannel
+AudioDMAChannelStateMachine
+- processChannelOperation(AudioDMAChannelStateMachine::ADMACChannelOperation, void*, void*, void*)
+- setDirectionAndRole(unsigned int, unsigned int)
+- setOperationalApertures(unsigned long long*, unsigned int)
+- resetChannel()
+- clearInterrupts()
+AudioDMAController
+- publishBelow(IORegistryEntry*)
+AudioDMATransferCommand
 AudioKernelClientInterface
-BCMWLANFirmware4378_Hashstore
+BCMWLANFirmware4387_Hashstore
 BTDebug
 - coreDump(unsigned long long, char const*, BTDebugService::CoreDumpCompletion*)
 - enableLogging(unsigned int, unsigned int, LogFlowParams const*, unsigned int)
@@ -7555,19 +8776,6 @@ BTDebugUserClient
 - disableLogging()
 - dumpLogs(char const*)
 - getLogger()
-Block
-- setPowerState(bool)
-- testBlock()
-- updateDisplaySize(unsigned int, unsigned int)
-- saveRegisters()
-- restoreRegisters()
-- get_LUT_register_config(IOMFBRegisterSet*)
-- get_LUT_register_config(IOMFB::DeEnGamma, IOMFBRegisterSet*)
-- get_PIXGAIN_register_config(IOMFBRegisterSet*)
-- read_register(unsigned int) const
-- write_register(unsigned int, unsigned int) const
-- init(IOService*, IOMFBSoCProfile*, IOMFB::BlockType)
-- write_registers(unsigned int, unsigned long, unsigned int*) const
 BlockedArray
 CCCapture
 - initWithProvider(IOService*)
@@ -7697,9 +8905,133 @@ CoreAnalyticsMessenger
 - initWithProvider(IOService*)
 CoreAnalyticsPipe
 CoreAnalyticsUserClient
-CtrlMailboxHandler
-- info_callback_notify_gated(unsigned int)
-- activeq_callback_notify_gated(unsigned int)
+DCPAVAudioDriver
+DCPAVAudioInterfaceProxy
+- getCategory() const
+- getTransport(IOAVLinkSource) const
+- getLinkStatus(IOAVLinkType, IOAVLinkSource) const
+- prepareLink(IOAVAudioLinkData*, IOAVLinkSource)
+- startLink(IOAVAudioLinkData*, IOAVLinkSource)
+- didStartLink(IOAVAudioLinkData*, IOAVLinkSource)
+- willStopLink(IOAVAudioLinkData*, IOAVLinkSource)
+- stopLink(IOAVAudioLinkData*, IOAVLinkSource)
+- completeLink(IOAVAudioLinkData*, IOAVLinkSource)
+- getLinkData(IOAVAudioLinkData*, IOAVLinkSource)
+- copyElements(OSObject**)
+- copyChannelLayoutElements(OSObject**)
+- copyProductAttributes(OSObject**)
+- copyEDIDUUID(OSObject**)
+- getElements()
+- getChannelLayoutElements()
+- getProductAttributes()
+- getEDIDUUID()
+- getDataLatency(IOAVAudioLinkData const*)
+- getDataSafetyOffset(IOAVAudioLinkData const*)
+- stopTransfer()
+- transferData(IOMemoryDescriptor*, unsigned long long, unsigned long long, IOAVDataCompletion*)
+DCPAVAudioInterfaceProxyUserClient
+DCPAVControllerProxy
+- setPower(bool)
+- getPower(bool*)
+- wakeDisplay()
+- sleepDisplay()
+- forceHotPlugDetect()
+- setVirtualDeviceMode(bool)
+DCPAVControllerProxyUserClient
+DCPAVDeviceProxy
+- readI2C(unsigned int, unsigned int, unsigned char*, unsigned int)
+- writeI2C(unsigned int, unsigned int, unsigned char const*, unsigned int)
+- getProtectionStatus(IOAVProtectionStatus*)
+- getContentProtectionCapabilities(IOAVCapability)
+- getLinkData(IOAVLinkType, IOAVLinkData*)
+DCPAVDeviceProxyUserClient
+DCPAVProxy
+- recvMessage(DCPAVIPC::Message const*)
+- clearEventLog()
+- setEventLogMaxCapacity(unsigned int)
+- setEventLogCommandMask(unsigned long long)
+- setEventLogEventMask(unsigned long long)
+- getIOService()
+DCPAVRemoteSACControllerProxy
+DCPAVSACController
+DCPAVServiceProxy
+- setVirtualEDIDMode(bool, OSData*)
+- copyEDID(OSObject**)
+- copyPhysicalAddress(OSObject**)
+- readI2C(unsigned int, unsigned int, unsigned char*, unsigned int)
+- writeI2C(unsigned int, unsigned int, unsigned char const*, unsigned int)
+- getHDCPAuthenticatedContentType()
+- getProtectionStatus(IOAVProtectionStatus*)
+- getContentProtectionCapabilities()
+- getChosenContentProtection()
+- setContentProtectionSupportEnabled(bool)
+- setContentProtectionCapabilities(IOAVCPCapabilities const*)
+- setContentProtectionPolicyOptions(IOAVCPPolicyOptions const*)
+- startInfoFrame(IOAVInfoFrame*, IOAVLinkSource)
+- stopInfoFrame(IOAVInfoFrame*, IOAVLinkSource)
+- setHDRStaticMetadata(OSDictionary const*)
+- startLink(IOAVLinkData*, IOAVLinkSource, unsigned int)
+- stopLink(IOAVLinkData*, IOAVLinkSource, unsigned int)
+- getLinkData(IOAVLinkType, IOAVLinkData*, IOAVLinkSource)
+DCPAVServiceProxyUserClient
+DCPAVVideoInterfaceProxy
+- getCategory() const
+- getTransport(IOAVLinkSource) const
+- getLinkStatus(IOAVLinkType, IOAVLinkSource) const
+- prepareLink(IOAVLinkSource)
+- startLink(IOAVLinkSource)
+- didStartLink(IOAVLinkSource)
+- willStopLink(IOAVLinkSource)
+- stopLink(IOAVLinkSource)
+- completeLink(IOAVLinkSource)
+- getLinkData(IOAVVideoLinkData*, IOAVLinkSource)
+- prepareLink(IOAVVideoLinkData*, IOAVLinkSource)
+- startLink(IOAVVideoLinkData*, IOAVLinkSource)
+- didStartLink(IOAVVideoLinkData*, IOAVLinkSource)
+- willStopLink(IOAVVideoLinkData*, IOAVLinkSource)
+- stopLink(IOAVVideoLinkData*, IOAVLinkSource)
+- completeLink(IOAVVideoLinkData*, IOAVLinkSource)
+- setLinkMode(unsigned char, IOAVLinkSource)
+- setTestMode(IOAVVideoTestMode, IOAVLinkSource)
+- setTimingElement(unsigned long long, IOAVLinkSource)
+- setColorElement(unsigned long long, IOAVLinkSource)
+- setRotation(int)
+- setBounds(IOAVVideoBoundsRect)
+- setColorDitherRemoval(bool)
+- setScreenVirtualTemperature(int)
+- copyTimingElements(OSObject**)
+- copyColorElements(OSObject**)
+- copyDisplayAttributes(OSObject**)
+DCPAVVideoInterfaceProxyUserClient
+DCPDPControllerProxy
+- setSupportsEnhancedMode(bool)
+- setSupportsDownspread(bool)
+- setLaneCount(IODPDevice*, unsigned int)
+- setMinLaneCount(unsigned int)
+- setMaxLaneCount(unsigned int)
+- setLinkRate(IODPDevice*, unsigned char)
+- setMinLinkRate(unsigned char)
+- setMaxLinkRate(unsigned char)
+- setScramblingInhibited(bool)
+- setQualityPattern(IODPQualityPattern)
+- setDriveSettings(unsigned int, IODPDriveSettings)
+DCPDPControllerProxyUserClient
+DCPDPDeviceProxy
+- readDPCD(unsigned int, unsigned char*, unsigned int, unsigned int)
+- writeDPCD(unsigned int, unsigned char const*, unsigned int, unsigned int)
+- getLinkTrainingData(IODPLinkTrainingData*)
+- getSymbolErrorCount(unsigned int, unsigned int*)
+DCPDPDeviceProxyUserClient
+DCPDPServiceProxy
+- retrainLink(IODPLinkTrainingData*)
+- getSymbolErrorCount(unsigned int, unsigned int*)
+- getSinkCount(unsigned int*)
+DCPDPServiceProxyUserClient
+DCPEndpoint
+DCPLink
+DCPMIPIControllerProxy
+DCPPowerCallback
+DCPPowerManager
 DIDeviceCreatorUserClient
 DIDeviceIOUserClient
 DIDeviceRequestPool
@@ -8247,6 +9579,17 @@ IOAVAudioLinkDelegate
 IOAVAudioPattern
 - initWithOwner(IOAVAudioDriver*)
 IOAVCECInterface
+- sendCECGated(IOCECFrame const*, unsigned char*)
+- enableCECMessages()
+- disableCECMessages()
+- handleSendCEC(IOCECFrame const*, unsigned char)
+- setLogicalAddressMask(unsigned short)
+- getPhysicalAddress()
+- receiveCEC(IOCECFrame const*)
+- sendCEC(IOCECFrame const*, unsigned char)
+- setPhysicalAddress(unsigned short)
+- setHPDStatus(bool)
+- getHPDStatus()
 IOAVCECService
 - setCECInterface(IOAVCECInterface*)
 - willHibernate()
@@ -8256,17 +9599,169 @@ IOAVCommandGate
 - commandSleepUntilDeadline(unsigned long long, unsigned int)
 IOAVConcreteDisplayMemory
 IOAVControlInterface
+- getCategory() const
+- getLinkStatus(IOAVLinkType, IOAVLinkSource) const
 IOAVControlInterfaceConcreteUserClient
 IOAVControlInterfaceUserClient
 IOAVController
+- getIOService()
+- createEventLog()
+- clearEventLog()
+- setEventLogMaxCapacity(unsigned int)
+- setEventLogCommandMask(unsigned long long)
+- setEventLogEventMask(unsigned long long)
+- addRegisterSets(OSArray*)
+- addRegisterSet(char const*, IOAVRegisterSetType, unsigned long long, unsigned long long, unsigned long long, unsigned int, OSObject*, int (*)(OSObject*, IOAVRegisterSet const*, IOAVRegisterSet::Range const*, void*, void*), void*)
+- openAudioLinkDelegate(IOService*)
+- openAuxiliaryProviders(IOService*)
+- closeAuxiliaryProviders()
+- handleStart(IOService*)
+- handlePowerRegistration(IOService*)
+- handleStop(IOService*)
+- addDevice(IOAVDevice*, void (*)(OSObject*, IOAVDevice*, bool, void*), OSObject*, void*)
+- removeDevice(IOAVDevice*, unsigned int)
+- removeDevices(unsigned int)
+- containsDevice(IOAVDevice*)
+- handleGetDSCCapabilities()
+- getLinkSupport(IOAVDevice*, IOAVLinkType)
+- handleDeviceNotResponding(IOAVDevice*)
+- handleDeviceBusyTimeout(IOAVDevice*)
+- handleDeviceNotStarted(IOAVDevice*)
+- handleGetContentProtectionCapabilities()
+- getAVRoot() const
+- getLocation()
+- getUnit() const
+- getTransport()
+- copyDevices()
+- getPower(bool*)
+- getLinkDelegate(IOAVLinkType)
+- validateLink(IOAVDevice*, IOAVLinkData*)
+- prepareLink(IOAVDevice*, IOAVLinkData*)
+- startLink(IOAVDevice*, IOAVLinkData*)
+- didStartLink(IOAVDevice*, IOAVLinkData*)
+- updateLink(IOAVDevice*, IOAVLinkData*)
+- willStopLink(IOAVDevice*, IOAVLinkData*)
+- stopLink(IOAVDevice*, IOAVLinkData*)
+- completeLink(IOAVDevice*, IOAVLinkData*)
+- getLinkStatusMask(IOAVDevice*)
+- getLinkStatus(IOAVDevice*, IOAVLinkType)
+- getLinkData(IOAVDevice*, IOAVLinkType, IOAVLinkData*)
+- getUpdateLinkSupport(IOAVDevice const*, IOAVLinkType) const
+- getSupportsCEC()
+- getDisplaySplitCapability() const
+- getContentProtectionAllowed()
+- getContentProtectionInhibited()
+- getContentProtectionCapabilities()
+- setupContentProtection(IOAVDevice*, IOAVCPConfiguration, OSMetaClass const*)
+- shutdownContentProtection(IOAVDevice*)
+- protectLink(IOAVDevice*, IOAVContentProtection)
+- unprotectLink(IOAVDevice*)
+- getHDCPAuthenticatedContentType(IOAVDevice*)
+- getHDCPContentTypeCapability(IOAVDevice*)
+- getM0(unsigned char*)
+- validateKSVList(IOAVHDCPTopologyInfo const*, unsigned char const (*) [5], unsigned int const*)
+- hdcp2HPrimeAvailable(IOAVDevice*)
+- hdcp2PairingInfoAvailable(IOAVDevice*)
+- hdcp2ReceiverIDListAvailable(IOAVDevice*, bool*)
+- readI2C(IOAVDevice*, unsigned int, unsigned int, unsigned char*, unsigned int)
+- writeI2C(IOAVDevice*, unsigned int, unsigned int, unsigned char const*, unsigned int)
+- transferData(IOAVDevice*, IOAVLinkType, IOMemoryDescriptor*, unsigned long long, unsigned long long, IOAVDataCompletion*)
+- stopDataTransfer(IOAVDevice*, IOAVLinkType)
+- getDataLatency(IOAVDevice*, IOAVLinkData*)
+- getDataSafetyOffset(IOAVDevice*, IOAVLinkData*)
+- startInfoFrame(IOAVDevice*, IOAVInfoFrame*)
+- stopInfoFrame(IOAVDevice*, IOAVInfoFrame*)
+- forceHotPlugDetect()
+- setVirtualDeviceMode(bool)
+- wakeDisplay()
+- sleepDisplay()
+- getDisplayAsleep(bool*)
+- deviceConnected(IOAVDevice*)
+- enableWorkarounds(OSArray*)
+- getSupportsDSC()
+- getDSCCapabilities()
 IOAVControllerAddDeviceCompletion
 IOAVControllerConcreteUserClient
 IOAVControllerUserClient
 IOAVDMACommand
 IOAVDevice
+- getIOService()
+- createEventLog()
+- clearEventLog()
+- setEventLogMaxCapacity(unsigned int)
+- setEventLogCommandMask(unsigned long long)
+- setEventLogEventMask(unsigned long long)
+- addRegisterSet(char const*, IOAVRegisterSetType, unsigned long long, unsigned long long, unsigned long long, unsigned int, OSObject*, int (*)(OSObject*, IOAVRegisterSet const*, IOAVRegisterSet::Range const*, void*, void*), void*)
+- handleStart(IOService*)
+- handleStop(IOService*)
+- getController()
+- getLocation()
+- getUnit() const
+- getTransport(IOAVLinkSource, unsigned int*)
+- setTransport(IOAVLinkSource, IOAVTransport)
+- validateLink(IOAVLinkData*)
+- prepareLink(IOAVLinkData*)
+- startLink(IOAVLinkData*)
+- didStartLink(IOAVLinkData*)
+- updateLink(IOAVLinkData*)
+- willStopLink(IOAVLinkData*)
+- stopLink(IOAVLinkData*)
+- completeLink(IOAVLinkData*)
+- getLinkStatusMask()
+- getLinkStatus(IOAVLinkType)
+- getLinkData(IOAVLinkType, IOAVLinkData*)
+- getUpdateLinkSupport(IOAVLinkType) const
+- dispatchVSync(unsigned int)
+- registerVSyncCallback(void (*)(OSObject*, IOAVDevice*, void*), OSObject*, void*)
+- getSupportsCEC()
+- getDisplaySplitCapability() const
+- getContentProtectionInhibited()
+- getContentProtectionCapabilities(IOAVCapability)
+- setupContentProtection(IOAVCPConfiguration, OSMetaClass const*)
+- shutdownContentProtection()
+- getProtectionStatus(IOAVProtectionStatus*)
+- getIsProtectionRepeater()
+- protectLink(IOAVContentProtection)
+- unprotectLink()
+- getHDCPAuthenticatedContentType()
+- getHDCPContentTypeCapability()
+- setAinfo(unsigned char)
+- setAksv(unsigned char*)
+- setAn(unsigned char*)
+- getBksv(unsigned char*)
+- getRPrime(unsigned short*)
+- getVPrime(unsigned int*)
+- getIsKSVListReady(bool*)
+- getKSVList(unsigned char (*) [5], unsigned int)
+- validateKSVList()
+- validateRPrime(unsigned short)
+- getHDCPTopologyInfo(IOAVHDCPTopologyInfo*)
+- hdcp2HPrimeAvailable()
+- hdcp2PairingInfoAvailable()
+- hdcp2ReceiverIDListAvailable(bool*)
+- readI2C(unsigned int, unsigned int, unsigned char*, unsigned int)
+- writeI2C(unsigned int, unsigned int, unsigned char const*, unsigned int)
+- readI2C(unsigned int, unsigned int, unsigned char*)
+- writeI2C(unsigned int, unsigned int, unsigned char)
+- getPower(bool*)
+- setPower(bool)
+- copyEDIDBlock(unsigned int, OSData**)
+- transferData(IOAVLinkType, IOMemoryDescriptor*, unsigned long long, unsigned long long, IOAVDataCompletion*)
+- stopDataTransfer(IOAVLinkType)
+- getDataLatency(IOAVLinkData*)
+- getDataSafetyOffset(IOAVLinkData*)
+- startInfoFrame(IOAVInfoFrame*)
+- stopInfoFrame(IOAVInfoFrame*)
+- getInfoFrame(IOAVInfoFrame*)
+- getDisplayAsleep(bool*)
+- deviceConnected()
+- enableWorkarounds(OSArray*)
+- getDSCCapabilities(IOAVCapability)
 IOAVDeviceConcreteUserClient
 IOAVDeviceUserClient
 IOAVDisplayMemory
+- write(unsigned int, unsigned char const*, unsigned int)
+- read(unsigned int, unsigned char*, unsigned int)
 IOAVDisplayMemoryConcreteUserClient
 IOAVDisplayMemoryUserClient
 IOAVElement
@@ -8815,8 +10310,32 @@ IOAccessoryManagerOrion
 - getHighVoltageSupported() const
 - startRoleSwapGated(unsigned int)
 IOAccessoryManagerUSBC
+- isAlternateModeSupported(IOPortUSBCAlternateMode) const
+- setLDCMPin(IOPortUSBCLDCMPin)
+- turnOnVbus()
 IOAccessoryManagerUserClient
 IOAccessoryOOBPairingInterface
+- isSupportedType(IOAccessoryOOBPairingType) const
+- getActiveType() const
+- supports2way() const
+- sendBDADDR(void const*, unsigned long long)
+- sendPairingData(void const*, unsigned long long)
+- getBDADDR(void*, unsigned long long*)
+- getPairingData(void*, unsigned long long*)
+- registerReceiveCallbacks(OSObject*, void (*)(OSObject*, IOAccessoryOOBPairingInterface*, IOAccessoryOOBPairingNotifyType, void const*, unsigned long long))
+- copyDeviceVendorName() const
+- copyDeviceName() const
+- copyDeviceModelNumber() const
+- copyDeviceHardwareRevision() const
+- copyDeviceFirmwareRevision() const
+- copyDeviceSerialNumber() const
+- copyDeviceDockType() const
+- copyDeviceSupportedOOBPairingTypes() const
+- copyDeviceActiveOOBPairingType() const
+- copyDeviceSupports2Way() const
+- handleBDADDR(void const*, unsigned long long)
+- handlePairingData(void const*, unsigned long long)
+- notifyActiveTypeChange(IOAccessoryOOBPairingType)
 IOAccessoryOOBPairingInterfaceUserClient
 IOAccessoryPort
 - transmitData(IOMemoryDescriptor*, unsigned int)
@@ -9772,6 +11291,397 @@ IODMAEventSource
 - setDMAConfig(unsigned int)
 - validDMAConfig(unsigned int)
 - init(OSObject*, IOService*, void (*)(OSObject*, IODMAEventSource*, IODMACommand*, int, unsigned long long, unsigned long long), void (*)(OSObject*, IODMAEventSource*, IODMACommand*, int, unsigned long long, unsigned long long), unsigned int)
+IODP13Service
+- acknowledgeLinkServiceIRQ(unsigned char)
+- handleLinkServiceStatusIRQ(unsigned char)
+- handleDSCStatusChanged(unsigned char)
+- handleIRQRxCapChanged()
+- handleIRQHDMILinkStatusChanged()
+- handleIRQConnectedOffEntryRequested()
+- getDSCStatus(unsigned char*)
+- handleIRQCEC()
+- handleCECRxInterrupt(unsigned char)
+- handleCECTxInterrupt(unsigned char)
+- setHDMIProtocolConverterDefaults()
+- setHDMIEDIDProcessingDisabled(bool)
+- getSupportsColorFormatConversion() const
+- setConversionToYCbCr444Enabled(bool, IOAVVideoColorimetry)
+- setConversionToYCbCr422Enabled(bool)
+- setConversionToYCbCr420Enabled(bool)
+- setOutputColorDepthConversionEnabled(bool, unsigned char)
+- configureTimingFormatConversion(IOAVVideoLinkData const*, IOAVVideoLinkData const*, bool)
+- getSupportsHorizontalBlankingExpansion()
+- validateHorizontalBlankingExpansion(IOAVVideoTimingData const*, IOAVVideoTimingData const*, IOAVVideoColorData const*)
+- configureHorizontalBlankingExpansion(IOAVVideoLinkData const*, IOAVVideoLinkData const*, bool)
+- handleValidateColorFormatConversion(IOAVVideoColorData const*, IOAVVideoColorData const*)
+- configureColorFormatConversion(IOAVVideoLinkData const*, IOAVVideoLinkData const*, bool)
+- getSupportsOutputColorDepthConversion() const
+- setHDMIAutonomousScramblingDisabled(bool)
+- readHDMICharacterErrorCounters(IOAVService::HDMICharacterErrorCounts*)
+IODPAgileLinkRateTable
+- getLinkRateAtIndex(unsigned int) const
+- addRow(unsigned long long, unsigned long long, unsigned int)
+IODPCECController
+- getIOService()
+IODPCECInterface
+- getTransport(IOAVLinkSource) const
+IODPController
+- handleGetDriveSettings(IODPDevice*, IODPDriveSettings*, unsigned int)
+- handleSetDriveSettings(IODPDevice*, IODPDriveSettings*, unsigned int, bool*, bool*)
+- getSupportsLaneMapping()
+- getLaneMapping()
+- getMinLaneCount()
+- getMaxLaneCount()
+- getMinLinkRate()
+- getMaxLinkRate()
+- getMaxTrainingPattern()
+- getDownstreamPortCount()
+- getSupportsALPM()
+- getSupportsASSR()
+- getSupportsEnhancedMode()
+- getSupportsDownspread()
+- getSupportsFEC()
+- getMinLaneCount() const
+- setLaneMapping(unsigned int)
+- setMinLaneCount(unsigned int)
+- setMaxLaneCount(unsigned int)
+- setMinLinkRate(unsigned char)
+- setMaxLinkRate(unsigned char)
+- setSupportsALPM(bool)
+- setSupportsEnhancedMode(bool)
+- setSupportsDownspread(bool)
+- setScramblingInhibited(bool)
+- getScramblingInhibited() const
+- getStreamClockMode(IOAVLinkType) const
+- recommendedLink(IODPDevice*, IOAVLinkData*, IODPLinkTrainingData*)
+- suspendLink(IODPDevice*)
+- resumeLink(IODPDevice*)
+- getLinkTrainingData(IODPDevice*, IODPLinkTrainingData*)
+- readDPCD(IODPDevice*, unsigned int, unsigned char*, unsigned int, unsigned int)
+- writeDPCD(IODPDevice*, unsigned int, unsigned char const*, unsigned int, unsigned int)
+- getLinkRate(IODPDevice*, unsigned char*)
+- getLaneCount(IODPDevice*, unsigned int*)
+- setEnhancedMode(IODPDevice*, bool)
+- getEnhancedMode(IODPDevice*, bool*)
+- setDownspread(IODPDevice*, bool)
+- getDownspread(IODPDevice*, bool*)
+- setDriveSettings(IODPDevice*, IODPDriveSettings*, unsigned int, bool*, bool*)
+- getDriveSettings(IODPDevice*, IODPDriveSettings*, unsigned int)
+- setDriveSettings(unsigned int, IODPDriveSettings)
+- setTrainingPattern(IODPDevice*, IODPTrainingPattern, bool)
+- getTrainingPattern(IODPDevice*, IODPTrainingPattern*, bool*)
+- setQualityPattern(IODPDevice*, IODPQualityPattern, bool)
+- getQualityPattern(IODPDevice*, IODPQualityPattern*, bool*)
+- setQualityPattern(IODPQualityPattern)
+- validateLaneCount(unsigned int)
+- validateLinkRate(unsigned char)
+- willTrainLink(IODPLinkTrainingData const*)
+- didTrainLink(int, IODPLinkTrainingData const*)
+- setALPMEnabled(IODPDevice*, bool)
+- getALPMEnabled(IODPDevice*, bool*)
+- setFECSymbol(IODPDevice*, bool)
+- setFECReady(IODPDevice*, bool)
+- setFECEnabled(IODPDevice*, bool)
+- getFECEnabled(IODPDevice*, bool*)
+- setASSREnabled(IODPDevice*, bool)
+- getASSREnabled(IODPDevice*, bool*)
+- getSupportsAgileTapChange(IODPDevice const*) const
+- getMinAgileLinkRate(IODPDevice const*, IOAVVideoLinkData const*) const
+- copyAgileLinkRateTable(IODPDevice const*) const
+- setAgileLinkRateRanges(IODPDevice*, IODPLinkRateRange const*, unsigned int, __IODPFilter<unsigned long long> const*)
+- updateLinkRate(IODPDevice*, unsigned int, unsigned int, unsigned char const*, unsigned int)
+- handleR0PrimeAvailable(IODPDevice*)
+- handleVPrimeAvailable(IODPDevice*)
+- getSupportsExtendedDPColorimetry()
+IODPControllerConcreteUserClient
+IODPControllerUserClient
+IODPDevice
+- setQualityPattern(IODPQualityPattern, bool)
+- cacheCapabilities()
+- recommendedLink(IOAVLinkData*, IODPLinkTrainingData*)
+- clearSymbolErrorCounts()
+- suspendLink()
+- validateLaneCount(unsigned int)
+- validateLinkRate(unsigned char)
+- getLinkTrainingData(IODPLinkTrainingData*)
+- dispatchIRQ(unsigned int)
+- registerIRQCallback(void (*)(OSObject*, IODPDevice*, void*), OSObject*, void*)
+- getDPCDRevision()
+- getRevisionMajor()
+- getRevisionMinor()
+- getMinLaneCount(IOAVCapability)
+- getMaxLaneCount(IOAVCapability)
+- getMinLinkRate(IOAVCapability)
+- getMaxLinkRate(IOAVCapability)
+- getMaxTrainingPattern(IOAVCapability)
+- getSupportsALPM(IOAVCapability)
+- getSupportsASSR(IOAVCapability)
+- getSupportsDSC(IOAVCapability)
+- getSupportsFEC(IOAVCapability)
+- getSupportsDownspread(IOAVCapability)
+- getSupportsEnhancedMode(IOAVCapability)
+- getSupportsHorizontalBlankingExpansion()
+- getHorizontalBlankingExpansionBufferPixelCount(IOAVVideoColorData const*)
+- getHorizontalBlankingExpansionEnabled(bool*)
+- getSupportsFastLinkTraining()
+- getClockRecoveryIntervalDelay()
+- getEqualizationIntervalDelay()
+- getDownstreamPortCapabilityInfo(unsigned int)
+- getDownstreamPortCount()
+- getDownstreamPortType(unsigned int)
+- getDFPMaxClockRate() const
+- getDFPMaxColorDepth() const
+- getSupportsPassThroughYCbCr422() const
+- getSupportsPassThroughYCbCr420() const
+- getSupportsYCbCr444ConversionToYCbCr422() const
+- getSupportsYCbCr444ConversionToYCbCr420() const
+- getDeviceType()
+- capabilitiesChanged()
+- handleR0PrimeAvailable()
+- handleVPrimeAvailable()
+- readDPCD(unsigned int, unsigned char*, unsigned int, unsigned int)
+- writeDPCD(unsigned int, unsigned char const*, unsigned int, unsigned int)
+- getRequestedDriveSettings(IODPDriveSettings*, unsigned int)
+- getDriveSettings(IODPDriveSettings*, unsigned int)
+- getStreamClockMode(IOAVLinkType)
+- getEnhancedMode(bool*)
+- setEnhancedMode(bool)
+- getDownspread(bool*)
+- setDownspread(bool)
+- getLaneCount(unsigned int*)
+- setLaneCount(unsigned int)
+- getLinkRate(unsigned char*)
+- setLinkRate(unsigned char)
+- setTrainingPatternAndDriveSettings(IODPTrainingPattern, IODPDriveSettings*, unsigned int, bool)
+- setDriveSettings(IODPDriveSettings*, unsigned int)
+- clearTrainingPattern()
+- getTrainingPattern(IODPTrainingPattern*, bool*)
+- getQualityPattern(IODPQualityPattern*, bool*)
+- setQualityPattern(IODPQualityPattern)
+- getLaneStatusMasks(unsigned int*, unsigned int)
+- getAlignmentStatusMask(unsigned int*)
+- willTrainLink(IODPLinkTrainingData const*)
+- didTrainLink(int, IODPLinkTrainingData const*)
+- updateLinkStatus()
+- updateLinkSinkDeviceStatus()
+- getDeviceServiceIRQStatus(IODPIRQMask*)
+- getContentProtectionReady(bool*)
+- getSinkStatus(unsigned int*)
+- getSinkCount(unsigned int*)
+- getSymbolErrorCount(unsigned int, unsigned int*)
+- getFECErrorCount(IODPFECErrorCount, unsigned int, unsigned int*)
+- getIEEEOUI(IODPDeviceType, IOAVIEEEOUI*)
+- copyDeviceIDString(IODPDeviceType, OSString**)
+- getALPMEnabled(bool*)
+- setALPMEnabled(bool)
+- getFECEnabled(bool*)
+- setFECReady(bool)
+- setFECSymbol(bool)
+- setFECEnabled(bool)
+- getDSCEnabled(bool*)
+- setDSCEnabled(bool)
+- clearDSCErrors(bool, bool)
+- getASSREnabled(bool*)
+- setASSREnabled(bool)
+- getSupportsAgileTapChange() const
+- getMinAgileLinkRate(IOAVVideoLinkData const*) const
+- copyAgileLinkRateTable() const
+- setAgileLinkRateRanges(IODPLinkRateRange const*, unsigned int, __IODPFilter<unsigned long long> const*)
+- updateLinkRate(unsigned int, unsigned int, unsigned char const*, unsigned int)
+- getIsRPrimeAvailable(bool*)
+- updateEventStatusIndicator()
+- getSinkCountESI(unsigned int*)
+- getContentProtectionReadyESI(bool*)
+- getDeviceServiceIRQStatusESI(IODPDeviceServiceIRQMask*)
+- getLinkServiceIRQStatusESI(unsigned char*)
+- getDSCStatus(unsigned char*)
+- getLaneStatusMasksESI(unsigned int*, unsigned int)
+- getAlignmentStatusMaskESI(unsigned int*)
+- getSinkStatusESI(unsigned int*)
+- getPSRErrorStatus(unsigned char*)
+- getPSREventStatusIndicator(unsigned char*)
+- getPSRStatus(unsigned char*)
+- getDebugRegisters(unsigned char*)
+- getALPMStatus(unsigned char*)
+- getInfoFrameSDPVersionForInfoFrame(IOAVInfoFrame const*)
+- getSupportsExtendedDPColorimetry(IOAVCapability)
+IODPDeviceConcreteUserClient
+IODPDeviceUserClient
+IODPEmbeddedDevice
+IODPEventLog
+- logCommand(int, unsigned int, IODPLinkTrainingData const*)
+IODPHDCPMessageTransport
+- readDPCD(unsigned int, unsigned char*, unsigned int, unsigned int)
+- writeDPCD(unsigned int, unsigned char const*, unsigned int, unsigned int)
+IODPLegacyDualDVIService
+IODPLinkRateRangeTable
+- init(unsigned int)
+- initWithRanges(IODPLinkRateRange const*, unsigned int)
+- copyPropertyListForRowAtIndex(unsigned int) const
+- copyPropertyList() const
+- getCount() const
+- getRanges() const
+- getRangeContainingLinkRate(unsigned long long, unsigned int*) const
+- setRangeAtIndex(unsigned int, IODPLinkRateRange)
+IODPSACAggressorTable
+- init(unsigned int)
+- copyPropertyListForRowAtIndex(unsigned int) const
+- copyPropertyList() const
+- getCapacity() const
+- getRowCount() const
+- getAggressorList() const
+- getNoiseWidthList() const
+- addRow(unsigned long long, unsigned int)
+IODPService
+- retrainLink(IODPLinkTrainingData*)
+- willTrainLink(IODPLinkTrainingData const*, unsigned int)
+- didTrainLink(int, IODPLinkTrainingData const*, unsigned int)
+- shouldSkipCheckLink()
+- shouldWriteSourceOUI()
+- writeSourceOUI()
+- getMinLaneCount()
+- getMaxLaneCount()
+- getMinLinkRate()
+- getMaxLinkRate()
+- getMaxTrainingPattern()
+- getSupportsFEC()
+- getSupportsASSR()
+- getSupportsDownspread()
+- getSupportsEnhancedMode()
+- getSupportsFastLinkTraining()
+- getLinkTrainingData(IODPLinkTrainingData*)
+- getDriveSettings(IODPDriveSettings*, unsigned int)
+- getRequestedDriveSettings(IODPDriveSettings*, unsigned int)
+- getMinDriveSettingsForLane(unsigned int)
+- getNextLowerLinkRate(unsigned char)
+- validateLaneCount(unsigned int)
+- validateLinkRate(unsigned char)
+- reduceLinkRate(unsigned char)
+- reduceLaneCount(unsigned int)
+- getStreamClockMode(IOAVLinkType)
+- getEnhancedMode(bool*)
+- setEnhancedMode(bool)
+- getDownspread(bool*)
+- setDownspread(bool)
+- getLaneCount(unsigned int*)
+- setLaneCount(unsigned int)
+- getLinkRate(unsigned char*)
+- setLinkRate(unsigned char)
+- setDriveSettings(IODPDriveSettings*, unsigned int)
+- clearTrainingPattern()
+- getTrainingPattern(IODPTrainingPattern*, bool*)
+- setTrainingPatternAndDriveSettings(IODPTrainingPattern, IODPDriveSettings*, unsigned int, bool)
+- setTrainingPatternAndDriveSettings(IODPTrainingPattern, IODPDriveSettings*, unsigned int)
+- setQualityPattern(IODPQualityPattern)
+- getQualityPattern(IODPQualityPattern*, bool*)
+- getLaneStatusMasks(unsigned int*, unsigned int)
+- getAlignmentStatusMask(unsigned int*)
+- getFECEnabled(bool*)
+- setFECReady(bool)
+- setFECSymbol(bool)
+- setFECEnabled(bool)
+- getDSCEnabled(bool*)
+- setDSCEnabled(bool)
+- clearDSCErrors()
+- getASSREnabled(bool*)
+- setASSREnabled(bool)
+- getClockRecoveryIntervalDelay()
+- getEqualizationIntervalDelay()
+- updateLinkStatus()
+- updateLinkSinkDeviceStatus()
+- getDeviceServiceIRQStatus(IODPIRQMask*)
+- updateEventStatusIndicator()
+- getDeviceServiceIRQStatusESI(IODPDeviceServiceIRQMask*)
+- getLinkServiceIRQStatusESI(unsigned char*)
+- getSinkStatus(unsigned char*)
+- handleCacheCapabilities()
+- handleSinkCountChanged(unsigned int, unsigned int)
+- handleIRQ()
+- handleCheckLink(bool*)
+- handleDeviceServiceIRQ()
+- handleIRQLinkStatusChanged()
+- handleIRQRemoteCommand()
+- handleIRQAutomatedTest()
+- handleIRQContentProtection()
+- handleIRQSinkSpecific()
+- acknowledgeIRQ(IODPIRQMask)
+- handleTestRequestLink(unsigned char*)
+- handleTestRequestPattern(unsigned char*)
+- handleTestRequestEDID(unsigned char*, unsigned char*)
+- handleTestRequestPhy(unsigned char*)
+- getSupportsAgileTapChange() const
+- getMinAgileLinkRate(IOAVVideoLinkData const*) const
+- copyAgileLinkRateTable() const
+- setAgileLinkRateRanges(IODPLinkRateRange const*, unsigned int, __IODPFilter<unsigned long long> const*)
+- updateLinkRate(unsigned int, unsigned int, unsigned char const*, unsigned int)
+- receiveCEC(IOCECFrame const*)
+- setCECHPDStatus(bool)
+- getSupportsExtendedDPColorimetry()
+- recommendedLink(IOAVLinkData*, IODPLinkTrainingData*)
+- trainLink(IODPLinkTrainingData*, unsigned int)
+- checkLink(bool*)
+- readDPCD(unsigned int, unsigned char*, unsigned int, unsigned int)
+- writeDPCD(unsigned int, unsigned char const*, unsigned int, unsigned int)
+- getSinkCount(unsigned int*)
+- getSymbolErrorCount(unsigned int, unsigned int*)
+- getFECErrorCount(IODPFECErrorCount, unsigned int, unsigned int*)
+- getDFPMaxClockRate() const
+- getDFPMaxColorDepth() const
+- setCECAddressMask(unsigned short)
+- sendCEC(IOCECFrame const*, unsigned char)
+- enableCECMessages()
+- disableCECMessages()
+IODPServiceConcreteUserClient
+IODPServiceUserClient
+IODPSwitch
+IODPSwitchUFP
+- isPortActivated() const
+- getMaxLaneCount() const
+- getMaxLinkRate() const
+- activate()
+- deactivate()
+- getMaxDriveSettings() const
+- setDriveSettings(IODPDriveSettings*, unsigned int)
+- getDriveSettings(IODPDriveSettings*, unsigned int) const
+- getLinkRate(unsigned char*) const
+- setLinkRate(unsigned char)
+- getActiveLaneCount() const
+- setActiveLaneCount(unsigned int)
+- getSupportsDownspread() const
+- getDownspread(bool*) const
+- setDownspread(bool)
+- getSupportsLaneMapping() const
+- setLaneMap(IODPLaneMap)
+- copyAgileLinkRateTable() const
+- setAgileLinkRateRanges(IODPLinkRateRange const*, unsigned int, __IODPFilter<unsigned long long> const*)
+- updateLinkRate(unsigned int, unsigned long long*)
+IODPTXPort
+- handleStart(IOService*)
+- handleStop(IOService*)
+- handleSendAction(IODPTXPort::Action)
+- waitForDPSwitchParent(IOService*)
+- handleInactiveSinkDetected()
+- validateConnection(IODPTXPortAttributes, unsigned int*) const
+- connectTo(IODPTXPortAttributes)
+- getRegisterSets() const
+- getIOService()
+- enableActions()
+- disableActions()
+- willChangeLinkConfiguration()
+- didChangeLinkConfiguration()
+- getAttributes() const
+- setOwner(void*, void (*)(void*, void*), void (*)(void*, void*), void (*)(void*, void*, bool), void (*)(void*, void*))
+- displayRequest()
+- displayRelease()
+- getSupportsHPD() const
+- forceHotPlugDetect()
+- hotPlugDetectChangeOccurred(bool)
+- interruptRequestOccurred()
+- inactiveSinkDetected()
+- validateConnection(IODPTXPort*, unsigned int*) const
+- connectTo(IODPTXPort*)
+- getConnectedPort() const
+IODPVirtualDevice
 IODTNVRAM
 - calculatePartitionChecksum(unsigned char*)
 - initVariables()
@@ -9804,7 +11714,6 @@ IODTNVRAM
 - writeNVRAMPartition(OSSymbol const*, unsigned long long, unsigned char*, unsigned long long)
 - savePanicInfo(unsigned char*, unsigned long long)
 - safeToSync()
-IODTNVRAMVariables
 IODTPlatformExpert
 - processTopLevel(IORegistryEntry*)
 - deleteList()
@@ -10191,7 +12100,52 @@ IOHDCPAuthSession
 - getDeviceRole() const
 - readRandom(void*, unsigned long)
 IOHDCPInterface
+- handleStart(IOService*)
+- hasCapability(IOHDCPProtocol, IOHDCPDeviceRole)
+- generateRtx(IOHDCP_Rtx*)
+- generateRrx(IOHDCP_Rrx*)
+- generateRiv(IOHDCP_Riv*)
+- generateRn(IOHDCP_Rn*)
+- consumeRtx(IOHDCP_Rtx)
+- consumeRrx(IOHDCP_Rrx)
+- consumeRiv(IOHDCP_Riv)
+- consumeRn(IOHDCP_Rn)
+- readCert(IOHDCP_Cert*)
+- writeCert(IOHDCP_Cert)
+- loadStoredKm(IOHDCP_StoredKm*)
+- clearStoredKm(IOHDCP_ReceiverID)
+- saveStoredKm(IOHDCP_UInt128)
+- generateEKhKm(IOHDCP_UInt128*)
+- consumeStoredKm(IOHDCP_StoredKm)
+- generateEncryptedKm(IOHDCP_EKpubKm*)
+- writeEncryptedKm(IOHDCP_EKpubKm)
+- computeH(IOHDCP_HInputData)
+- readH(IOHDCP_UInt256*)
+- verifyHPrime(IOHDCP_UInt256)
+- generateEncryptedKs(IOHDCP_UInt128*)
+- writeEncryptedKs(IOHDCP_UInt128)
+- computeL()
+- readL(IOHDCP_UInt256*)
+- verifyLPrime(IOHDCP_UInt256)
+- computeV(unsigned char const*, unsigned long)
+- readV(IOHDCP_UInt256*)
+- verifyVPrime(IOHDCP_UInt128)
+- computeM(IOHDCP_SeqNum, void const*, unsigned long)
+- readM(IOHDCP_UInt256*)
+- verifyMPrime(IOHDCP_UInt256)
+- sendKsRiv()
+- sendKsRivDP(IOHDCPContentType)
+- enableHDCP(bool)
+- resetKeys()
+- open(IOService*, IOHDCPProtocol, IOHDCPDeviceRole)
+- close(IOService*)
 IOHDCPMessageTransport
+- init(void*)
+- getTransport()
+- sendMessage(IOHDCP2Message*)
+- recvMessage(IOHDCP2Message*)
+- setAuthSession(IOHDCPAuthSession*)
+- getAuthSession()
 IOHDIXCommandPool
 - add(IOHDIXCommand&, bool)
 IOHDIXCommandQueue
@@ -10534,6 +12488,9 @@ IOInterruptEventSource
 - interruptOccurred(void*, IOService*, int)
 - normalInterruptOccurred(void*, IOService*, int)
 - disableInterruptOccurred(void*, IOService*, int)
+IOInterruptQueueEventSource
+- getNextInterruptRefCon()
+- drainInterrupts()
 IOKDP
 IOKernelDebugger
 - init(IOService*, void (*)(IOService*, void*, unsigned int), void (*)(IOService*, void*, unsigned int*, unsigned int), unsigned int (*)(IOService*), bool (*)(IOService*, bool))
@@ -10543,46 +12500,8 @@ IOLWPool
 IOLittleMemoryCursor
 - initWithSpecification(unsigned long long, unsigned long long, unsigned long long)
 - getPhysicalSegments(IOMemoryDescriptor*, unsigned long long, IOMemoryCursor::PhysicalSegment*, unsigned int, unsigned int, unsigned long long*)
-IOMFBAppleRegStmAPIODMA
-- init(IOMFB::AppleRegisterStream::APIODMADescriptor const*)
-IOMFBColorManagerDriver
-- initAtPowerOn()
-- queueGamuts(ADPParamFIFO::Pusher*)
-- set_edr(IOMFB::GamutConversionLocation, float)
-- getDefaultMatrixLocation() const
-- writeMatrix_isr()
-- backlight_enhance()
-- disableCalibration(bool)
-- setTesting(IOMFBColorManagerDriver::TestTarget, bool)
-- getMatrix(unsigned long long (*) [3][3], IOMFBColorManagerDriver::MatrixTarget)
-- setMatrixScale(int, IOMFBColorManagerDriver::MatrixTarget)
-- setMatrix(unsigned long long const (*) [3][3], IOMFBColorManagerDriver::MatrixTarget)
-- setBrightnessScaler(IOMFB::BrightnessScaler*)
-- get_LUT_register_config(IOMFB::DeEnGamma, IOMFB::LUTLocation, IOMFBRegisterSet*)
-- get_matrix_register_config(IOMFB::GamutConversionLocation, IOMFB::RGB, IOMFB::RGB, bool, IOMFBRegisterSet*) const
-- queue_bypass_cm(ADPParamFIFO::Pusher*, IOMFB::GamutConversionLocation, bool)
-- queue_bypass_csc(ADPParamFIFO::Pusher*, IOMFB::GamutConversionLocation, bool)
-- get_bypass_cm(IOMFB::GamutConversionLocation)
-- get_bypass_csc(IOMFB::GamutConversionLocation)
-- isInADBE()
-- init(IOService*, IOMFBSoCProfile*, IOService*, ADBE0Driver*)
 IOMFBEvtMonTrampoline
 IOMFBSwapIORequest
-IOMIPIShimService
-- prepareLink(IOAVLinkData*, IOAVLinkSource, unsigned int)
-- startLink(IOAVLinkData*, IOAVLinkSource, unsigned int)
-- didStartLink(IOAVLinkData*, IOAVLinkSource, unsigned int)
-- willStopLink(IOAVLinkData*, IOAVLinkSource, unsigned int)
-- stopLink(IOAVLinkData*, IOAVLinkSource, unsigned int)
-- completeLink(IOAVLinkData*, IOAVLinkSource, unsigned int)
-- setScreenVirtualTemperature(int)
-- getLinkData(IOAVLinkType, IOAVLinkData*, IOAVLinkSource)
-- getLinkStatus(IOAVLinkType, IOAVLinkSource)
-- publishIOMIPIShimInterface(bool)
-IOMIPIShimVideoInterface
-- getTransport(IOAVLinkSource) const
-- getLinkData(IOAVVideoLinkData*, IOAVLinkSource)
-- getLinkStatus(IOAVLinkType, IOAVLinkSource) const
 IOMachPort
 IOMapper
 - initHardware(IOService*)
@@ -10652,7 +12571,7 @@ IOMemoryMap
 - redirect(IOMemoryDescriptor*, unsigned int, unsigned long long)
 IOMesaCaptureData
 IOMesaCaptureDataLocal
-- IOMesaCaptureData::getSourceType() const
+- IOMesaCaptureData::getSourceType()
 - IOMesaCaptureData::getSource()
 - getCaptureCounter()
 - getButtonState()
@@ -10926,6 +12845,7 @@ IOMikeyBusTrafficChannel
 - GetSampleSize()
 - GetAudioDataSourceSelector()
 IOMobileFramebuffer
+IOMobileFramebufferAP
 IOMobileFramebufferLegacy
 IOMobileFramebufferService
 IOMobileFramebufferUserClient
@@ -11246,7 +13166,6 @@ IOPCIBridge
 - checkLink(unsigned int)
 - enableLTR(IOPCIDevice*, bool)
 - createEventSource(IOPCIDevice*, OSObject*, void (*)(OSObject*, IOPCIEventSource*, IOPCIEvent const*), unsigned int)
--
 - deviceMemoryRead(IOMemoryDescriptor*, unsigned long long, IOMemoryDescriptor*, unsigned long long, unsigned long long)
 - deviceMemoryRead(IOMemoryDescriptor*, unsigned long long, void*, unsigned long long)
 IOPCIConfigurator
@@ -11341,6 +13260,8 @@ IOPRNGAccelerator
 IOPRNGAcceleratorUserClient
 - _getInfo(IOPRNGAcceleratorInfo*, unsigned long long*)
 - _getRandomBytes(IOPRNGAcceleratorRequest*, IOPRNGAcceleratorRequest*, unsigned long long, unsigned long long*)
+IOPRxCommand
+IOPTxCommand
 IOPacketQueue
 - initWithCapacity(unsigned int)
 - getSize() const
@@ -11472,6 +13393,16 @@ IOPortTunnelingTransportState
 - isTunneledTransportSupported(IOPortTransportStateTransportType) const
 IOPowerConnection
 IORS232SerialStreamSync
+IORSMChannel
+- getEndpointType() const
+- getBufferLength(unsigned int) const
+- writeNotification()
+- hasDoubleMappedView() const
+IORSMChannelUserClient
+IORSMCommand
+IORSMMemoryDescriptorArray
+IORSMReceiveQueue
+IORSMReceiveQueueEntry
 IORTC
 - getGMTTimeOfDay()
 - setGMTTimeOfDay(long)
@@ -12868,6 +14799,7 @@ IOWorkLoop
 - runEventSources()
 - sleepGate(void*, unsigned long long, unsigned int)
 ISPCoredump
+InterruptCommand
 InterruptEventSourceBridge
 IosaChannelConfig
 IosaColorManager
@@ -13189,20 +15121,6 @@ MTSPIBootloader_Z2
 - sendCalibrationDataBytes()
 - sendProxCalibrationDataBytes()
 - sendAdditionalCalibrationDataBytes()
-MailboxChannel
-- init(IOMFB::M3Hal*, IOMFB::AppleRegisterStream*, MailboxSet, MailboxChannel::ints_change_callback const*, UPAsynchronousScheduler*)
-- send_cmd_gated(void*)
-- set_response_callback(MailboxChannel::response_callback const*)
-- inbox_queue_size() const
-- outbox_read_callback(unsigned int)
-- inbox_written_callback(unsigned int)
-MailboxHandler
-- init(IOMFB::M3Hal*, IOMFB::UPIOSvcProxy*, unsigned int, IOMFB::AppleRegisterStream*)
-- inbox_queue_size() const
-- outbox_read_callback(unsigned int)
-- inbox_written_callback(unsigned int)
-- setup_ints(unsigned int)
-- ints_filter(OSObject*, IOMFB::InterruptEventSource*)
 MesaCachedSystemConfig
 NVMeSEPNotifier
 NeighborCache
@@ -13448,7 +15366,6 @@ OSString
 OSSymbol
 - isEqualTo(OSSymbol const*) const
 OSUserMetaClass
-PCCMailboxHandler
 PMAssertionsTracker
 PMHaltWorker
 PMKSACache
@@ -13470,7 +15387,7 @@ PearlCamDoRetryMessage
 PearlCamDoSecretPatternMessage
 - init(PearlCamSecretPatternType)
 PearlCamEventSource
-- initWithOptions(AppleH10PearlCam*)
+- initWithOptions(AppleH13PearlCam*)
 - signalDoorbell()
 PearlCamFaceDetectStatusMessage
 - init(bool, OSDictionary*)
@@ -13492,6 +15409,7 @@ PearlCamStartMessage
 PearlCamStopMessage
 PearlCamTimerTimeoutMessage
 - init(PearlCamTimerType, unsigned int)
+PlatformFunctionBridge
 ProvInfoIOKit
 - Dqyxc6zf2Sv(_ProvInfoSeedVersion_*, unsigned char const*, unsigned char*)
 - Fd7DxKaV3(_ProvInfoSeedVersion_, unsigned char*, unsigned char*)
@@ -13506,6 +15424,7 @@ ProvInfoIOKitUserClient
 - ucGetEncryptedSeedSegment(ProvInfoIOKitUserGetEncryptedSeedSegmentInput_*, unsigned char*)
 - ucEncryptSUInfo(ProvInfoIOKitUserEncryptSUInfoInput_ const*, ProvInfoIOKitUserEncryptSUInfoInput_*)
 - ucEncryptWithWrappedKey(ProvInfoIOKitUserEncryptWithWrappedKeyInput_ const*, ProvInfoIOKitUserEncryptWithWrappedKeyInput_*)
+RSMPAWCompletion
 RSNSupplicant
 RTBKeyObjectPair
 RTBuddy
@@ -13670,6 +15589,8 @@ RTBuddyVisibleSlaveBuffer
 - cleanFlush(unsigned long long, unsigned long long)
 - getLocalCopy(unsigned long long, unsigned long long)
 - getLocalCopyNoAllocate()
+RequestAction
+- runAction()
 RootDomainUserClient
 RoseCoredump
 RoseCrashlog
@@ -13677,7 +15598,10 @@ RoseFirmwareLog
 RoswellAuthI2CRelayInterface
 SCSITask
 SEPBICS
-SEPBICSProxy
+SMEvent
+SMMachine
+SMState
+SMTransition
 SPUCommand
 SetDBV
 Stopwatch
@@ -13686,12 +15610,10 @@ TextCrypterSession
 TimeEventRegistration
 TimerEventSourceBridge
 UPAsynchronousScheduler
-UPPipe_H11P_Trampoline
-- wait_for_mode_change(bool)
 USBConfiguration
 USBInterfaceAssociation
 USBStringIndex
-UnifiedPipeline
+UnifiedPipeline2
 - swapping_client_did_start(IOMobileFramebufferUserClient*)
 - swapping_client_will_stop(IOMobileFramebufferUserClient*)
 - first_client_open()
@@ -13777,129 +15699,53 @@ UnifiedPipeline
 - get_diags_handler()
 - protection_bits()
 - check_drm(IOSurface*)
-- initIOAVHandlerInternalDisplay()
-- hotPlug_notify(unsigned long long)
-- flush_rtps() const
-- aot_enabled()
-- in_sleep_media()
-- on_swap_queued()
-- set_corner_temps_gated(int const*)
-- set_postblend_scale_gated(int)
-- set_color_filter_scale_gated(int)
-- set_brightness_gated(int)
-- set_thermal_throttle_cap_gated(unsigned int)
-- update_bic_gated()
-- test_control_gated(unsigned long long const*, unsigned int)
-- disable_calibration_gated(bool)
+- start_client_state()
+- stop_client_state()
+- rpc(unsigned int, void const*, unsigned int, void*, unsigned int) const
+- swap_wait(bool, unsigned int, unsigned int, unsigned int)
+- powerUpDART_gated(bool)
+- hotPlug_notify_gated(unsigned long long)
+- deallocate_default_fb_surface()
 - absolute_time_to_ns(unsigned long long, unsigned long long*) const
 - ns_to_absolute_time(unsigned long long, unsigned long long*) const
-- presentation_time_feedback(double)
+- swap_submit_with_tags(IOMFBSwapRec*, IOUserClient*, unsigned int)
+- flush_cached_state()
+- support_sep_bics() const
+- start_signal()
+- stop_signal()
+- swap_begin()
+- swap_submit_dcp(IOMFBSwapRec const*, IOSurface**, unsigned int const*, bool, double, unsigned int, bool*)
+- temp_queue_swap_cancel(unsigned int)
+- swap_cancel_all_dcp(unsigned long long)
+- set_block_dcp(task*, unsigned int, unsigned int, unsigned long long const*, unsigned int, unsigned char const*, unsigned long)
+- get_block_dcp(task*, unsigned int, unsigned int, unsigned long long const*, unsigned int, unsigned char*, unsigned long) const
+- set_parameter_dcp(IOMFBParameterName, unsigned long long const*, unsigned int)
+- last_client_close_dcp(unsigned int*)
+- writeDebugInfo(unsigned long)
+- swap_wait_dcp(bool, unsigned int, unsigned int, unsigned int)
+- idle_fence_create(IdleCachingState)
+- idle_fence_complete()
 - idle_surface_release()
-- start_hardware()
-- stop_hardware_gated()
-- swap_begin_gated()
-- swap_begin_async_gated()
-- swap_complete_gated()
-- verify_swap(IOMFBSwapIORequest*)
-- verify_swap_surfaces(IOMFBSwapIORequest*)
-- do_power_state_change_gated()
-- create_default_fb_surface()
-- deallocate_default_fb_surface()
+- idle_surface_release_nolock()
+- set_frame_info_notification_state_gated(IOMFBNotifyRequest*, bool)
+- do_swap_info_notify_gated(IOMFBNotifyRequest*, SwapInfoBlob const*)
+- do_crc_notify(SwapInfoBlob*)
+- notify_crc_ready_gated(unsigned int)
+- default_fb_surface_gated(unsigned int, unsigned int)
+- deallocate_default_fb_surface_gated()
 - get_timing_attributes_gated(IOMFB::RefreshTimingAttributes*, bool) const
 - system_will_sleep()
-- writeDebugInfo(OSDictionary*)
-- printDisplayRegs()
 - set_crc_notification_state_gated(bool)
-- set_frame_info_notification_state_gated(IOMFBNotifyRequest*, bool)
-- do_swap_info_notify_gated(IOMFBNotifyRequest*, IOMobileFramebufferLegacy::SwapInfoBlob const*)
-- do_crc_notify(IOMobileFramebufferLegacy::SwapInfoBlob*)
-- dropAbortedSwaps_gated()
-- swapWillChangeDisplayedData(IOMFBSwapIORequest*) const
-- dropObsoleteSwaps_gated()
-- dropSwap_gated(IOMFBSwapIORequest*, bool)
-- dropNoOpSwaps_gated()
-- dropDummySwaps_gated()
-- getDefaultVBLDelta()
-- updateIdleness_gated(bool)
-- applyProperty(unsigned int, unsigned int)
-- exportProperty(unsigned int, unsigned int)
-- isEdgeAlphaEnabled_gated(__VideoDestEdgeAlpha const*) const
-- recordQoSStats(IOMFBSwapInfo*)
-- computeCanPowerGateDCS(IOMFBSwapIORequest*)
-- writeDebugInfo_gated(OSDictionary*)
-- isReplaying() const
-- idlePowerGatingSequenceStartedOrEnded_gated()
-- powerUpDART_gated(bool)
-- display_edr_factor_changed(float)
-- set_od_threshold_gated(int)
-- set_vsh_phase_gated(IOMFB_VSH_Phase_Type, unsigned long long)
-- default_fb_surface_gated(unsigned int, unsigned int)
 - resize_default_fb_surface_gated()
-- deallocate_default_fb_surface_gated()
-- notify_swap_done_gated(unsigned int, SwapInfoBlob*, unsigned int*, unsigned int)
-- notify_crc_ready_gated(unsigned int)
-- reprogramDisplayWithDummySwap_gated(IOMFBSwapRequestIntent, IOMFBSwapRec*)
-- keep_swaps_on_disconnect()
-- computeAndVerifyFinalSubtitleRegions_gated(IOMFBSwapIORequest*)
-- update_refresh_stats_gated()
-- set_api_power_state_gated(unsigned long, IOService*)
-- are_timings_enabled() const
-- clear_up_swap_queue_gated()
-- set_profile()
-- do_power_state_change_action_gated(IOMobileFramebufferLegacy::pstatechgreq*, bool)
-- trigger_pswap_dependent_thread()
+- exportProperty(unsigned int, unsigned int)
+- applyProperty(unsigned int, unsigned int)
 - removeProperty__iboot(char const*)
-- start_adc_function()
-- stop_adc_function(unsigned long long*, unsigned long long*, unsigned int*)
 - preSetPowerState(unsigned long, IOService*, bool*)
 - postSetPowerState(unsigned long, IOService*)
-- trigger_queued_power_state_changes()
 UserTimerEventSource
 - init(OSObject*, UserTimerEventSource::timer_type_t, unsigned int, void (*)(OSObject*, IOTimerEventSource*))
 VADResourceArbiter
 VADResourceArbiterUserClient
-VideoInterface
-- power_on(unsigned long long*, bool)
-- will_power_off()
-- did_power_off(bool)
-- did_power_on()
-- get_link_status()
-- get_link_quality()
-- get_hpd_state()
-- get_color_elements()
-- get_timing_elements()
-- get_color_element()
-- get_timing_element()
-- getDSCCapabilities(IOAVDSCCapabilities*)
-- getDSCBitsPerPixel(unsigned short*)
-- setDSCParameters(IOAVDSCParameters)
-- get_display_attributes()
-- get_transport_type()
-- get_uuid()
-- get_container_id()
-- get_display_primaries(float*, float (*) [2], bool)
-- set_mode(unsigned int, unsigned int, unsigned int*, unsigned int*, OSArray*, OSArray*)
-- set_temperature(int, bool)
-- set_hdr_metadata(OSDictionary*)
-- init(IOMFB::UPIOSvcProxy*, IOMFBStatus (*)(void*, VideoInterface::Event, void*, void*), void*, bool)
-- get_interface()
-- supports_aot() const
-- set_aot_mode(bool)
-- enableBacklight(bool)
-- sendBrightness(unsigned short)
-- setHIFAEnabled(bool)
-- setVSHValue(unsigned char)
-- setSWMPREnabled(bool)
-- protection_bits()
-- check_drm(IOSurface*)
-- wait_for_unplug_notif()
-- set_unplug_notif_pending(bool)
-- close()
-- lcd_fn_search(bool)
-VideoInterfaceIOAV
-VideoInterfaceMipi
-VideoInterfaceStub
-VideoModeMailboxHandler
 _AppleConvergedIPCMemoryDescriptorHelper
 _FlexWorkLoop
 _HACK_RingBuffer

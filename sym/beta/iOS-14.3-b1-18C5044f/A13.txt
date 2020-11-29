@@ -2614,8 +2614,8 @@ AppleCBTL1610
 - leaveTestMode()
 AppleCBTL1610Companion
 AppleCBTL1612
--
--
+- enterTestMode(bool)
+- skipLdcmConDetConfig()
 AppleCBTL1614
 AppleCBTL1614Device
 AppleCLCD
