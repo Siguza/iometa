@@ -126,11 +126,6 @@ Ok, first of all, the symbol maps are organised by device class - A7, A8, etc. O
 Here's how I actually go at updating symbol maps:
 
 1.  Starting with iometa v1.6.0, I start with arm64e kernels (A12+). I simply run `iometa -M kernel old.txt >new.txt`, where `old.txt` is the symbol map for the closest version I have symbols for. This is the normal strategy for all devices and will usually throw a bunch of warnings and turn between a few hundred and a few thousand functions into `fn_0x...` just due to differing vtable sizes. Exclusively on arm64e though, iometa can additionally verify whether a given symbol is correct or not. This is because the PAC diversifier (see below) is the hash of the mangled C++ symbol, and iometa 1.6.0 added support for calculating that. It will throw a warning on every run for every non-matching symbol, so there is no need to manually record anything.
-
-
-
-1.  I simply run `iometa -M kernel old.txt >/tmp/new.txt` against a kernel, using the symbol map from the last version (or in the case of a new device, the closest existing device I have a map for). Usually that will throw a bunch of warnings and turn between a few hundred and a few thousand functions into `fn_0x...` just due to differing vtable sizes.  
-    Additionally for arm64e kernels, starting with version 1.6.0, iometa can now verify whether a given symbol is correct or not. That is because the PAC diversifier
 2.  I go through all classes with `fn_0x...` methods and, before even looking at assembly, compare a bunch of vtables between this and the last generation. Of particular interest are "pure virtual" methods (i.e. those showing up red in `iometa` output) as well as those overridden in child classes:  
     <table>
         <tr>
@@ -146,14 +141,16 @@ Here's how I actually go at updating symbol maps:
             <td><img src="https://user-images.githubusercontent.com/1659374/56452939-7e9cc600-6339-11e9-81ae-cb1db510ea06.png" alt="vtab-3b"></td>
         </tr>
     </table>
+
     You can tell a damn lot from just those patterns, and this should be enough to tell you where methods were inserted or deleted.
-3.  If pattern matching leaves any ambiguity as to where methods were inserted, removed or shuffled around, we can harness the power of arm64e:
+3.  If pattern matching leaves any ambiguity as to where methods were inserted, removed or shuffled around, we can harness the power of arm64e:  
     <table>
         <tr>
             <td><img src="https://user-images.githubusercontent.com/1659374/93288596-81287700-f7dc-11ea-831c-92f5583f07d8.png" alt="vtab-4a"></td>
             <td><img src="https://user-images.githubusercontent.com/1659374/93288674-bc2aaa80-f7dc-11ea-9194-42e4951bd113.png" alt="vtab-4b"></td>
         </tr>
     </table>
+
     The second image shows one method more than the first, and the `pac` field tells us exactly which one.
 4.  Once all the methods which kept their PAC diversifier have been moved to the right place, it's time to dive into assembly and look at the methods that we couldn't match up. For new methods, you kinda have to get lucky and find some logging that prints the name (or be very very good at guessing). For existing methods however, chances are that it was just the argument list that was changed, and there are some tricks with which we can recover most of the information about that:
     - Unless arguments are _only_ passed through to other functions, the code will already tell us whether they are 64- or 32-bit. And since 32-bit ones can't be pointers, there's a rather small list of types to try.
