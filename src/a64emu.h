@@ -40,8 +40,17 @@ typedef struct
     uint32_t valid;
     uint32_t qvalid;
     uint32_t wide;
-    uint32_t host;
+    uint64_t host; // 32x 2 bits, index into hostmem
+    struct
+    {
+        uint64_t min;
+        uint64_t max;
+        uint8_t *bitstring;
+    } hostmem[3];
 } a64_state_t;
+
+#define HOST_GET(state, reg) ((uint8_t)(((state)->host >> ((reg) << 1)) & 3ULL))
+#define HOST_SET(state, reg, idx) do { ((state)->host = ((state)->host & ~(3ULL << ((reg) << 1))) | ((((uint64_t)idx) & 3ULL) << ((reg) << 1))); } while(0)
 
 typedef bool (*a64cb_t)(uint32_t *pos, void *arg);
 
@@ -53,6 +62,6 @@ bool a64cb_check_equal(uint32_t *pos, void *arg);
 bool a64cb_check_bl(uint32_t *pos, void *arg);
 
 emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_state_t *state, uint32_t *from, a64cb_t check, void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour);
-bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint32_t wantvalid, const char *name);
+bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint8_t *bitstr, uint32_t wantvalid, const char *name);
 
 #endif

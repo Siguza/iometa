@@ -1125,14 +1125,15 @@ int main(int argc, const char **argv)
         }
         if(current->fncall)
         {
-            void *sp = malloc(A64_EMU_SPSIZE);
-            if(!sp)
+            void *sp = malloc(A64_EMU_SPSIZE),
+                 *bitstr = malloc((A64_EMU_SPSIZE + 31) / 32);
+            if(!sp || !bitstr)
             {
-                ERR("malloc(sp)");
+                ERR("malloc(sp) || malloc(bitstr)");
                 return -1;
             }
             a64_state_t state;
-            bool success = multi_call_emulate(kernel, kbase, fixupKind, current->fncall, current->fncall, &state, sp, 0xf, current->name);
+            bool success = multi_call_emulate(kernel, kbase, fixupKind, current->fncall, current->fncall, &state, sp, bitstr, 0xf, current->name);
             if(success)
             {
                 mach_seg_t *seg = seg4ptr(kernel, current->fncall);
@@ -1151,6 +1152,7 @@ int main(int argc, const char **argv)
                 }
             }
             free(sp);
+            free(bitstr);
             current->fncall = NULL;
             // This is annoying now, but we need to make sure we only print one warning per class.
             if(i + 1 < namelist.idx)
@@ -1953,13 +1955,17 @@ int main(int argc, const char **argv)
                             {
                                 uint32_t *end     = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize),
                                          *fnstart = (uint32_t*)((uintptr_t)kernel + seg->fileoff + (fnaddr - seg->vmaddr));
-                                void *sp = malloc(A64_EMU_SPSIZE),
-                                     *obj = NULL;
-                                if(!sp)
+                                void *sp      = malloc(A64_EMU_SPSIZE),
+                                     *bitstr  = malloc((A64_EMU_SPSIZE + 31) / 32),
+                                     *obj     = NULL,
+                                     *obitstr = NULL;
+                                if(!sp || !bitstr)
                                 {
-                                    ERR("malloc(sp)");
+                                    ERR("malloc(sp) || malloc(bitstr)");
                                     return -1;
                                 }
+                                bzero(sp, A64_EMU_SPSIZE);
+                                bzero(bitstr, (A64_EMU_SPSIZE + 31) / 32);
                                 uint32_t *m = NULL;
                                 a64_state_t state;
                                 for(size_t i = 0; i < 32; ++i)
@@ -1972,7 +1978,11 @@ int main(int argc, const char **argv)
                                 state.valid  = 0xfff80001;
                                 state.qvalid = 0x0000ff00;
                                 state.wide   = 0xfff80001;
-                                state.host   = 0x80000000;
+                                state.host   = 0;
+                                HOST_SET(&state, 31, 1);
+                                state.hostmem[0].min = (uintptr_t)sp;
+                                state.hostmem[0].max = (uintptr_t)sp + A64_EMU_SPSIZE;
+                                state.hostmem[0].bitstring = bitstr;
                                 switch(a64_emulate(kernel, kbase, fixupKind, &state, fnstart, &a64cb_check_bl, &m, false, true, kEmuFnIgnore))
                                 {
                                     case kEmuRet:
@@ -1988,7 +1998,7 @@ int main(int argc, const char **argv)
                                     case kEmuEnd:
                                         {
                                             kptr_t allocsz;
-                                            if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && (state.host & 0x1) == 0x1) // kalloc
+                                            if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && HOST_GET(&state, 0) == 1) // kalloc
                                             {
                                                 allocsz = *(kptr_t*)state.x[0];
                                             }
@@ -2004,7 +2014,7 @@ int main(int argc, const char **argv)
                                             {
                                                 if(meta->vtab == -1)
                                                 {
-                                                    WRN("Bad pre-bl state in %s::MetaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
+                                                    WRN("Bad pre-bl state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
                                                 }
                                                 break;
                                             }
@@ -2021,23 +2031,28 @@ int main(int argc, const char **argv)
                                                 break;
                                             }
                                             obj = malloc(allocsz);
-                                            if(!obj)
+                                            obitstr = malloc((allocsz + 31) / 32);
+                                            if(!obj || !obitstr)
                                             {
-                                                ERR("malloc(obj)");
+                                                ERR("malloc(obj) || malloc(obitstr)");
                                                 return -1;
                                             }
                                             bzero(obj, allocsz);
+                                            bzero(obitstr, (allocsz + 31) / 32);
                                             state.x[0] = (uintptr_t)obj;
                                             state.valid |= 0x1;
                                             state.wide  |= 0x1;
-                                            state.host  |= 0x1;
+                                            HOST_SET(&state, 0, 2);
+                                            state.hostmem[1].min = (uintptr_t)obj;
+                                            state.hostmem[1].max = (uintptr_t)obj + allocsz;
+                                            state.hostmem[1].bitstring = obitstr;
                                             if(a64_emulate(kernel, kbase, fixupKind, &state, m + 1, &a64cb_check_equal, end, false, true, kEmuFnAssumeX0) != kEmuRet)
                                             {
                                                 break;
                                             }
-                                            if(!(state.valid & 0x1) || !(state.wide & 0x1) || !(state.host & 0x1))
+                                            if(!(state.valid & 0x1) || !(state.wide & 0x1) || !HOST_GET(&state, 0))
                                             {
-                                                WRN("Bad end state in %s::MetaClass::alloc (%08x %08x %08x)", meta->name, state.valid, state.wide, state.host);
+                                                WRN("Bad end state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
                                                 break;
                                             }
                                             kptr_t vt = *(kptr_t*)state.x[0];
@@ -2052,7 +2067,9 @@ int main(int argc, const char **argv)
                                         break;
                                 }
                                 if(obj) free(obj);
+                                if(obitstr) free(obitstr);
                                 free(sp);
+                                free(bitstr);
                                 break;
                             }
                         }

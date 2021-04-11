@@ -15,6 +15,19 @@
 #include <stddef.h>             // size_t
 #include <stdint.h>
 
+#ifdef CPU_TYPE_ARM64
+#   undef CPU_TYPE_ARM64
+#endif
+#ifdef CPU_SUBTYPE_MASK
+#   undef CPU_SUBTYPE_MASK
+#endif
+#ifdef CPU_SUBTYPE_ARM64_ALL
+#   undef CPU_SUBTYPE_ARM64_ALL
+#endif
+#ifdef CPU_SUBTYPE_ARM64E
+#   undef CPU_SUBTYPE_ARM64E
+#endif
+
 // Apple notation
 #define VM_PROT_READ                       0x1
 #define VM_PROT_WRITE                      0x2

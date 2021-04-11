@@ -163,6 +163,42 @@ bool a64cb_check_bl(uint32_t *pos, void *arg)
     return true;
 }
 
+static inline uint8_t host_idx_get(a64_state_t *state, uint8_t idx, uint64_t addr)
+{
+    uint64_t off = addr - state->hostmem[idx].min;
+    if(off % 8 != 0)
+    {
+        return 0;
+    }
+    off /= 8;
+    return (state->hostmem[idx].bitstring[off / 4] >> ((off & 0x3) << 1)) & 0x3;
+}
+
+static inline void host_idx_set(a64_state_t *state, uint8_t idx, uint64_t addr, uint32_t size, uint8_t val)
+{
+    uint64_t off = addr - state->hostmem[idx].min;
+    if(off % 8 != 0)
+    {
+        bool nextToo = ((off & 0x7) + size) > 8;
+        off /= 8;
+        state->hostmem[idx].bitstring[off / 4] &= ~(3 << ((off & 0x3) << 1));
+        if(nextToo)
+        {
+            ++off;
+            state->hostmem[idx].bitstring[off / 4] &= ~(3 << ((off & 0x3) << 1));
+        }
+    }
+    else
+    {
+        off /= 8;
+        val &= 3;
+        if(size != 8) val = 0;
+        state->hostmem[idx].bitstring[off / 4] = (state->hostmem[idx].bitstring[off / 4] & ~(3 << ((off & 0x3) << 1))) | (val << ((off & 0x3) << 1));
+    }
+}
+
+#define HOST_IN_RANGE(state, idx, addr, size) ((uint64_t)(addr) >= (state)->hostmem[(idx)].min && (uint64_t)(addr) <= (state)->hostmem[(idx)].max - (size))
+
 // Best-effort emulation: halt on unknown instructions, keep track of which registers
 // hold known values and only operate on those. Ignore non-static memory unless
 // it is specifically marked as "host memory".
@@ -175,15 +211,16 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             state->x[i] = 0;
             state->q[i] = 0;
         }
-        state->valid = 0;
-        state->wide = 0;
-        state->host = 0;
+        state->valid  = 0;
+        state->qvalid = 0;
+        state->wide   = 0;
+        state->host   = 0;
     }
     for(; check(from, arg); ++from)
     {
         void *ptr = from;
         kptr_t addr = off2addr(kernel, (uintptr_t)from - (uintptr_t)kernel);
-        if(is_nop(ptr) /*|| is_stp_fp_uoff(ptr)*/ || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr))
+        if(is_nop(ptr) || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr))
         {
             // Ignore/no change
         }
@@ -203,7 +240,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     state->x[str->Rn] = staddr;
                     staddr = tmp;
                 }
-                if(state->host & (1 << str->Rn))
+                uint8_t idx = HOST_GET(state, str->Rn);
+                if(idx)
                 {
                     if(!(state->valid & (1 << str->Rt)))
                     {
@@ -211,13 +249,19 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                         else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                         return kEmuUnknown;
                     }
-                    if(str->sf)
+                    --idx;
+                    if(HOST_IN_RANGE(state, idx, staddr, str->sf ? 8 : 4))
                     {
-                        *(uint64_t*)staddr = state->x[str->Rt];
-                    }
-                    else
-                    {
-                        *(uint32_t*)staddr = (uint32_t)state->x[str->Rt];
+                        if(str->sf)
+                        {
+                            *(uint64_t*)staddr = state->x[str->Rt];
+                            host_idx_set(state, idx, staddr, 8, HOST_GET(state, str->Rt));
+                        }
+                        else
+                        {
+                            *(uint32_t*)staddr = (uint32_t)state->x[str->Rt];
+                            host_idx_set(state, idx, staddr, 4, 0);
+                        }
                     }
                 }
             }
@@ -262,7 +306,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             {
                 return kEmuErr;
             }
-            if((state->valid & (1 << Rn)) && (state->host & (1 << Rn)))
+            uint8_t idx;
+            if((state->valid & (1 << Rn)) && (idx = HOST_GET(state, Rn)))
             {
                 if(!(state->valid & (1 << Rt)))
                 {
@@ -270,16 +315,21 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                     return kEmuUnknown;
                 }
+                --idx;
                 kptr_t staddr = state->x[Rn] + off;
-                switch(size)
+                if(HOST_IN_RANGE(state, idx, staddr, size))
                 {
-                    case 1: *(uint8_t *)staddr = (uint8_t )state->x[Rt]; break;
-                    case 2: *(uint16_t*)staddr = (uint16_t)state->x[Rt]; break;
-                    case 4: *(uint32_t*)staddr = (uint32_t)state->x[Rt]; break;
-                    case 8: *(uint64_t*)staddr = (uint64_t)state->x[Rt]; break;
-                    default:
-                        ERR("Bug in a64_emulate: str_uoff with invalid size at " ADDR, addr);
-                        exit(-1);
+                    switch(size)
+                    {
+                        case 1: *(uint8_t *)staddr = (uint8_t )state->x[Rt]; break;
+                        case 2: *(uint16_t*)staddr = (uint16_t)state->x[Rt]; break;
+                        case 4: *(uint32_t*)staddr = (uint32_t)state->x[Rt]; break;
+                        case 8: *(uint64_t*)staddr = (uint64_t)state->x[Rt]; break;
+                        default:
+                            ERR("Bug in a64_emulate: str_uoff with invalid size at " ADDR, addr);
+                            exit(-1);
+                    }
+                    host_idx_set(state, idx, staddr, size, size == 8 ? HOST_GET(state, Rt) : 0);
                 }
             }
         }
@@ -299,7 +349,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     state->x[stp->Rn] = staddr;
                     staddr = tmp;
                 }
-                if(state->host & (1 << stp->Rn))
+                uint8_t idx = HOST_GET(state, stp->Rn);
+                if(idx)
                 {
                     if(!(state->valid & (1 << stp->Rt)) || !(state->valid & (1 << stp->Rt2)))
                     {
@@ -307,17 +358,34 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                         else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                         return kEmuUnknown;
                     }
+                    --idx;
                     if(stp->sf)
                     {
                         uint64_t *p = (uint64_t*)staddr;
-                        p[0] = state->x[stp->Rt];
-                        p[1] = state->x[stp->Rt2];
+                        if(HOST_IN_RANGE(state, idx, staddr, 8))
+                        {
+                            p[0] = state->x[stp->Rt];
+                            host_idx_set(state, idx, staddr, 8, HOST_GET(state, stp->Rt));
+                        }
+                        if(HOST_IN_RANGE(state, idx, staddr + 8, 8))
+                        {
+                            p[1] = state->x[stp->Rt2];
+                            host_idx_set(state, idx, staddr, 8, HOST_GET(state, stp->Rt2));
+                        }
                     }
                     else
                     {
                         uint32_t *p = (uint32_t*)staddr;
-                        p[0] = (uint32_t)state->x[stp->Rt];
-                        p[1] = (uint32_t)state->x[stp->Rt2];
+                        if(HOST_IN_RANGE(state, idx, staddr, 4))
+                        {
+                            p[0] = (uint32_t)state->x[stp->Rt];
+                            host_idx_set(state, idx, staddr, 4, 0);
+                        }
+                        if(HOST_IN_RANGE(state, idx, staddr + 4, 4))
+                        {
+                            p[1] = (uint32_t)state->x[stp->Rt2];
+                            host_idx_set(state, idx, staddr, 4, 0);
+                        }
                     }
                 }
             }
@@ -329,8 +397,9 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             state->x[stxr->Rs] = 0;
             state->valid  |= 1 << stxr->Rs;
             state->wide &= ~(1 << stxr->Rs);
-            state->host &= ~(1 << stxr->Rs);
-            if((state->valid & (1 << stxr->Rn)) && (state->host & (1 << stxr->Rn))) // Only if valid & host
+            HOST_SET(state, stxr->Rs, 0);
+            uint8_t idx;
+            if((state->valid & (1 << stxr->Rn)) && (idx = HOST_GET(state, stxr->Rn))) // Only if valid & host
             {
                 if(!(state->valid & (1 << stxr->Rt)))
                 {
@@ -338,14 +407,20 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                     return kEmuUnknown;
                 }
+                --idx;
                 kptr_t staddr = state->x[stxr->Rn];
-                if(stxr->sf)
+                if(HOST_IN_RANGE(state, idx, staddr, stxr->sf ? 8 : 4))
                 {
-                    *(uint64_t*)staddr = state->x[stxr->Rt];
-                }
-                else
-                {
-                    *(uint32_t*)staddr = (uint32_t)state->x[stxr->Rt];
+                    if(stxr->sf)
+                    {
+                        *(uint64_t*)staddr = state->x[stxr->Rt];
+                        host_idx_set(state, idx, staddr, 8, HOST_GET(state, stxr->Rt));
+                    }
+                    else
+                    {
+                        *(uint32_t*)staddr = (uint32_t)state->x[stxr->Rt];
+                        host_idx_set(state, idx, staddr, 4, 0);
+                    }
                 }
             }
         }
@@ -353,9 +428,9 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         {
             adr_t *adr = ptr;
             state->x[adr->Rd] = (adr->op1 ? (addr & ~0xfff) : addr) + get_adr_off(adr);
-            state->valid |=   1 << adr->Rd;
-            state->wide  |=   1 << adr->Rd;
-            state->host  &= ~(1 << adr->Rd);
+            state->valid |= 1 << adr->Rd;
+            state->wide  |= 1 << adr->Rd;
+            HOST_SET(state, adr->Rd, 0);
         }
         else if(is_add_imm(ptr) || is_sub_imm(ptr))
         {
@@ -369,7 +444,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 state->x[add->Rd] = state->x[add->Rn] + (is_add_imm(add) ? 1LL : -1LL) * get_add_sub_imm(add);
                 state->valid |= 1 << add->Rd;
                 state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
-                state->host = (state->host & ~(1 << add->Rd)) | (((state->host >> add->Rn) & 0x1) << add->Rd);
+                HOST_SET(state, add->Rd, HOST_GET(state, add->Rn));
             }
         }
         else if(is_add_reg(ptr) || is_sub_reg(ptr))
@@ -405,7 +480,16 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
                 // Weird case: we only wanna keep the host flag if exactly one of the source registers has it.
                 // If both have it, something's gone wrong, but we wanna be able to add immediates that are loaded into a register.
-                state->host = (state->host & ~(1 << add->Rd)) | ((((state->host >> add->Rn) & 0x1) ^ ((state->host >> add->Rm) & 0x1)) << add->Rd);
+                uint64_t RnIdx = HOST_GET(state, add->Rn);
+                uint64_t RmIdx = HOST_GET(state, add->Rm);
+                if((RnIdx == 0 && RmIdx == 0) || (RnIdx != 0 && RmIdx != 0))
+                {
+                    HOST_SET(state, add->Rd, 0);
+                }
+                else
+                {
+                    HOST_SET(state, add->Rd, RnIdx | RmIdx);
+                }
             }
         }
         else if(is_ldr_imm_uoff(ptr) || is_ldur(ptr) || is_ldrb_imm_uoff(ptr) || is_ldrh_imm_uoff(ptr) || is_ldrsb_imm_uoff(ptr) || is_ldrsh_imm_uoff(ptr) || is_ldrsw_imm_uoff(ptr))
@@ -490,7 +574,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             else
             {
                 kptr_t laddr = state->x[Rn] + off;
-                void *ldr_addr = (state->host & (1 << Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                uint8_t idx = HOST_GET(state, Rn);
+                void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, size) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
                     return kEmuErr;
@@ -522,19 +607,30 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                         val &= 0xffffffff;
                     }
                 }
-                if(!(state->host & (1 << Rn)) && size == 8)
+                if(size == 8)
                 {
-                    if(is_in_fixup_chain(kernel, kbase, ldr_addr))
+                    if(idx)
                     {
-                        bool bind = false;
-                        val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
-                        if(bind) val = 0;
+                        HOST_SET(state, Rt, host_idx_get(state, idx-1, laddr));
                     }
+                    else
+                    {
+                        if(is_in_fixup_chain(kernel, kbase, ldr_addr))
+                        {
+                            bool bind = false;
+                            val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
+                            if(bind) val = 0;
+                        }
+                        HOST_SET(state, Rt, 0);
+                    }
+                }
+                else
+                {
+                    HOST_SET(state, Rt, 0);
                 }
                 state->x[Rt] = val;
                 state->valid |= 1 << Rt;
                 state->wide = (state->wide & ~(1 << Rt)) | (sf << Rt);
-                state->host &= ~(1 << Rt);
             }
         }
         else if(is_ldr_lit(ptr))
@@ -555,7 +651,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             state->x[ldr->Rt] = val;
             state->valid |= 1 << ldr->Rt;
             state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
-            state->host &= ~(1 << ldr->Rt);
+            HOST_SET(state, ldr->Rt, 0);
         }
         else if(is_ldp_pre(ptr) || is_ldp_post(ptr) || is_ldp_uoff(ptr))
         {
@@ -577,7 +673,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     state->x[ldp->Rn] = laddr;
                     laddr = tmp;
                 }
-                void *ldr_addr = (state->host & (1 << ldp->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                uint8_t idx = HOST_GET(state, ldp->Rn);
+                void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, ldp->sf ? 16 : 8) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
                     return kEmuErr;
@@ -587,7 +684,12 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     uint64_t *p = ldr_addr;
                     uint64_t v1 = p[0];
                     uint64_t v2 = p[1];
-                    if(!(state->host & (1 << ldp->Rn)))
+                    if(idx)
+                    {
+                        HOST_SET(state, ldp->Rt,  host_idx_get(state, idx-1, laddr    ));
+                        HOST_SET(state, ldp->Rt2, host_idx_get(state, idx-1, laddr + 8));
+                    }
+                    else
                     {
                         if(is_in_fixup_chain(kernel, kbase, ldr_addr))
                         {
@@ -601,6 +703,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                             v2 = kuntag(kbase, fixupKind, v2, &bind, NULL, NULL, NULL);
                             if(bind) v2 = 0;
                         }
+                        HOST_SET(state, ldp->Rt,  0);
+                        HOST_SET(state, ldp->Rt2, 0);
                     }
                     state->x[ldp->Rt]  = v1;
                     state->x[ldp->Rt2] = v2;
@@ -610,10 +714,11 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     uint32_t *p = ldr_addr;
                     state->x[ldp->Rt]  = p[0];
                     state->x[ldp->Rt2] = p[1];
+                    HOST_SET(state, ldp->Rt,  0);
+                    HOST_SET(state, ldp->Rt2, 0);
                 }
                 state->valid |= (1 << ldp->Rt) | (1 << ldp->Rt2);
                 state->wide = (state->wide & ~((1 << ldp->Rt) | (1 << ldp->Rt2))) | (ldp->sf << ldp->Rt) | (ldp->sf << ldp->Rt2);
-                state->host &= ~((1 << ldp->Rt) | (1 << ldp->Rt2));
             }
         }
         else if(is_ldxr(ptr))
@@ -626,22 +731,39 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             else
             {
                 kptr_t laddr = state->x[ldxr->Rn];
-                void *ldr_addr = (state->host & (1 << ldxr->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                uint8_t idx = HOST_GET(state, ldxr->Rn);
+                void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, ldxr->sf ? 8 : 4) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
                     return kEmuErr;
                 }
-                kptr_t val = *(kptr_t*)ldr_addr;
-                if(ldxr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
+                uint64_t val;
+                if(ldxr->sf)
                 {
-                    bool bind = false;
-                    val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
-                    if(bind) val = 0;
+                    val = *(uint64_t*)ldr_addr;
+                    if(idx)
+                    {
+                        HOST_SET(state, ldxr->Rt, host_idx_get(state, idx-1, laddr));
+                    }
+                    else
+                    {
+                        if(is_in_fixup_chain(kernel, kbase, ldr_addr))
+                        {
+                            bool bind = false;
+                            val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
+                            if(bind) val = 0;
+                        }
+                        HOST_SET(state, ldxr->Rt, 0);
+                    }
+                }
+                else
+                {
+                    val = *(uint32_t*)ldr_addr;
+                    HOST_SET(state, ldxr->Rt, 0);
                 }
                 state->x[ldxr->Rt] = val;
                 state->valid |= 1 << ldxr->Rt;
                 state->wide = (state->wide & ~(1 << ldxr->Rt)) | (ldxr->sf << ldxr->Rt);
-                state->host &= ~(1 << ldxr->Rt);
             }
         }
         else if(is_ldadd(ptr))
@@ -657,20 +779,21 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             else
             {
                 kptr_t daddr = state->x[ldadd->Rn];
-                void *ld_addr = (state->host & (1 << ldadd->Rn)) ? (void*)daddr : addr2ptr(kernel, daddr);
+                uint8_t idx = HOST_GET(state, ldadd->Rn);
+                void *ld_addr = idx ? (HOST_IN_RANGE(state, idx-1, daddr, ldadd->sf ? 8 : 4) ? (void*)daddr : NULL) : addr2ptr(kernel, daddr);
                 if(!ld_addr)
                 {
                     return kEmuErr;
                 }
-                kptr_t val = *(kptr_t*)ld_addr;
+                uint64_t val = ldadd->sf ? *(uint64_t*)ld_addr : *(uint32_t*)ld_addr;
                 if(ldadd->Rt != 31)
                 {
                     state->x[ldadd->Rt] = val;
                     state->valid |= 1 << ldadd->Rt;
                     state->wide = (state->wide & ~(1 << ldadd->Rt)) | (ldadd->sf << ldadd->Rt);
-                    state->host &= ~(1 << ldadd->Rt);
+                    HOST_SET(state, ldadd->Rt, 0);
                 }
-                if((state->host & (1 << ldadd->Rn)))
+                if(idx)
                 {
                     if(!(state->valid & (1 << ldadd->Rs)))
                     {
@@ -678,14 +801,16 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                         else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                         return kEmuUnknown;
                     }
-                    val += state->x[ldadd->Rs];
+                    val += ldadd->Rs == 31 ? 0 : state->x[ldadd->Rs];
                     if(ldadd->sf)
                     {
                         *(uint64_t*)ld_addr = val;
+                        host_idx_set(state, idx-1, daddr, 8, 0);
                     }
                     else
                     {
                         *(uint32_t*)ld_addr = (uint32_t)val;
+                        host_idx_set(state, idx-1, daddr, 4, 0);
                     }
                 }
             }
@@ -721,7 +846,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             else
             {
                 kptr_t laddr = state->x[Rn] + off;
-                void *ldr_addr = (state->host & (1 << Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                uint8_t idx = HOST_GET(state, Rn);
+                void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, 1 << size) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
                     return kEmuErr;
@@ -771,7 +897,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             {
                 return kEmuErr;
             }
-            if((state->valid & (1 << Rn)) && (state->host & (1 << Rn)))
+            uint8_t idx;
+            if((state->valid & (1 << Rn)) && (idx = HOST_GET(state, Rn)))
             {
                 if(!(state->qvalid & (1 << Rt)))
                 {
@@ -779,22 +906,35 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                     return kEmuUnknown;
                 }
+                --idx;
                 kptr_t staddr = state->x[Rn] + off;
-                switch(size)
+                if(HOST_IN_RANGE(state, idx, staddr, 1 << size))
                 {
-                    case 0: *(uint8_t *)staddr = (uint8_t )state->q[Rt]; break;
-                    case 1: *(uint16_t*)staddr = (uint16_t)state->q[Rt]; break;
-                    case 2: *(uint32_t*)staddr = (uint32_t)state->q[Rt]; break;
-                    case 3: *(uint64_t*)staddr = (uint64_t)state->q[Rt]; break;
-                    case 4:
+                    switch(size)
                     {
-                        ((uint64_t*)staddr)[0] = (uint64_t) state->q[Rt];
-                        ((uint64_t*)staddr)[1] = (uint64_t)(state->q[Rt] >> 64);
-                        break;
+                        case 0: *(uint8_t *)staddr = (uint8_t )state->q[Rt]; break;
+                        case 1: *(uint16_t*)staddr = (uint16_t)state->q[Rt]; break;
+                        case 2: *(uint32_t*)staddr = (uint32_t)state->q[Rt]; break;
+                        case 3: *(uint64_t*)staddr = (uint64_t)state->q[Rt]; break;
+                        case 4:
+                        {
+                            ((uint64_t*)staddr)[0] = (uint64_t) state->q[Rt];
+                            ((uint64_t*)staddr)[1] = (uint64_t)(state->q[Rt] >> 64);
+                            break;
+                        }
+                        default:
+                            WRN("SIMD str with invalid size at " ADDR, addr);
+                            return kEmuErr;
                     }
-                    default:
-                        WRN("SIMD str with invalid size at " ADDR, addr);
-                        return kEmuErr;
+                    if(size == 4)
+                    {
+                        host_idx_set(state, idx, staddr,     8, 0);
+                        host_idx_set(state, idx, staddr + 8, 8, 0);
+                    }
+                    else
+                    {
+                        host_idx_set(state, idx, staddr, 1 << size, 0);
+                    }
                 }
             }
         }
@@ -818,7 +958,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     state->x[ldp->Rn] = laddr;
                     laddr = tmp;
                 }
-                void *ldr_addr = (state->host & (1 << ldp->Rn)) ? (void*)laddr : addr2ptr(kernel, laddr);
+                uint8_t idx = HOST_GET(state, ldp->Rn);
+                void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, 8 << ldp->opc) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
                     return kEmuErr;
@@ -875,7 +1016,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     state->x[stp->Rn] = staddr;
                     staddr = tmp;
                 }
-                if(state->host & (1 << stp->Rn))
+                uint8_t idx = HOST_GET(state, stp->Rn);
+                if(idx)
                 {
                     if(!(state->qvalid & (1 << stp->Rt)) || !(state->qvalid & (1 << stp->Rt2)))
                     {
@@ -883,6 +1025,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                         else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                         return kEmuUnknown;
                     }
+                    --idx;
                     switch(stp->opc)
                     {
                         case 0:
@@ -890,6 +1033,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                             uint32_t *p = (uint32_t*)staddr;
                             p[0] = (uint32_t)state->q[stp->Rt];
                             p[1] = (uint32_t)state->q[stp->Rt2];
+                            host_idx_set(state, idx, staddr, 8, 0);
                             break;
                         }
                         case 1:
@@ -897,6 +1041,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                             uint64_t *p = (uint64_t*)staddr;
                             p[0] = (uint64_t)state->q[stp->Rt];
                             p[1] = (uint64_t)state->q[stp->Rt2];
+                            host_idx_set(state, idx, staddr,     8, 0);
+                            host_idx_set(state, idx, staddr + 8, 8, 0);
                             break;
                         }
                         case 2:
@@ -906,6 +1052,10 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                             p[1] = (uint64_t)(state->q[stp->Rt] >> 64);
                             p[2] = (uint64_t) state->q[stp->Rt2];
                             p[3] = (uint64_t)(state->q[stp->Rt2] >> 64);
+                            host_idx_set(state, idx, staddr,      8, 0);
+                            host_idx_set(state, idx, staddr +  8, 8, 0);
+                            host_idx_set(state, idx, staddr + 16, 8, 0);
+                            host_idx_set(state, idx, staddr + 24, 8, 0);
                             break;
                         }
                         default:
@@ -922,14 +1072,14 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 state->x[30] = addr + 4;
                 state->valid |=   1 << 30;
                 state->wide  |=   1 << 30;
-                state->host  &= ~(1 << 30);
+                HOST_SET(state, 30, 0);
                 from = (uint32_t*)((uintptr_t)from + get_bl_off(ptr));
                 --from;
             }
             else
             {
                 state->valid &= ~0x4003fffe;
-                if(fn_behaviour != kEmuFnAssumeX0 || !((state->valid & 0x1) && (state->host & 0x1)))
+                if(fn_behaviour != kEmuFnAssumeX0 || !((state->valid & 0x1) && HOST_GET(state, 0)))
                 {
                     state->valid &= ~0x1;
                 }
@@ -942,7 +1092,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             state->x[movz->Rd] = get_movzk_imm(movz);
             state->valid |= 1 << movz->Rd;
             state->wide = (state->wide & ~(1 << movz->Rd)) | (movz->sf << movz->Rd);
-            state->host &= ~(1 << movz->Rd);
+            HOST_SET(state, movz->Rd, 0);
         }
         else if(is_movk(ptr))
         {
@@ -952,7 +1102,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 state->x[movk->Rd] = (state->x[movk->Rd] & ~(0xffff << (movk->hw << 4))) | get_movzk_imm(movk);
                 state->valid |= 1 << movk->Rd;
                 state->wide = (state->wide & ~(1 << movk->Rd)) | (movk->sf << movk->Rd);
-                state->host &= ~(1 << movk->Rd);
+                HOST_SET(state, movk->Rd, 0);
             }
         }
         else if(is_movn(ptr))
@@ -961,7 +1111,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             state->x[movn->Rd] = get_movn_imm(movn);
             state->valid |= 1 << movn->Rd;
             state->wide = (state->wide & ~(1 << movn->Rd)) | (movn->sf << movn->Rd);
-            state->host &= ~(1 << movn->Rd);
+            HOST_SET(state, movn->Rd, 0);
         }
         else if(is_movi(ptr))
         {
@@ -996,7 +1146,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 state->x[orr->Rd] = Rd;
                 state->valid |= 1 << orr->Rd;
                 state->wide = (state->wide & ~(1 << orr->Rd)) | (orr->sf << orr->Rd);
-                state->host &= ~(1 << orr->Rd);
+                HOST_SET(state, orr->Rd, 0);
             }
             else
             {
@@ -1044,23 +1194,23 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     if(orr->Rn == 31 && orr->imm == 0)
                     {
                         state->wide = (state->wide & ~(1 << orr->Rd)) | (((state->wide >> orr->Rm) & 0x1) << orr->Rd);
-                        state->host = (state->host & ~(1 << orr->Rd)) | (((state->host >> orr->Rm) & 0x1) << orr->Rd);
+                        HOST_SET(state, orr->Rd, HOST_GET(state, orr->Rm));
                     }
                     else if(orr->Rm == 31)
                     {
                         state->wide = (state->wide & ~(1 << orr->Rd)) | (((state->wide >> orr->Rn) & 0x1) << orr->Rd);
-                        state->host = (state->host & ~(1 << orr->Rd)) | (((state->host >> orr->Rn) & 0x1) << orr->Rd);
+                        HOST_SET(state, orr->Rd, HOST_GET(state, orr->Rn));
                     }
                     else
                     {
                         state->wide |= 1 << orr->Rd;
-                        state->host &= ~(1 << orr->Rd);
+                        HOST_SET(state, orr->Rd, 0);
                     }
                 }
                 else
                 {
                     state->wide &= ~(1 << orr->Rd);
-                    state->host &= ~(1 << orr->Rd);
+                    HOST_SET(state, orr->Rd, 0);
                 }
             }
             else
@@ -1114,7 +1264,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     else            DBG("Cannot return at " ADDR, addr);
                     return kEmuUnknown;
                 }
-                if(state->host & (1 << 30))
+                if(HOST_GET(state, 30))
                 {
                     WRN("Cannot return to host address at " ADDR, addr);
                     return kEmuErr;
@@ -1142,7 +1292,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
 // Certain calls to OSMetaClass::OSMetaClass() do not have x0 generated as an immediate,
 // but passed in from the caller. If these are the only constructor calls for a given class,
 // then we have no choice but to follow those calls back until we get an x0.
-bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint32_t wantvalid, const char *name)
+bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint8_t *bitstr, uint32_t wantvalid, const char *name)
 {
     mach_seg_t *seg = seg4ptr(kernel, fncall);
     kptr_t fncalladdr = seg->vmaddr + ((uintptr_t)fncall - ((uintptr_t)kernel + seg->fileoff));
@@ -1171,6 +1321,7 @@ bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint
     DBG("Function with call " ADDR " starts at " ADDR, fncalladdr, fnaddr);
 
     bzero(sp, A64_EMU_SPSIZE);
+    bzero(bitstr, (A64_EMU_SPSIZE + 31) / 32);
     for(size_t i = 0; i < 31; ++i)
     {
         state->x[i] = 0;
@@ -1181,7 +1332,11 @@ bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint
     state->valid  = 0xfff80000;
     state->qvalid = 0x0000ff00;
     state->wide   = 0xfff80000;
-    state->host   = 0x80000000;
+    state->host   = 0;
+    HOST_SET(state, 31, 1);
+    state->hostmem[0].min = (uintptr_t)sp;
+    state->hostmem[0].max = (uintptr_t)sp + A64_EMU_SPSIZE;
+    state->hostmem[0].bitstring = bitstr;
     emu_ret_t ret = a64_emulate(kernel, kbase, fixupKind, state, fnstart, &a64cb_check_equal, end, false, false, kEmuFnEnter);
     switch(ret)
     {
@@ -1217,7 +1372,7 @@ bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint
         {
             kptr_t bladdr = seg->vmaddr + ((uintptr_t)bl - ((uintptr_t)kernel + seg->fileoff));
             kptr_t bltarg = bladdr + get_bl_off(bl);
-            if(bltarg == fnaddr && multi_call_emulate(kernel, kbase, fixupKind, mem, end, state, sp, wantvalid, name))
+            if(bltarg == fnaddr && multi_call_emulate(kernel, kbase, fixupKind, mem, end, state, sp, bitstr, wantvalid, name))
             {
                 return true;
             }

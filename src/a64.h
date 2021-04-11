@@ -464,7 +464,7 @@ static inline bool is_ldur(ldur_t *ldur)
 
 static inline int64_t get_ldur_off(ldur_t *ldur)
 {
-    return (int64_t)ldur->imm;
+    return ((int64_t)ldur->imm << (64 - 9)) >> (64 - 9);
 }
 
 static inline bool is_stur(stur_t *stur)
@@ -474,7 +474,7 @@ static inline bool is_stur(stur_t *stur)
 
 static inline int64_t get_stur_off(stur_t *stur)
 {
-    return (int64_t)stur->imm;
+    return ((int64_t)stur->imm << (64 - 9)) >> (64 - 9);
 }
 
 static inline bool is_ldrb_imm_uoff(ldrb_imm_uoff_t *ldrb)
