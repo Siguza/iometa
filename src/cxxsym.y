@@ -95,8 +95,10 @@ typedef struct
 {
     // In
     const char *input;
+    const char *moreinput;
     int pos;
     // Out
+    type_t *class;
     str_t method;
     type_t *args;
     uint8_t cnst : 1,
@@ -110,7 +112,7 @@ typedef struct
 %token INT_LITERAL
 %token CONST VOLATILE
 %token SIGNED UNSIGNED BOOL CHAR SHORT INT LONG FLOAT DOUBLE
-%token VARARGS DELIM VOID BLOCK
+%token VARARGS DELIM CLASS_DELIM VOID BLOCK
 %token ERROR
 
 %lex-param   { state_t *state }
@@ -142,11 +144,19 @@ static void complex_set_base(type_t *t, type_t *base);
 
 %%
 
-method: NAME_LITERAL '(' arglist ')' const.opt volatile.opt {
-        state->method = $1;
-        state->args = $3;
-        state->cnst = $5;
-        state->vltl = $6;
+method: name DELIM NAME_LITERAL '(' arglist ')' const.opt volatile.opt {
+          state->class = $1;
+          state->method = $3;
+          state->args = $5;
+          state->cnst = $7;
+          state->vltl = $8;
+      }
+      | name CLASS_DELIM NAME_LITERAL '(' arglist ')' const.opt volatile.opt {
+          state->class = $1;
+          state->method = $3;
+          state->args = $5;
+          state->cnst = $7;
+          state->vltl = $8;
       }
       ;
 
@@ -640,6 +650,14 @@ static int yylex(YYSTYPE *lvalp, state_t *state)
     switch(c)
     {
         case '\0':
+            if(state->moreinput)
+            {
+                state->input = state->moreinput;
+                state->moreinput = NULL;
+                state->pos = 0;
+                //return CLASS_DELIM;
+                return DELIM;
+            }
             return YYEOF;
         case ',':
         case '*':
@@ -1009,7 +1027,8 @@ char* cxx_mangle(const char *class, const char *method)
     char *ret = NULL;
     state_t state =
     {
-        .input = method,
+        .input = class ? class : method,
+        .moreinput = class ? method : NULL,
         .pos = 0,
     };
     int r = yyparse(&state);
@@ -1029,55 +1048,33 @@ do \
 } while(0)
 
     P("__ZN%s%s", state.vltl ? "V" : "",  state.cnst ? "K" : "");
-    type_t cls, space;
-    const char *delim;
-    // TODO: Proper multi-level namespace handling
-    if((delim = strstr(class, "::")))
+    ARRDEF(type_t*, stack, 32);
+    int prev = i;
+    bool ok = cxx_mangle_type(buf, sizeof(buf), &i, &stack, state.class);
+    if(ok)
     {
-        int len1 = (int)(delim - class);
-        delim += 2;
-        int len2 = (int)strlen(delim);
-        P("%u%.*s%u%s", len1, len1, class, len2, delim);
-        space.next = NULL;
-        space.kind = kName;
-        space.val.name.str.ptr = class;
-        space.val.name.str.len = len1;
-        space.val.name.next = &cls;
-        cls.next = NULL;
-        cls.kind = kName;
-        cls.val.name.str.ptr = delim;
-        cls.val.name.str.len = len2;
-        cls.val.name.next = NULL;
-    }
-    else
-    {
-        int len = (int)strlen(class);
-        P("%u%s", len, class);
-        cls.next = NULL;
-        cls.kind = kName;
-        cls.val.name.str.ptr = class;
-        cls.val.name.str.len = len;
-        cls.val.name.next = NULL;
-    }
-    P("%u%.*sE", state.method.len, state.method.len, state.method.ptr);
-    if(!state.args)
-    {
-        P("v");
-    }
-    else
-    {
-        ARRDEF(type_t*, stack, 32);
-        if(delim)
+        if(buf[prev] == 'N')
         {
-            ARRPUSH(stack, &space);
+            i -= 2; // N and E
+            for(; prev < i; ++prev)
+            {
+                buf[prev] = buf[prev+1];
+            }
         }
-        ARRPUSH(stack, &cls);
-        bool ok = cxx_mangle_type(buf, sizeof(buf), &i, &stack, state.args);
-        ARRFREE(stack);
-        if(!ok)
+        P("%u%.*sE", state.method.len, state.method.len, state.method.ptr);
+        if(!state.args)
         {
-            goto out;
+            P("v");
         }
+        else
+        {
+            ok = cxx_mangle_type(buf, sizeof(buf), &i, &stack, state.args);
+        }
+    }
+    ARRFREE(stack);
+    if(!ok)
+    {
+        goto out;
     }
 #undef P
     ret = strdup(buf);
@@ -1090,12 +1087,12 @@ out:;
 #ifdef CXXSYM_DEBUG
 int main(int argc, const char **argv)
 {
-    if(argc != 3)
+    if(argc != 2)
     {
-        fprintf(stderr, "Usage: %s class method\n", argv[0]);
+        fprintf(stderr, "Usage: %s 'Class::method(...)'\n", argv[0]);
         return -1;
     }
-    char *str = cxx_mangle(argv[1], argv[2]);
+    char *str = cxx_mangle(NULL, argv[1]);
     if(!str)
     {
         fprintf(stderr, "Mangling error\n");
