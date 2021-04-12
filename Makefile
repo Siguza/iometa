@@ -1,4 +1,4 @@
-VERSION = 1.6.4
+VERSION = 1.6.5
 TARGET  = iometa
 SRCDIR  = src
 GENDIR  = gen
