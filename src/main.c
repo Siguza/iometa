@@ -1386,6 +1386,7 @@ int main(int argc, const char **argv)
                                         state.x[i] = 0;
                                         state.q[i] = 0;
                                     }
+                                    state.flags = 0;
                                     state.valid = 1;
                                     state.qvalid = 0;
                                     state.wide = 1;
@@ -1975,6 +1976,7 @@ int main(int argc, const char **argv)
                                 }
                                 state.x[ 0]  = 0x6174656d656b6166; // "fakemeta", fake "this" ptr
                                 state.x[31]  = (uintptr_t)sp + A64_EMU_SPSIZE;
+                                state.flags  = 0;
                                 state.valid  = 0xfff80001;
                                 state.qvalid = 0x0000ff00;
                                 state.wide   = 0xfff80001;
@@ -2002,7 +2004,7 @@ int main(int argc, const char **argv)
                                             {
                                                 allocsz = *(kptr_t*)state.x[0];
                                             }
-                                            else if((state.valid & 0xff) == 0x1 && (state.wide & 0x1) == 0x0) // new
+                                            else if((state.valid & 0xff) == 0x1) // new
                                             {
                                                 allocsz = state.x[0];
                                             }
@@ -2012,7 +2014,7 @@ int main(int argc, const char **argv)
                                             }
                                             else
                                             {
-                                                if(meta->vtab == -1)
+                                                //if(meta->vtab == -1)
                                                 {
                                                     WRN("Bad pre-bl state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
                                                 }
@@ -2020,7 +2022,7 @@ int main(int argc, const char **argv)
                                             }
                                             if(allocsz != meta->objsize)
                                             {
-                                                if(meta->vtab == -1)
+                                                //if(meta->vtab == -1)
                                                 {
                                                     WRN("Alloc has wrong size in %s::MetaClass::alloc (0x%llx vs 0x%x)", meta->name, allocsz, meta->objsize);
                                                 }
@@ -2046,7 +2048,15 @@ int main(int argc, const char **argv)
                                             state.hostmem[1].min = (uintptr_t)obj;
                                             state.hostmem[1].max = (uintptr_t)obj + allocsz;
                                             state.hostmem[1].bitstring = obitstr;
-                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m + 1, &a64cb_check_equal, end, false, true, kEmuFnAssumeX0) != kEmuRet)
+                                            uint32_t *e = m + 1;
+                                            for(; e < end; ++e)
+                                            {
+                                                if(is_ret(e))
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m + 1, &a64cb_check_equal, e, false, true, kEmuFnEnter) != kEmuEnd)
                                             {
                                                 break;
                                             }
@@ -2063,6 +2073,7 @@ int main(int argc, const char **argv)
                                             }
                                             meta->vtab = vt;
                                         }
+                                        break;
                                     default:
                                         break;
                                 }

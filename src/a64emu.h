@@ -28,15 +28,28 @@ typedef enum
 
 typedef enum
 {
-    kEmuFnIgnore,
-    kEmuFnAssumeX0,
-    kEmuFnEnter,
+    kEmuFnIgnore   = 0,
+    kEmuFnAssumeX0 = 1 << 0,
+    kEmuFnEnter    = 1 << 1,
 } emu_fn_behaviour_t;
 
 typedef struct
 {
     uint64_t x[32];
     __uint128_t q[32];
+    union
+    {
+        uint32_t flags;
+        struct
+        {
+            uint32_t v          :  1,
+                     c          :  1,
+                     z          :  1,
+                     n          :  1,
+                     res        : 27,
+                     nzcv_valid :  1;
+        };
+    };
     uint32_t valid;
     uint32_t qvalid;
     uint32_t wide;

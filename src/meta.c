@@ -187,6 +187,7 @@ void meta_constructor_cb(void *kernel, kptr_t kbase, mach_seg_t *seg, fixup_kind
             state->x[1]  = 0x656d616e656b6166; // "fakename"
             state->x[2]  = 0x00727470656b6166; // "fakeptr"
             state->x[3]  = 0x656b6166; // "fake"
+            state->flags  = 0;
             state->valid  = 0xf;
             state->qvalid = 0x0;
             state->wide   = 0x7;

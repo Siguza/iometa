@@ -213,6 +213,14 @@ typedef struct
 
 typedef struct
 {
+    uint32_t cond :  4,
+             op2  :  1,
+             imm  : 19,
+             op1  :  8;
+} b_cond_t;
+
+typedef struct
+{
     uint32_t Rt     :  5,
              imm    : 19,
              op     :  7,
@@ -355,6 +363,16 @@ static inline bool is_add_reg(add_reg_t *add)
 static inline bool is_sub_reg(sub_reg_t *sub)
 {
     return sub->op1 == 0b1001011 && sub->op2 == 0;
+}
+
+static inline bool is_adds_reg(add_reg_t *add)
+{
+    return add->op1 == 0b0101011 && add->op2 == 0;
+}
+
+static inline bool is_subs_reg(sub_reg_t *sub)
+{
+    return sub->op1 == 0b1101011 && sub->op2 == 0;
 }
 
 static inline bool is_ldr_imm_uoff(ldr_imm_uoff_t *ldr)
@@ -632,7 +650,7 @@ static inline bool is_bl(bl_t *bl)
     return bl->op == 0x5 && bl->mode == 1;
 }
 
-static inline bool is_b(bl_t *b)
+static inline bool is_b(b_t *b)
 {
     return b->op == 0x5 && b->mode == 0;
 }
@@ -640,6 +658,16 @@ static inline bool is_b(bl_t *b)
 static inline int64_t get_bl_off(bl_t *bl)
 {
     return (((int64_t)bl->imm) << (64 - 26)) >> (64 - 26 - 2);
+}
+
+static inline bool is_b_cond(b_cond_t *b)
+{
+    return b->op1 == 0b01010100 && b->op2 == 0;
+}
+
+static inline int64_t get_b_cond_off(b_cond_t *b)
+{
+    return (((int64_t)b->imm) << (64 - 19)) >> (64 - 19 - 2);
 }
 
 static inline bool is_cbz(cbz_t *cbz)

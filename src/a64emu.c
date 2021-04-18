@@ -26,6 +26,8 @@ bool is_linear_inst(void *ptr)
            is_sub_imm(ptr) ||
            is_add_reg(ptr) ||
            is_sub_reg(ptr) ||
+           is_adds_reg(ptr) ||
+           is_subs_reg(ptr) ||
            is_ldr_imm_uoff(ptr) ||
            is_ldr_lit(ptr) ||
            is_ldp_pre(ptr) ||
@@ -211,6 +213,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             state->x[i] = 0;
             state->q[i] = 0;
         }
+        state->flags  = 0;
         state->valid  = 0;
         state->qvalid = 0;
         state->wide   = 0;
@@ -243,7 +246,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 uint8_t idx = HOST_GET(state, str->Rn);
                 if(idx)
                 {
-                    if(!(state->valid & (1 << str->Rt)))
+                    if(str->Rt != 31 && !(state->valid & (1 << str->Rt)))
                     {
                         if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
                         else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
@@ -252,14 +255,15 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     --idx;
                     if(HOST_IN_RANGE(state, idx, staddr, str->sf ? 8 : 4))
                     {
+                        uint64_t val = str->Rt == 31 ? 0 : state->x[str->Rt];
                         if(str->sf)
                         {
-                            *(uint64_t*)staddr = state->x[str->Rt];
-                            host_idx_set(state, idx, staddr, 8, HOST_GET(state, str->Rt));
+                            *(uint64_t*)staddr = val;
+                            host_idx_set(state, idx, staddr, 8, str->Rt == 31 ? 0 : HOST_GET(state, str->Rt));
                         }
                         else
                         {
-                            *(uint32_t*)staddr = (uint32_t)state->x[str->Rt];
+                            *(uint32_t*)staddr = (uint32_t)val;
                             host_idx_set(state, idx, staddr, 4, 0);
                         }
                     }
@@ -304,12 +308,13 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             }
             else
             {
-                return kEmuErr;
+                ERR("Bug in a64_emulate (case str_uoff) at " ADDR, addr);
+                exit(-1);
             }
             uint8_t idx;
             if((state->valid & (1 << Rn)) && (idx = HOST_GET(state, Rn)))
             {
-                if(!(state->valid & (1 << Rt)))
+                if(Rt != 31 && !(state->valid & (1 << Rt)))
                 {
                     if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
                     else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
@@ -319,17 +324,18 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 kptr_t staddr = state->x[Rn] + off;
                 if(HOST_IN_RANGE(state, idx, staddr, size))
                 {
+                    uint64_t val = Rt == 31 ? 0 : state->x[Rt];
                     switch(size)
                     {
-                        case 1: *(uint8_t *)staddr = (uint8_t )state->x[Rt]; break;
-                        case 2: *(uint16_t*)staddr = (uint16_t)state->x[Rt]; break;
-                        case 4: *(uint32_t*)staddr = (uint32_t)state->x[Rt]; break;
-                        case 8: *(uint64_t*)staddr = (uint64_t)state->x[Rt]; break;
+                        case 1: *(uint8_t *)staddr = (uint8_t )val; break;
+                        case 2: *(uint16_t*)staddr = (uint16_t)val; break;
+                        case 4: *(uint32_t*)staddr = (uint32_t)val; break;
+                        case 8: *(uint64_t*)staddr = (uint64_t)val; break;
                         default:
                             ERR("Bug in a64_emulate: str_uoff with invalid size at " ADDR, addr);
                             exit(-1);
                     }
-                    host_idx_set(state, idx, staddr, size, size == 8 ? HOST_GET(state, Rt) : 0);
+                    host_idx_set(state, idx, staddr, size, size == 8 && Rt != 31 ? HOST_GET(state, Rt) : 0);
                 }
             }
         }
@@ -352,25 +358,27 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 uint8_t idx = HOST_GET(state, stp->Rn);
                 if(idx)
                 {
-                    if(!(state->valid & (1 << stp->Rt)) || !(state->valid & (1 << stp->Rt2)))
+                    if((stp->Rt != 31 && !(state->valid & (1 << stp->Rt))) || (stp->Rt2 != 31 && !(state->valid & (1 << stp->Rt2))))
                     {
                         if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
                         else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
                         return kEmuUnknown;
                     }
                     --idx;
+                    uint64_t val  = stp->Rt  == 31 ? 0 : state->x[stp->Rt];
+                    uint64_t val2 = stp->Rt2 == 31 ? 0 : state->x[stp->Rt2];
                     if(stp->sf)
                     {
                         uint64_t *p = (uint64_t*)staddr;
                         if(HOST_IN_RANGE(state, idx, staddr, 8))
                         {
-                            p[0] = state->x[stp->Rt];
-                            host_idx_set(state, idx, staddr, 8, HOST_GET(state, stp->Rt));
+                            p[0] = val;
+                            host_idx_set(state, idx, staddr, 8, stp->Rt == 31 ? 0 : HOST_GET(state, stp->Rt));
                         }
                         if(HOST_IN_RANGE(state, idx, staddr + 8, 8))
                         {
-                            p[1] = state->x[stp->Rt2];
-                            host_idx_set(state, idx, staddr, 8, HOST_GET(state, stp->Rt2));
+                            p[1] = val2;
+                            host_idx_set(state, idx, staddr + 8, 8, stp->Rt2 == 31 ? 0 : HOST_GET(state, stp->Rt2));
                         }
                     }
                     else
@@ -378,13 +386,13 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                         uint32_t *p = (uint32_t*)staddr;
                         if(HOST_IN_RANGE(state, idx, staddr, 4))
                         {
-                            p[0] = (uint32_t)state->x[stp->Rt];
+                            p[0] = (uint32_t)val;
                             host_idx_set(state, idx, staddr, 4, 0);
                         }
                         if(HOST_IN_RANGE(state, idx, staddr + 4, 4))
                         {
-                            p[1] = (uint32_t)state->x[stp->Rt2];
-                            host_idx_set(state, idx, staddr, 4, 0);
+                            p[1] = (uint32_t)val2;
+                            host_idx_set(state, idx, staddr + 4, 4, 0);
                         }
                     }
                 }
@@ -393,15 +401,18 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         else if(is_stxr(ptr))
         {
             stxr_t *stxr = ptr;
-            // Always set success
-            state->x[stxr->Rs] = 0;
-            state->valid  |= 1 << stxr->Rs;
-            state->wide &= ~(1 << stxr->Rs);
-            HOST_SET(state, stxr->Rs, 0);
+            if(stxr->Rs != 31)
+            {
+                // Always set success
+                state->x[stxr->Rs] = 0;
+                state->valid  |= 1 << stxr->Rs;
+                state->wide &= ~(1 << stxr->Rs);
+                HOST_SET(state, stxr->Rs, 0);
+            }
             uint8_t idx;
             if((state->valid & (1 << stxr->Rn)) && (idx = HOST_GET(state, stxr->Rn))) // Only if valid & host
             {
-                if(!(state->valid & (1 << stxr->Rt)))
+                if(stxr->Rt != 31 && !(state->valid & (1 << stxr->Rt)))
                 {
                     if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
                     else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
@@ -413,12 +424,12 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 {
                     if(stxr->sf)
                     {
-                        *(uint64_t*)staddr = state->x[stxr->Rt];
-                        host_idx_set(state, idx, staddr, 8, HOST_GET(state, stxr->Rt));
+                        *(uint64_t*)staddr = stxr->Rt == 31 ? 0 : state->x[stxr->Rt];
+                        host_idx_set(state, idx, staddr, 8, stxr->Rt == 31 ? 0 : HOST_GET(state, stxr->Rt));
                     }
                     else
                     {
-                        *(uint32_t*)staddr = (uint32_t)state->x[stxr->Rt];
+                        *(uint32_t*)staddr = stxr->Rt == 31 ? 0 : (uint32_t)state->x[stxr->Rt];
                         host_idx_set(state, idx, staddr, 4, 0);
                     }
                 }
@@ -427,10 +438,13 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         else if(is_adr(ptr) || is_adrp(ptr))
         {
             adr_t *adr = ptr;
-            state->x[adr->Rd] = (adr->op1 ? (addr & ~0xfff) : addr) + get_adr_off(adr);
-            state->valid |= 1 << adr->Rd;
-            state->wide  |= 1 << adr->Rd;
-            HOST_SET(state, adr->Rd, 0);
+            if(adr->Rd != 31)
+            {
+                state->x[adr->Rd] = (adr->op1 ? (addr & ~0xfff) : addr) + get_adr_off(adr);
+                state->valid |= 1 << adr->Rd;
+                state->wide  |= 1 << adr->Rd;
+                HOST_SET(state, adr->Rd, 0);
+            }
         }
         else if(is_add_imm(ptr) || is_sub_imm(ptr))
         {
@@ -447,16 +461,24 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 HOST_SET(state, add->Rd, HOST_GET(state, add->Rn));
             }
         }
-        else if(is_add_reg(ptr) || is_sub_reg(ptr))
+        else if(is_add_reg(ptr) || is_sub_reg(ptr) || is_adds_reg(ptr) || is_subs_reg(ptr))
         {
             add_reg_t *add = ptr;
             if(!(state->valid & (1 << add->Rn)) || !(state->valid & (1 << add->Rm))) // Unset validity
             {
-                state->valid &= ~(1 << add->Rd);
+                if(add->Rd != 31)
+                {
+                    state->valid &= ~(1 << add->Rd);
+                }
+                if(is_adds_reg(ptr) || is_subs_reg(ptr))
+                {
+                    state->nzcv_valid = 0;
+                }
             }
             else
             {
-                uint64_t Rm = state->x[add->Rm];
+                uint64_t Rm = add->Rm == 31 ? 0 : state->x[add->Rm];
+                uint64_t Rn = add->Rn == 31 ? 0 : state->x[add->Rn];
                 switch(add->shift)
                 {
                     case 0b00: Rm =          Rm << add->imm; break; // LSL
@@ -466,29 +488,40 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                         WRN("Bad add/sub shift at " ADDR, addr);
                         return kEmuErr;
                 }
-                uint64_t Rd;
-                if(is_add_reg(add))
+                if(is_sub_reg(ptr) || is_subs_reg(ptr))
                 {
-                    Rd = state->x[add->Rn] + Rm;
+                    Rm = -Rm;
                 }
-                else
+                uint64_t Rd = Rn + Rm;
+                Rd = add->sf ? Rd : (Rd & 0xffffffffULL);
+                if(is_adds_reg(ptr) || is_subs_reg(ptr))
                 {
-                    Rd = state->x[add->Rn] - Rm;
+                    uint32_t topN = (Rn >> (add->sf ? 63 : 31)) & 0x1;
+                    uint32_t topM = (Rm >> (add->sf ? 63 : 31)) & 0x1;
+                    uint32_t topD = (Rd >> (add->sf ? 63 : 31)) & 0x1;
+                    state->n = topD;
+                    state->z = Rd == 0;
+                    state->c = Rd < (add->sf ? Rn : (Rn & 0xffffffffULL));
+                    state->v = (topN^topM^1) & (topN^topD);
+                    state->nzcv_valid = 1;
                 }
-                state->x[add->Rd] = add->sf ? Rd : (Rd & 0xffffffffULL);
-                state->valid |= 1 << add->Rd;
-                state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
-                // Weird case: we only wanna keep the host flag if exactly one of the source registers has it.
-                // If both have it, something's gone wrong, but we wanna be able to add immediates that are loaded into a register.
-                uint64_t RnIdx = HOST_GET(state, add->Rn);
-                uint64_t RmIdx = HOST_GET(state, add->Rm);
-                if((RnIdx == 0 && RmIdx == 0) || (RnIdx != 0 && RmIdx != 0))
+                if(add->Rd != 31)
                 {
-                    HOST_SET(state, add->Rd, 0);
-                }
-                else
-                {
-                    HOST_SET(state, add->Rd, RnIdx | RmIdx);
+                    state->x[add->Rd] = Rd;
+                    state->valid |= 1 << add->Rd;
+                    state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
+                    // Weird case: we only wanna keep the host flag if exactly one of the source registers has it.
+                    // If both have it, something's gone wrong, but we wanna be able to add immediates that are loaded into a register.
+                    uint64_t RnIdx = HOST_GET(state, add->Rn);
+                    uint64_t RmIdx = HOST_GET(state, add->Rm);
+                    if((RnIdx == 0 && RmIdx == 0) || (RnIdx != 0 && RmIdx != 0))
+                    {
+                        HOST_SET(state, add->Rd, 0);
+                    }
+                    else
+                    {
+                        HOST_SET(state, add->Rd, RnIdx | RmIdx);
+                    }
                 }
             }
         }
@@ -565,19 +598,28 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             }
             else
             {
-                return kEmuErr;
+                ERR("Bug in a64_emulate (case ldr_imm_uoff) at " ADDR, addr);
+                exit(-1);
             }
             if(!(state->valid & (1 << Rn))) // Unset validity
             {
                 state->valid &= ~(1 << Rt);
             }
-            else
+            else if(Rt != 31)
             {
                 kptr_t laddr = state->x[Rn] + off;
                 uint8_t idx = HOST_GET(state, Rn);
                 void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, size) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
+                    if(idx)
+                    {
+                        WRN("Load address outside of host mem at " ADDR, addr);
+                    }
+                    else
+                    {
+                        WRN("Load address outside of all segments at " ADDR, addr);
+                    }
                     return kEmuErr;
                 }
                 uint64_t val;
@@ -636,22 +678,26 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         else if(is_ldr_lit(ptr))
         {
             ldr_lit_t *ldr = ptr;
-            void *ldr_addr = addr2ptr(kernel, addr + get_ldr_lit_off(ldr));
-            if(!ldr_addr)
+            if(ldr->Rt != 31)
             {
-                return kEmuErr;
+                void *ldr_addr = addr2ptr(kernel, addr + get_ldr_lit_off(ldr));
+                if(!ldr_addr)
+                {
+                    WRN("Load address outside of all segments at " ADDR, addr);
+                    return kEmuErr;
+                }
+                kptr_t val = *(kptr_t*)ldr_addr;
+                if(ldr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
+                {
+                    bool bind = false;
+                    val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
+                    if(bind) val = 0;
+                }
+                state->x[ldr->Rt] = val;
+                state->valid |= 1 << ldr->Rt;
+                state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
+                HOST_SET(state, ldr->Rt, 0);
             }
-            kptr_t val = *(kptr_t*)ldr_addr;
-            if(ldr->sf && is_in_fixup_chain(kernel, kbase, ldr_addr))
-            {
-                bool bind = false;
-                val = kuntag(kbase, fixupKind, val, &bind, NULL, NULL, NULL);
-                if(bind) val = 0;
-            }
-            state->x[ldr->Rt] = val;
-            state->valid |= 1 << ldr->Rt;
-            state->wide = (state->wide & ~(1 << ldr->Rt)) | (ldr->sf << ldr->Rt);
-            HOST_SET(state, ldr->Rt, 0);
         }
         else if(is_ldp_pre(ptr) || is_ldp_post(ptr) || is_ldp_uoff(ptr))
         {
@@ -660,7 +706,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             {
                 state->valid &= ~((1 << ldp->Rt) | (1 << ldp->Rt2));
             }
-            else
+            else if(ldp->Rt != 31 || ldp->Rt2 != 31)
             {
                 kptr_t laddr = state->x[ldp->Rn] + get_ldp_stp_off(ldp);
                 if(is_ldp_pre(ldp))
@@ -677,6 +723,14 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, ldp->sf ? 16 : 8) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
+                    if(idx)
+                    {
+                        WRN("Load address outside of host mem at " ADDR, addr);
+                    }
+                    else
+                    {
+                        WRN("Load address outside of all segments at " ADDR, addr);
+                    }
                     return kEmuErr;
                 }
                 if(ldp->sf)
@@ -684,10 +738,11 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     uint64_t *p = ldr_addr;
                     uint64_t v1 = p[0];
                     uint64_t v2 = p[1];
+                    uint8_t RtIdx, Rt2Idx;
                     if(idx)
                     {
-                        HOST_SET(state, ldp->Rt,  host_idx_get(state, idx-1, laddr    ));
-                        HOST_SET(state, ldp->Rt2, host_idx_get(state, idx-1, laddr + 8));
+                        RtIdx  = host_idx_get(state, idx-1, laddr    );
+                        Rt2Idx = host_idx_get(state, idx-1, laddr + 8);
                     }
                     else
                     {
@@ -703,22 +758,40 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                             v2 = kuntag(kbase, fixupKind, v2, &bind, NULL, NULL, NULL);
                             if(bind) v2 = 0;
                         }
-                        HOST_SET(state, ldp->Rt,  0);
-                        HOST_SET(state, ldp->Rt2, 0);
+                        RtIdx  = 0;
+                        Rt2Idx = 0;
                     }
-                    state->x[ldp->Rt]  = v1;
-                    state->x[ldp->Rt2] = v2;
+                    if(ldp->Rt != 31)
+                    {
+                        state->x[ldp->Rt] = v1;
+                        HOST_SET(state, ldp->Rt, RtIdx);
+                        state->wide |= 1 << ldp->Rt;
+                    }
+                    if(ldp->Rt2 != 31)
+                    {
+                        state->x[ldp->Rt2] = v2;
+                        HOST_SET(state, ldp->Rt2, Rt2Idx);
+                        state->wide |= 1 << ldp->Rt2;
+                    }
                 }
                 else
                 {
                     uint32_t *p = ldr_addr;
-                    state->x[ldp->Rt]  = p[0];
-                    state->x[ldp->Rt2] = p[1];
-                    HOST_SET(state, ldp->Rt,  0);
-                    HOST_SET(state, ldp->Rt2, 0);
+                    if(ldp->Rt != 31)
+                    {
+                        state->x[ldp->Rt] = p[0];
+                        HOST_SET(state, ldp->Rt, 0);
+                        state->wide &= ~(1 << ldp->Rt);
+                    }
+                    if(ldp->Rt2 != 31)
+                    {
+                        state->x[ldp->Rt2] = p[1];
+                        HOST_SET(state, ldp->Rt2, 0);
+                        state->wide &= ~(1 << ldp->Rt2);
+                    }
                 }
-                state->valid |= (1 << ldp->Rt) | (1 << ldp->Rt2);
-                state->wide = (state->wide & ~((1 << ldp->Rt) | (1 << ldp->Rt2))) | (ldp->sf << ldp->Rt) | (ldp->sf << ldp->Rt2);
+                if(ldp->Rt  != 31) state->valid |= (1 << ldp->Rt);
+                if(ldp->Rt2 != 31) state->valid |= (1 << ldp->Rt2);
             }
         }
         else if(is_ldxr(ptr))
@@ -728,13 +801,21 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             {
                 state->valid &= ~(1 << ldxr->Rt);
             }
-            else
+            else if(ldxr->Rt != 31)
             {
                 kptr_t laddr = state->x[ldxr->Rn];
                 uint8_t idx = HOST_GET(state, ldxr->Rn);
                 void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, ldxr->sf ? 8 : 4) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
+                    if(idx)
+                    {
+                        WRN("Load address outside of host mem at " ADDR, addr);
+                    }
+                    else
+                    {
+                        WRN("Load address outside of all segments at " ADDR, addr);
+                    }
                     return kEmuErr;
                 }
                 uint64_t val;
@@ -783,6 +864,14 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 void *ld_addr = idx ? (HOST_IN_RANGE(state, idx-1, daddr, ldadd->sf ? 8 : 4) ? (void*)daddr : NULL) : addr2ptr(kernel, daddr);
                 if(!ld_addr)
                 {
+                    if(idx)
+                    {
+                        WRN("Load address outside of host mem at " ADDR, addr);
+                    }
+                    else
+                    {
+                        WRN("Load address outside of all segments at " ADDR, addr);
+                    }
                     return kEmuErr;
                 }
                 uint64_t val = ldadd->sf ? *(uint64_t*)ld_addr : *(uint32_t*)ld_addr;
@@ -795,7 +884,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 }
                 if(idx)
                 {
-                    if(!(state->valid & (1 << ldadd->Rs)))
+                    if(ldadd->Rs != 31 && !(state->valid & (1 << ldadd->Rs)))
                     {
                         if(warnUnknown) WRN("Cannot store invalid value to host mem at " ADDR, addr);
                         else            DBG("Cannot store invalid value to host mem at " ADDR, addr);
@@ -837,7 +926,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             }
             else
             {
-                return kEmuErr;
+                ERR("Bug in a64_emulate (case ldr_fp_uoff) at " ADDR, addr);
+                exit(-1);
             }
             if(!(state->valid & (1 << Rn))) // Unset validity
             {
@@ -850,6 +940,14 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, 1 << size) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
+                    if(idx)
+                    {
+                        WRN("Load address outside of host mem at " ADDR, addr);
+                    }
+                    else
+                    {
+                        WRN("Load address outside of all segments at " ADDR, addr);
+                    }
                     return kEmuErr;
                 }
                 switch(size)
@@ -895,7 +993,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             }
             else
             {
-                return kEmuErr;
+                ERR("Bug in a64_emulate (case str_fp_uoff) at " ADDR, addr);
+                exit(-1);
             }
             uint8_t idx;
             if((state->valid & (1 << Rn)) && (idx = HOST_GET(state, Rn)))
@@ -962,6 +1061,14 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, 8 << ldp->opc) ? (void*)laddr : NULL) : addr2ptr(kernel, laddr);
                 if(!ldr_addr)
                 {
+                    if(idx)
+                    {
+                        WRN("Load address outside of host mem at " ADDR, addr);
+                    }
+                    else
+                    {
+                        WRN("Load address outside of all segments at " ADDR, addr);
+                    }
                     return kEmuErr;
                 }
                 switch(ldp->opc)
@@ -1067,7 +1174,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         }
         else if(is_bl(ptr))
         {
-            if(fn_behaviour == kEmuFnEnter)
+            if(fn_behaviour & kEmuFnEnter)
             {
                 state->x[30] = addr + 4;
                 state->valid |=   1 << 30;
@@ -1079,7 +1186,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             else
             {
                 state->valid &= ~0x4003fffe;
-                if(fn_behaviour != kEmuFnAssumeX0 || !((state->valid & 0x1) && HOST_GET(state, 0)))
+                if(!(fn_behaviour & kEmuFnAssumeX0) || !((state->valid & 0x1) && HOST_GET(state, 0)))
                 {
                     state->valid &= ~0x1;
                 }
@@ -1089,29 +1196,38 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         else if(is_movz(ptr))
         {
             movz_t *movz = ptr;
-            state->x[movz->Rd] = get_movzk_imm(movz);
-            state->valid |= 1 << movz->Rd;
-            state->wide = (state->wide & ~(1 << movz->Rd)) | (movz->sf << movz->Rd);
-            HOST_SET(state, movz->Rd, 0);
+            if(movz->Rd != 31)
+            {
+                state->x[movz->Rd] = get_movzk_imm(movz);
+                state->valid |= 1 << movz->Rd;
+                state->wide = (state->wide & ~(1 << movz->Rd)) | (movz->sf << movz->Rd);
+                HOST_SET(state, movz->Rd, 0);
+            }
         }
         else if(is_movk(ptr))
         {
             movk_t *movk = ptr;
-            if(state->valid & (1 << movk->Rd)) // Only if valid
+            if(movk->Rd != 31)
             {
-                state->x[movk->Rd] = (state->x[movk->Rd] & ~(0xffff << (movk->hw << 4))) | get_movzk_imm(movk);
-                state->valid |= 1 << movk->Rd;
-                state->wide = (state->wide & ~(1 << movk->Rd)) | (movk->sf << movk->Rd);
-                HOST_SET(state, movk->Rd, 0);
+                if(state->valid & (1 << movk->Rd)) // Only if valid
+                {
+                    state->x[movk->Rd] = (state->x[movk->Rd] & ~(0xffff << (movk->hw << 4))) | get_movzk_imm(movk);
+                    state->valid |= 1 << movk->Rd;
+                    state->wide = (state->wide & ~(1 << movk->Rd)) | (movk->sf << movk->Rd);
+                    HOST_SET(state, movk->Rd, 0);
+                }
             }
         }
         else if(is_movn(ptr))
         {
             movn_t *movn = ptr;
-            state->x[movn->Rd] = get_movn_imm(movn);
-            state->valid |= 1 << movn->Rd;
-            state->wide = (state->wide & ~(1 << movn->Rd)) | (movn->sf << movn->Rd);
-            HOST_SET(state, movn->Rd, 0);
+            if(movn->Rd != 31)
+            {
+                state->x[movn->Rd] = get_movn_imm(movn);
+                state->valid |= 1 << movn->Rd;
+                state->wide = (state->wide & ~(1 << movn->Rd)) | (movn->sf << movn->Rd);
+                HOST_SET(state, movn->Rd, 0);
+            }
         }
         else if(is_movi(ptr))
         {
@@ -1141,7 +1257,8 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 }
                 else
                 {
-                    return kEmuErr;
+                    ERR("Bug in a64_emulate (case and/orr/eor) at " ADDR, addr);
+                    exit(-1);
                 }
                 state->x[orr->Rd] = Rd;
                 state->valid |= 1 << orr->Rd;
@@ -1156,72 +1273,163 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         else if(is_and_reg(ptr) || is_orr_reg(ptr) || is_eor_reg(ptr))
         {
             orr_reg_t *orr = ptr;
-            if((orr->Rn == 31 || (state->valid & (1 << orr->Rn))) && (orr->Rm == 31 || (state->valid & (1 << orr->Rm))))
+            if(orr->Rd != 31)
             {
-                uint64_t Rn = (orr->Rn == 31 ? 0 : state->x[orr->Rn]),
-                         Rm = (orr->Rm == 31 ? 0 : state->x[orr->Rm]);
-                switch(orr->shift)
+                if((orr->Rn == 31 || (state->valid & (1 << orr->Rn))) && (orr->Rm == 31 || (state->valid & (1 << orr->Rm))))
                 {
-                    case 0b00: Rm =          Rm << orr->imm; break; // LSL
-                    case 0b01: Rm =          Rm >> orr->imm; break; // LSR
-                    case 0b10: Rm = (int64_t)Rm >> orr->imm; break; // ASR
-                    default:
-                        WRN("Bad and/orr/eor shift at " ADDR, addr);
-                        return kEmuErr;
-                }
-                uint64_t Rd;
-                if(is_and_reg(orr))
-                {
-                    Rd = Rn & Rm;
-                }
-                else if(is_orr_reg(orr))
-                {
-                    Rd = Rn | Rm;
-                }
-                else if(is_eor_reg(orr))
-                {
-                    Rd = Rn ^ Rm;
-                }
-                else
-                {
-                    return kEmuErr;
-                }
-                state->x[orr->Rd] = Rd;
-                state->valid |= 1 << orr->Rd;
-                // Because mov is an alias of orr
-                if(orr->sf)
-                {
-                    if(orr->Rn == 31 && orr->imm == 0)
+                    uint64_t Rn = (orr->Rn == 31 ? 0 : state->x[orr->Rn]),
+                             Rm = (orr->Rm == 31 ? 0 : state->x[orr->Rm]);
+                    switch(orr->shift)
                     {
-                        state->wide = (state->wide & ~(1 << orr->Rd)) | (((state->wide >> orr->Rm) & 0x1) << orr->Rd);
-                        HOST_SET(state, orr->Rd, HOST_GET(state, orr->Rm));
+                        case 0b00: Rm =          Rm << orr->imm; break; // LSL
+                        case 0b01: Rm =          Rm >> orr->imm; break; // LSR
+                        case 0b10: Rm = (int64_t)Rm >> orr->imm; break; // ASR
+                        default:
+                            WRN("Bad and/orr/eor shift at " ADDR, addr);
+                            return kEmuErr;
                     }
-                    else if(orr->Rm == 31)
+                    uint64_t Rd;
+                    if(is_and_reg(orr))
                     {
-                        state->wide = (state->wide & ~(1 << orr->Rd)) | (((state->wide >> orr->Rn) & 0x1) << orr->Rd);
-                        HOST_SET(state, orr->Rd, HOST_GET(state, orr->Rn));
+                        Rd = Rn & Rm;
+                    }
+                    else if(is_orr_reg(orr))
+                    {
+                        Rd = Rn | Rm;
+                    }
+                    else if(is_eor_reg(orr))
+                    {
+                        Rd = Rn ^ Rm;
                     }
                     else
                     {
-                        state->wide |= 1 << orr->Rd;
+                        ERR("Bug in a64_emulate (case and_reg/orr_reg/eor_reg) at " ADDR, addr);
+                        exit(-1);
+                    }
+                    state->x[orr->Rd] = Rd;
+                    state->valid |= 1 << orr->Rd;
+                    // Because mov is an alias of orr
+                    if(orr->sf)
+                    {
+                        if(orr->Rn == 31 && orr->imm == 0)
+                        {
+                            state->wide = (state->wide & ~(1 << orr->Rd)) | (((state->wide >> orr->Rm) & 0x1) << orr->Rd);
+                            HOST_SET(state, orr->Rd, HOST_GET(state, orr->Rm));
+                        }
+                        else if(orr->Rm == 31)
+                        {
+                            state->wide = (state->wide & ~(1 << orr->Rd)) | (((state->wide >> orr->Rn) & 0x1) << orr->Rd);
+                            HOST_SET(state, orr->Rd, HOST_GET(state, orr->Rn));
+                        }
+                        else
+                        {
+                            state->wide |= 1 << orr->Rd;
+                            HOST_SET(state, orr->Rd, 0);
+                        }
+                    }
+                    else
+                    {
+                        state->wide &= ~(1 << orr->Rd);
                         HOST_SET(state, orr->Rd, 0);
                     }
                 }
                 else
                 {
-                    state->wide &= ~(1 << orr->Rd);
-                    HOST_SET(state, orr->Rd, 0);
+                    state->valid &= ~(1 << orr->Rd);
                 }
             }
-            else
+        }
+        else if(is_br(ptr))
+        {
+            br_t *br = ptr;
+            if(br->Rn == 31 || !(state->valid & (1 << br->Rn)) || !(state->wide & (1 << br->Rn)))
             {
-                state->valid &= ~(1 << orr->Rd);
+                if(warnUnknown) WRN("Cannot branch to invalid value at " ADDR, addr);
+                else            DBG("Cannot branch to invalid value at " ADDR, addr);
+                return kEmuUnknown;
             }
+            if(HOST_GET(state, br->Rn))
+            {
+                WRN("Cannot branch to host address at " ADDR, addr);
+                return kEmuErr;
+            }
+            from = addr2ptr(kernel, state->x[br->Rn]);
+            if(!from)
+            {
+                WRN("Branch address outside of all segments at " ADDR, addr);
+                return kEmuErr;
+            }
+            --from;
         }
         else if(is_b(ptr))
         {
             from = (uint32_t*)((uintptr_t)from + get_bl_off(ptr));
             --from;
+        }
+        else if(is_b_cond(ptr))
+        {
+            b_cond_t *b = ptr;
+            if(!state->nzcv_valid)
+            {
+                if(warnUnknown) WRN("Cannot do conditional branch with invalid flags at " ADDR, addr);
+                else            DBG("Cannot do conditional branch with invalid flags at " ADDR, addr);
+                return kEmuUnknown;
+            }
+            bool match;
+            switch(b->cond)
+            {
+                case 0x0: // eq
+                    match = state->z == 1;
+                    break;
+                case 0x1: // ne
+                    match = state->z == 0;
+                    break;
+                case 0x2: // hs
+                    match = state->c == 1;
+                    break;
+                case 0x3: // lo
+                    match = state->c == 0;
+                    break;
+                case 0x4: // mi
+                    match = state->n == 1;
+                    break;
+                case 0x5: // pl
+                    match = state->n == 0;
+                    break;
+                case 0x6: // vs
+                    match = state->v == 1;
+                    break;
+                case 0x7: // vc
+                    match = state->v == 0;
+                    break;
+                case 0x8: // hi
+                    match = state->c == 1 && state->z == 0;
+                    break;
+                case 0x9: // ls
+                    match = !(state->c == 1 && state->z == 0);
+                    break;
+                case 0xa: // ge
+                    match = state->n == state->v;
+                    break;
+                case 0xb: // lt
+                    match = state->n != state->v;
+                    break;
+                case 0xc: // gt
+                    match = state->z == 0 && state->n == state->v;
+                    break;
+                case 0xd: // le
+                    match = !(state->z == 0 && state->n == state->v);
+                    break;
+                case 0xe: // al
+                case 0xf: // nv
+                    match = true;
+                    break;
+            }
+            if(match)
+            {
+                from = (uint32_t*)((uintptr_t)from + get_b_cond_off(b));
+                --from;
+            }
         }
         else if(is_cbz(ptr) || is_cbnz(ptr))
         {
@@ -1242,13 +1450,13 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         {
             tbz_t *tbz = ptr;
             uint32_t bit = get_tbz_bit(tbz);
-            if(!(state->valid & (1 << tbz->Rt)) || (bit >= 32 && !(state->wide & (1 << tbz->Rt))))
+            if(tbz->Rt != 31 && (!(state->valid & (1 << tbz->Rt)) || (bit >= 32 && !(state->wide & (1 << tbz->Rt)))))
             {
                 if(warnUnknown) WRN("Cannot decide tbz/tbnz at " ADDR, addr);
                 else            DBG("Cannot decide tbz/tbnz at " ADDR, addr);
                 return kEmuUnknown;
             }
-            if(((state->x[tbz->Rt] & (1 << bit)) == 0) == is_tbz(tbz))
+            if((((tbz->Rt == 31 ? 0 : state->x[tbz->Rt]) & (1 << bit)) == 0) == is_tbz(tbz))
             {
                 from = (uint32_t*)((uintptr_t)from + get_tbz_off(tbz));
                 --from;
@@ -1256,7 +1464,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         }
         else if(is_ret(ptr))
         {
-            if(fn_behaviour == kEmuFnEnter)
+            if(fn_behaviour & kEmuFnEnter)
             {
                 if(!(state->valid & (1 << 30)) || !(state->wide & (1 << 30)))
                 {
@@ -1273,6 +1481,11 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 if(state->x[30] != 0)
                 {
                     from = addr2ptr(kernel, state->x[30]);
+                    if(!from)
+                    {
+                        WRN("Return address outside of all segments at " ADDR, addr);
+                        return kEmuErr;
+                    }
                     --from;
                     continue;
                 }
@@ -1329,6 +1542,7 @@ bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint
     }
     state->q[31]  = 0;
     state->x[31]  = (uintptr_t)sp + A64_EMU_SPSIZE;
+    state->flags  = 0;
     state->valid  = 0xfff80000;
     state->qvalid = 0x0000ff00;
     state->wide   = 0xfff80000;
