@@ -465,7 +465,7 @@ And that's about it. Every now and then you'll come across methods whose names a
         <td>D221AP</td>
     </tr>
     <tr>
-        <td rowspan="10" align="center">A12</td>
+        <td rowspan="11" align="center">A12</td>
         <td>iPhone XS</td>
         <td>iPhone11,2</td>
         <td>D321AP</td>
@@ -513,6 +513,12 @@ And that's about it. Every now and then you'll come across methods whose names a
     <tr>
         <td>iPad11,2</td>
         <td>J211AP</td>
+    </tr>
+    <tr>
+        <td>Apple TV 4K 2</td>
+        <td>AppleTV11,1</td>
+        <td>J305AP</td>
+        <td align="center">tvOS 14.5</td>
     </tr>
     <tr>
         <td rowspan="14" align="center">A12X</td>
@@ -612,6 +618,67 @@ And that's about it. Every now and then you'll come across methods whose names a
     <tr>
         <td>iPad13,2</td>
         <td>J308AP</td>
+    </tr>
+    <tr>
+        <td rowspan="13" align="center">M1</td>
+        <td rowspan="4">iPad Pro 5 (11.0")</td>
+        <td>iPad13,4</td>
+        <td>J517AP</td>
+        <td rowspan="8" align="center">iOS 14.5</td>
+    </tr>
+    <tr>
+        <td>iPad13,5</td>
+        <td>J517xAP</td>
+    </tr>
+    <tr>
+        <td>iPad13,6</td>
+        <td>J518AP</td>
+    </tr>
+    <tr>
+        <td>iPad13,7</td>
+        <td>J518xAP</td>
+    </tr>
+    <tr>
+        <td rowspan="4">iPad Pro 5 (12.9")</td>
+        <td>iPad13,8</td>
+        <td>J522AP</td>
+    </tr>
+    <tr>
+        <td>iPad13,9</td>
+        <td>J522xAP</td>
+    </tr>
+    <tr>
+        <td>iPad13,10</td>
+        <td>J523AP</td>
+    </tr>
+    <tr>
+        <td>iPad13,11</td>
+        <td>J523xAP</td>
+    </tr>
+    <tr>
+        <td>Mac mini 2020</td>
+        <td>Macmini9,1</td>
+        <td>J274AP</td>
+        <td rowspan="5" align="center">N/A</td>
+    </tr>
+    <tr>
+        <td>MacBook Air 2020</td>
+        <td>MacBookAir10,1</td>
+        <td>J313AP</td>
+    </tr>
+    <tr>
+        <td>MacBook Pro 2020</td>
+        <td>MacBookPro17,1</td>
+        <td>J293AP</td>
+    </tr>
+    <tr>
+        <td rowspan="2">iMac 2021 (24")</td>
+        <td>iMac21,1</td>
+        <td>J456AP</td>
+    </tr>
+    <tr>
+        <td>iMac21,2</td>
+        <td>J457AP</td>
     </tr>
     <tr>
         <td colspan="5"></td>
