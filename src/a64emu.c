@@ -24,6 +24,8 @@ bool is_linear_inst(void *ptr)
            is_adrp(ptr) ||
            is_add_imm(ptr) ||
            is_sub_imm(ptr) ||
+           is_adds_imm(ptr) ||
+           is_subs_imm(ptr) ||
            is_add_reg(ptr) ||
            is_sub_reg(ptr) ||
            is_adds_reg(ptr) ||
@@ -197,6 +199,18 @@ static inline void host_idx_set(a64_state_t *state, uint8_t idx, uint64_t addr, 
         if(size != 8) val = 0;
         state->hostmem[idx].bitstring[off / 4] = (state->hostmem[idx].bitstring[off / 4] & ~(3 << ((off & 0x3) << 1))) | (val << ((off & 0x3) << 1));
     }
+}
+
+static inline void update_nzcv(a64_state_t *state, uint64_t Rd, uint64_t Rn, uint64_t Rm, bool wide)
+{
+    uint32_t topN = (Rn >> (wide ? 63 : 31)) & 0x1;
+    uint32_t topM = (Rm >> (wide ? 63 : 31)) & 0x1;
+    uint32_t topD = (Rd >> (wide ? 63 : 31)) & 0x1;
+    state->n = topD;
+    state->z = Rd == 0;
+    state->c = Rd < (wide ? Rn : (Rn & 0xffffffffULL));
+    state->v = (topN^topM^1) & (topN^topD);
+    state->nzcv_valid = 1;
 }
 
 #define HOST_IN_RANGE(state, idx, addr, size) ((uint64_t)(addr) >= (state)->hostmem[(idx)].min && (uint64_t)(addr) <= (state)->hostmem[(idx)].max - (size))
@@ -446,23 +460,49 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 HOST_SET(state, adr->Rd, 0);
             }
         }
-        else if(is_add_imm(ptr) || is_sub_imm(ptr))
+        else if(is_add_imm(ptr) || is_sub_imm(ptr) || is_adds_imm(ptr) || is_subs_imm(ptr))
         {
+            // Immediate can always use sp as source, but only target it in the non-nzcv variant
+            bool want_nzcv = is_adds_imm(ptr) || is_subs_imm(ptr);
             add_imm_t *add = ptr;
             if(!(state->valid & (1 << add->Rn))) // Unset validity
             {
-                state->valid &= ~(1 << add->Rd);
+                if(!want_nzcv || add->Rd != 31)
+                {
+                    state->valid &= ~(1 << add->Rd);
+                }
+                if(want_nzcv)
+                {
+                    state->nzcv_valid = 0;
+                }
             }
             else
             {
-                state->x[add->Rd] = state->x[add->Rn] + (is_add_imm(add) ? 1LL : -1LL) * get_add_sub_imm(add);
-                state->valid |= 1 << add->Rd;
-                state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
-                HOST_SET(state, add->Rd, HOST_GET(state, add->Rn));
+                uint64_t Rm = get_add_sub_imm(add);
+                uint64_t Rn = state->x[add->Rn];
+                if(is_sub_imm(ptr) || is_subs_imm(ptr))
+                {
+                    Rm = -Rm;
+                }
+                uint64_t Rd = Rn + Rm;
+                Rd = add->sf ? Rd : (Rd & 0xffffffffULL);
+                if(want_nzcv)
+                {
+                    update_nzcv(state, Rd, Rn, Rm, !!add->sf);
+                }
+                if(!want_nzcv || add->Rd != 31)
+                {
+                    state->x[add->Rd] = Rd;
+                    state->valid |= 1 << add->Rd;
+                    state->wide = (state->wide & ~(1 << add->Rd)) | (add->sf << add->Rd);
+                    HOST_SET(state, add->Rd, HOST_GET(state, add->Rn));
+                }
             }
         }
         else if(is_add_reg(ptr) || is_sub_reg(ptr) || is_adds_reg(ptr) || is_subs_reg(ptr))
         {
+            // Shifted reg never uses sp as source or target
+            bool want_nzcv = is_adds_reg(ptr) || is_subs_reg(ptr);
             add_reg_t *add = ptr;
             if(!(state->valid & (1 << add->Rn)) || !(state->valid & (1 << add->Rm))) // Unset validity
             {
@@ -470,7 +510,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 {
                     state->valid &= ~(1 << add->Rd);
                 }
-                if(is_adds_reg(ptr) || is_subs_reg(ptr))
+                if(want_nzcv)
                 {
                     state->nzcv_valid = 0;
                 }
@@ -494,16 +534,9 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 }
                 uint64_t Rd = Rn + Rm;
                 Rd = add->sf ? Rd : (Rd & 0xffffffffULL);
-                if(is_adds_reg(ptr) || is_subs_reg(ptr))
+                if(want_nzcv)
                 {
-                    uint32_t topN = (Rn >> (add->sf ? 63 : 31)) & 0x1;
-                    uint32_t topM = (Rm >> (add->sf ? 63 : 31)) & 0x1;
-                    uint32_t topD = (Rd >> (add->sf ? 63 : 31)) & 0x1;
-                    state->n = topD;
-                    state->z = Rd == 0;
-                    state->c = Rd < (add->sf ? Rn : (Rn & 0xffffffffULL));
-                    state->v = (topN^topM^1) & (topN^topD);
-                    state->nzcv_valid = 1;
+                    update_nzcv(state, Rd, Rn, Rm, !!add->sf);
                 }
                 if(add->Rd != 31)
                 {

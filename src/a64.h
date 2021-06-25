@@ -30,8 +30,8 @@ typedef struct
     uint32_t Rd     :  5,
              Rn     :  5,
              imm    : 12,
-             shift  :  2,
-             op     :  7,
+             shift  :  1,
+             op     :  8,
              sf     :  1;
 } add_imm_t, sub_imm_t;
 
@@ -342,17 +342,27 @@ static inline int64_t get_adr_off(adr_t *adr)
 
 static inline bool is_add_imm(add_imm_t *add)
 {
-    return add->op == 0x11 && !(add->shift & 2);
+    return add->op == 0b00100010;
 }
 
 static inline bool is_sub_imm(sub_imm_t *sub)
 {
-    return sub->op == 0x51 && !(sub->shift & 2);
+    return sub->op == 0b10100010;
+}
+
+static inline bool is_adds_imm(add_imm_t *add)
+{
+    return add->op == 0b01100010;
+}
+
+static inline bool is_subs_imm(sub_imm_t *sub)
+{
+    return sub->op == 0b11100010;
 }
 
 static inline uint32_t get_add_sub_imm(add_imm_t *add)
 {
-    return add->imm << ((add->shift & 1) ? 12 : 0);
+    return add->imm << (add->shift ? 12 : 0);
 }
 
 static inline bool is_add_reg(add_reg_t *add)
