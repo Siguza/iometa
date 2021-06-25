@@ -1556,6 +1556,7 @@ int main(int argc, const char **argv)
                             uintptr_t start = (uintptr_t)kernel + seg->fileoff;
                             STEP_MEM(uint32_t, mem, start, seg->filesize, 6)
                             {
+#if 0
                                 adr_t      *adr1 = (adr_t*     )(mem + 0);
                                 add_imm_t  *add1 = (add_imm_t* )(mem + 1);
                                 str_imm_t  *stri = (str_imm_t* )(mem + 2);
@@ -1580,6 +1581,16 @@ int main(int argc, const char **argv)
                                         (is_adrp(adr1) && is_add_imm(add1) && adr1->Rd == add1->Rn && add1->Rd == stru->Rt)
                                     )
                                 )
+#endif
+                                adr_t      *adr1 = (adr_t*     )(mem + 0);
+                                add_imm_t  *add1 = (add_imm_t* )(mem + 1);
+                                adr_t      *adr2 = (adr_t*     )(mem + 3);
+                                add_imm_t  *add2 = (add_imm_t* )(mem + 4);
+                                if
+                                (
+                                    (is_adr(adr1)  && is_nop((uint32_t*)add1)) ||
+                                    (is_adrp(adr1) && is_add_imm(add1) && adr1->Rd == add1->Rn)
+                                )
                                 {
                                     kptr_t refloc = off2addr(kernel, (uintptr_t)adr1 - (uintptr_t)kernel),
                                            ref1   = refloc,
@@ -1601,6 +1612,23 @@ int main(int argc, const char **argv)
                                     continue;
 
                                     ref_matches:;
+                                    for(size_t i = 0; i < 5; ++i)
+                                    {
+                                        if
+                                        (
+                                            (is_adr(adr2)  && is_nop((uint32_t*)add2) && adr2->Rd == 0) ||
+                                            (is_adrp(adr2) && is_add_imm(add2)        && adr2->Rd == add2->Rn && add2->Rd == 0)
+                                        )
+                                        {
+                                            goto x0_matches;
+                                        }
+                                        ++adr2;
+                                        ++add2;
+                                    }
+                                    DBG("__cxa_pure_virtual: failed to find adr(p) x0");
+                                    continue;
+
+                                    x0_matches:;
                                     if(is_adrp(adr2))
                                     {
                                         ref2 &= ~0xfff;
@@ -1608,21 +1636,27 @@ int main(int argc, const char **argv)
                                     }
                                     ref2 += get_adr_off(adr2);
                                     const char *x0 = addr2ptr(kernel, ref2);
-                                    if(strcmp(x0, "\"%s\"") != 0)
+                                    if(strcmp(x0, "\"%s\"") != 0 && strcmp(x0, "%s @%s:%d"))
                                     {
-                                        DBG("__cxa_pure_virtual: x0 != \"%%s\"");
+                                        DBG("__cxa_pure_virtual: x0 != \"%%s\" && x0 != %%s @%%s:%%d");
                                         continue;
                                     }
 
-                                    uint32_t *loc = mem;
-                                    add_imm_t *add = (add_imm_t*)(loc - 1);
-                                    if(!(is_add_imm(add) && add->Rd == 29 && add->Rn == 31)) // ignore add amount
+                                    add_imm_t *add = (add_imm_t*)(mem - 1);
+                                    for(size_t i = 0; i < 5; ++i)
                                     {
-                                        DBG("__cxa_pure_virtual: add x29, sp, ...");
-                                        continue;
+                                        if(is_add_imm(add) && add->Rd == 29 && add->Rn == 31) // ignore add amount
+                                        {
+                                            goto x29_matches;
+                                        }
+                                        --add;
                                     }
-                                    loc--;
-                                    refloc -= sizeof(uint32_t);
+                                    DBG("__cxa_pure_virtual: add x29, sp, ...");
+                                    continue;
+
+                                    x29_matches:;
+                                    uint32_t *loc = (uint32_t*)add;
+                                    refloc -= (mem - loc) * sizeof(uint32_t);
 
                                     stp_t *stp = (stp_t*)(loc - 1);
                                     if(!((is_stp_uoff(stp) || is_stp_pre(stp)) && stp->Rt == 29 && stp->Rt2 == 30 && stp->Rn == 31))
