@@ -320,6 +320,14 @@ typedef struct
              op1    : 11;
 } pacga_t;
 
+typedef struct
+{
+    uint32_t Rm  :  5,
+             Rn  :  5,
+             key :  1,
+             op  : 21;
+} bra_t;
+
 typedef uint32_t nop_t;
 typedef uint32_t ret_t;
 #pragma pack()
@@ -778,6 +786,11 @@ static inline bool is_aut(pac_t *pac)
 static inline bool is_autsys(pacsys_t *pacsys)
 {
     return pacsys->op1 == 0x3540c8 && pacsys->op2 == 0x3 && pacsys->op3 == 0x1f && (pacsys->x == 0 || pacsys->C == 1);
+}
+
+static inline bool is_bra(bra_t *bra)
+{
+    return bra->op == 0b110101110001111100001;
 }
 
 static inline bool is_nop(nop_t *nop)

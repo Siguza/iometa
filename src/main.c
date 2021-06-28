@@ -121,6 +121,36 @@ static int compare_addrs(const void *a, const void *b)
     return adda < addb ? -1 : 1;
 }
 
+static bool get_import_target(adr_t *adrp, kptr_t alias, bool space_for_4, kptr_t *addr)
+{
+    ldr_imm_uoff_t *ldr1 = (ldr_imm_uoff_t*)(adrp + 1);
+    br_t *br = (br_t*)(adrp + 2);
+    add_imm_t *add = (add_imm_t*)(adrp + 1);
+    ldr_imm_uoff_t *ldr2 = (ldr_imm_uoff_t*)(adrp + 2);
+    bra_t *bra = (bra_t*)(adrp + 3);
+    if
+    (
+        is_ldr_imm_uoff(ldr1) && ldr1->sf == 1 && is_br(br) &&  // Types
+        adrp->Rd == ldr1->Rn && ldr1->Rt == br->Rn              // Registers
+    )
+    {
+        *addr = (alias & ~0xfffULL) + get_adr_off(adrp) + get_ldr_imm_uoff(ldr1);
+        return true;
+    }
+    else if
+    (
+        space_for_4 &&
+        is_add_imm(add) && add->sf == 1 && is_ldr_imm_uoff(ldr2) && ldr2->sf == 1 && is_bra(bra) && // Types
+        adrp->Rd == add->Rn && add->Rd == ldr2->Rn && ldr2->Rt == bra->Rn && ldr2->Rn == bra->Rm && // Registers
+        get_ldr_imm_uoff(ldr2) == 0
+    )
+    {
+        *addr = (alias & ~0xfffULL) + get_adr_off(adrp) + get_add_sub_imm(add);
+        return true;
+    }
+    return false;
+}
+
 static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fixupKind, bool have_plk_text_exec, sym_t *exreloc, size_t nexreloc, const char *sym)
 {
     kptr_t relocAddr = find_sym_by_name(sym, exreloc, nexreloc);
@@ -137,18 +167,15 @@ static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fi
                     STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                     {
                         adr_t *adrp = (adr_t*)mem;
-                        ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
-                        br_t *br = (br_t*)(mem + 2);
-                        if
-                        (
-                            is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
-                            adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
-                        )
+                        if(is_adrp(adrp))
                         {
-                            kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
-                            kptr_t addr = alias & ~0xfff;
-                            addr += get_adr_off(adrp);
-                            addr += get_ldr_imm_uoff(ldr);
+                            kptr_t inset = ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
+                            kptr_t alias = seg->vmaddr + inset;
+                            kptr_t addr;
+                            if(!get_import_target(adrp, alias, seg->filesize - inset >= 4 * sizeof(uint32_t), &addr))
+                            {
+                                continue;
+                            }
                             if(addr == relocAddr)
                             {
                                 return alias;
@@ -334,18 +361,15 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
                     STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                     {
                         adr_t *adrp = (adr_t*)mem;
-                        ldr_imm_uoff_t *ldr = (ldr_imm_uoff_t*)(mem + 1);
-                        br_t *br = (br_t*)(mem + 2);
-                        if
-                        (
-                            is_adrp(adrp) && is_ldr_imm_uoff(ldr) && ldr->sf == 1 && is_br(br) &&   // Types
-                            adrp->Rd == ldr->Rn && ldr->Rt == br->Rn                                // Registers
-                        )
+                        if(is_adrp(adrp))
                         {
-                            kptr_t alias = seg->vmaddr + ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
-                            kptr_t addr = alias & ~0xfff;
-                            addr += get_adr_off(adrp);
-                            addr += get_ldr_imm_uoff(ldr);
+                            kptr_t inset = ((uintptr_t)adrp - ((uintptr_t)kernel + seg->fileoff));
+                            kptr_t alias = seg->vmaddr + inset;
+                            kptr_t addr;
+                            if(!get_import_target(adrp, alias, seg->filesize - inset >= 4 * sizeof(uint32_t), &addr))
+                            {
+                                continue;
+                            }
                             for(size_t i = 0; i < refs.idx; ++i)
                             {
                                 if(addr == refs.val[i])
@@ -2333,7 +2357,7 @@ int main(int argc, const char **argv)
                     }
                     // Ok, this is a nasty thing now. We wanna verify that the method's PAC diversifier
                     // matches that of the parent class, if existent. There is only one case where it
-                    // will not match, and literally all of the complexits below is due to that:
+                    // will not match, and literally all of the complexity below is due to that:
                     // If class A has a pure virtual method and B inherits from A but does not override
                     // said method, the compiler will give B's vtable a diversifier as if B had declared
                     // the method, not A. This means that we have to traverse the class hierarchy until

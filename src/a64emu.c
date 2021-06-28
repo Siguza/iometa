@@ -1372,21 +1372,21 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                 }
             }
         }
-        else if(is_br(ptr))
+        else if(is_br(ptr) || is_bra(ptr))
         {
-            br_t *br = ptr;
-            if(br->Rn == 31 || !(state->valid & (1 << br->Rn)) || !(state->wide & (1 << br->Rn)))
+            uint32_t Rn = is_br(ptr) ? ((br_t*)ptr)->Rn : ((bra_t*)ptr)->Rn;
+            if(Rn == 31 || !(state->valid & (1 << Rn)) || !(state->wide & (1 << Rn)))
             {
                 if(warnUnknown) WRN("Cannot branch to invalid value at " ADDR, addr);
                 else            DBG("Cannot branch to invalid value at " ADDR, addr);
                 return kEmuUnknown;
             }
-            if(HOST_GET(state, br->Rn))
+            if(HOST_GET(state, Rn))
             {
                 WRN("Cannot branch to host address at " ADDR, addr);
                 return kEmuErr;
             }
-            from = addr2ptr(kernel, state->x[br->Rn]);
+            from = addr2ptr(kernel, state->x[Rn]);
             if(!from)
             {
                 WRN("Branch address outside of all segments at " ADDR, addr);
