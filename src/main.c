@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020 Siguza
+/* Copyright (c) 2018-2022 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -2466,7 +2466,26 @@ int main(int argc, const char **argv)
                     // so we have absolutely no way of determining where any given method of such classes was declared. :|
                     if(auth && (hdr->cpusubtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E && hdr->filetype != MH_KEXT_BUNDLE && !is_in_exreloc && authoritative && (!pent || !pent->authoritative))
                     {
-                        // First seek down to the first class that has this method
+                        // The PAC diversifier is a hash of the mangled symbol of the method in the first class that declares it. Since the symbol contains
+                        // the class name, we have to traverse the hierarchy here. In theory we'd just seek down to the first class with a large enough vtable
+                        // to contain the current method index, and substitute the class name for the one of that class, and hash the resulting symbol.
+                        // But with abstract classes involved, if we don't get a match there, then we have to keep going as long as the parent classes
+                        // have no vtable, because any one of them could have been the one to declare the method.
+                        // Further, there are two exceptions:
+                        // - If we get to the bottom of the hierarchy, then we still have to try "OSMetaClassBase" as class name,
+                        //   since that is the true parent class in source, but it isn't captures by the metaclass system.
+                        // - If we're at the current class, then we use the provided class name from symbol/symmap rather than the actual class name.
+
+                        if(cxx_sym)
+                        {
+                            DBG("Checking diversifier of %s::%s (class: %s, sym: %s)", class, method, meta->name, cxx_sym);
+                        }
+                        else
+                        {
+                            DBG("Checking diversifier of %s::%s (class: %s)", class, method, meta->name);
+                        }
+
+                        // If we have no parent method entry, we can skip seeking here
                         metaclass_t *checkClass = meta;
                         if(pent)
                         {
@@ -2483,16 +2502,19 @@ int main(int argc, const char **argv)
                                 checkClass = curClass;
                             }
                         }
-                        DBG("Checking diversifier of %s::%s (sym: %s)", checkClass->name, method, cxx_sym ? cxx_sym : "---");
+                        metaclass_t *p = checkClass;
                         do
                         {
+                            const char *className = p == meta ? class
+                                                  : p != NULL ? p->name
+                                                  : "OSMetaClassBase";
                             char *sym = NULL;
                             if(structor)
                             {
-                                // TODO: Everywhere else, I support both con- and destructors, and don't make any assumptions about indices.
-                                // But both destructors look exactly the same de-mangled, so this is the only indicator I have, for now.
-                                // At least this will spew a warning if things break, I guess.
-                                asprintf(&sym, "__ZN%lu%sD%luEv", strlen(checkClass->name), checkClass->name, 1 - idx);
+                                // TODO: Everywhere else I support both con- and destructors and don't make any assumptions about indices.
+                                //       But both destructors look exactly the same de-mangled, so this is the only indicator I have, at least for now.
+                                //       I guess this will at least spew a warning if things ever break. :|
+                                asprintf(&sym, "__ZN%zu%sD%zuEv", strlen(className), className, 1 - idx);
                                 if(!sym)
                                 {
                                     ERRNO("asprintf(sym)");
@@ -2501,21 +2523,25 @@ int main(int argc, const char **argv)
                             }
                             else
                             {
-                                sym = cxx_mangle(checkClass->name, method);
+                                sym = cxx_mangle(className, method);
                                 if(!sym)
                                 {
-                                    WRN("Failed to mangle %s::%s", checkClass->name, method);
+                                    WRN("Failed to mangle %s::%s", className, method);
                                     break;
                                 }
                             }
+
                             uint16_t div = 0;
                             if(!cxx_compute_pac(sym, &div))
                             {
-                                ERR("Failed to compute PAC diversifier. This means something is broken.");
+                                ERR("Failed to compute PAC diversifier. This means something is very broken.");
                                 return -1;
                             }
                             DBG("Computed PAC 0x%04hx for symbol %s", div, sym);
-                            if(!cxx_sym && !pent)
+
+                            // Optimisation: if we computed the symbol for the current class and don't have one yet,
+                            // we may as well keep it. Otherwise this may be done later, but no need to duplicate work.
+                            if(p == meta && !cxx_sym)
                             {
                                 cxx_sym = sym;
                             }
@@ -2523,52 +2549,18 @@ int main(int argc, const char **argv)
                             {
                                 free(sym);
                             }
-                            // With abstract parents, we might have to use the parent class name.
-                            // This can go on as long as the hierarchy has no vtable.
-                            if(div != pac)
+
+                            if(div == pac)
                             {
-                                // We don't capture OSMetaClassBase, so treat parent == null as that
-                                for(metaclass_t *p = checkClass->parentP; !p || p->vtab == 0 || p->methods[idx].addr == -1; p = p->parentP)
-                                {
-                                    const char *pname = p ? p->name : "OSMetaClassBase";
-                                    if(structor)
-                                    {
-                                        // TODO: See above
-                                        asprintf(&sym, "__ZN%lu%sD%luEv", strlen(pname), pname, 1 - idx);
-                                        if(!sym)
-                                        {
-                                            ERRNO("asprintf(sym)");
-                                            return -1;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        sym = cxx_mangle(pname, method);
-                                        if(!sym)
-                                        {
-                                            ERR("Failed to mangle a method, but mangling with different class succeeded.");
-                                            ERR("Failed method was: %s::%s", pname, method);
-                                            return -1;
-                                        }
-                                    }
-                                    if(!cxx_compute_pac(sym, &div))
-                                    {
-                                        ERR("Failed to compute PAC diversifier. This means something is broken.");
-                                        return -1;
-                                    }
-                                    DBG("Computed PAC 0x%04hx for symbol %s", div, sym);
-                                    free(sym);
-                                    if(!p || div == pac)
-                                    {
-                                        break;
-                                    }
-                                }
-                                if(div != pac)
-                                {
-                                    WRN("PAC verification failed for %s::%s", checkClass->name, method);
-                                }
+                                break;
                             }
-                        } while(0);
+                            if(p && (!(p = p->parentP) || !p->vtab))
+                            {
+                                continue;
+                            }
+                            WRN("PAC verification failed for %s::%s", checkClass == meta ? class : checkClass->name, method);
+                            break;
+                        } while(1);
                     }
 
                     ent->chain = chain;
@@ -2830,7 +2822,7 @@ int main(int argc, const char **argv)
                             class = mname;
                         }
                         // Don't bother with PAC verification here. We expect to mostly override abstract methods,
-                        // and those are precisely the one we'd have to skip anyway, so...
+                        // and those are precisely the ones we'd have to skip anyway, so...
 
                         ent->chain = NULL;
                         ent->mangled = cxx_sym;
