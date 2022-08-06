@@ -338,23 +338,23 @@ flat: basic ptr.opt {
         }
     }
     | void const.opt volatile.opt '*' const.opt volatile.opt ptr.opt {
+        $$ = alloctype(kPtr);
+        if(!$$) YYERROR;
+        $$->val.inner = $1;
         if($2)
         {
             type_t *tmp = alloctype(kConst);
             if(!tmp) YYERROR;
-            tmp->val.inner = $1;
-            $1 = tmp;
+            tmp->val.inner = $$->val.inner;
+            $$->val.inner = tmp;
         }
         if($3)
         {
             type_t *tmp = alloctype(kVolatile);
             if(!tmp) YYERROR;
-            tmp->val.inner = $1;
-            $1 = tmp;
+            tmp->val.inner = $$->val.inner;
+            $$->val.inner = tmp;
         }
-        $$ = alloctype(kPtr);
-        if(!$$) YYERROR;
-        $$->val.inner = $1;
         if($5)
         {
             type_t *tmp = alloctype(kConst);
