@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020 Siguza
+/* Copyright (c) 2018-2022 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -38,6 +38,7 @@ enum
     kVarargs,
     kVoid,
     kName,
+    kNumber,
     kTemplate,
     kFunc,
     kArray,
@@ -67,6 +68,11 @@ typedef struct type
             str_t str;
             struct type *next;
         } name; // kName
+        struct
+        {
+            str_t num;
+            struct type *type;
+        } number; // kNumber
         struct
         {
             struct type *name;
@@ -109,10 +115,11 @@ typedef struct
 %pure-parser
 
 %token NAME_LITERAL
-%token INT_LITERAL
+%token UNTYPED_INT_LITERAL TYPED_INT_LITERAL
 %token CONST VOLATILE
 %token SIGNED UNSIGNED BOOL CHAR SHORT INT LONG FLOAT DOUBLE
-%token VARARGS DELIM CLASS_DELIM VOID BLOCK
+%token TRUE_LITERAL FALSE_LITERAL
+%token VARARGS DELIM VOID BLOCK
 %token ERROR
 
 %lex-param   { state_t *state }
@@ -121,13 +128,19 @@ typedef struct
 %union
 {
     str_t str;
+    struct
+    {
+        str_t str;
+        int kind;
+    } num;
     uint8_t val;
     type_t *type;
 }
 
-%type <str> NAME_LITERAL INT_LITERAL
+%type <str> NAME_LITERAL UNTYPED_INT_LITERAL
+%type <num> TYPED_INT_LITERAL typednumber
 %type <val> const.opt volatile.opt
-%type <type> arglist typelist type complex array qual.opt qual flat ptr.opt ref.opt member.opt basic template.opt data name literal primitive varargs void block
+%type <type> arglist typelist type complex array qual.opt qual flat ptr.opt ref.opt member.opt basic template.opt template_args data name literal number primitive integer varargs void block
 
 %{
 static void yyerror(state_t *state, const char *s);
@@ -140,7 +153,7 @@ static void array_set_base(type_t *t, type_t *base);
 static void complex_set_base(type_t *t, type_t *base);
 %}
 
-%destructor { freetype($$); } arglist typelist type complex array qual.opt qual flat ptr.opt ref.opt member.opt basic template.opt data name literal primitive varargs void block
+%destructor { freetype($$); } arglist typelist type complex array qual.opt qual flat ptr.opt ref.opt member.opt basic template.opt template_args data name literal number primitive integer varargs void block
 
 %%
 
@@ -151,12 +164,12 @@ method: name DELIM NAME_LITERAL '(' arglist ')' const.opt volatile.opt {
           state->cnst = $7;
           state->vltl = $8;
       }
-      | name CLASS_DELIM NAME_LITERAL '(' arglist ')' const.opt volatile.opt {
-          state->class = $1;
-          state->method = $3;
-          state->args = $5;
-          state->cnst = $7;
-          state->vltl = $8;
+      | NAME_LITERAL '(' arglist ')' const.opt volatile.opt {
+          state->class = NULL;
+          state->method = $1;
+          state->args = $3;
+          state->cnst = $5;
+          state->vltl = $6;
       }
       ;
 
@@ -232,9 +245,9 @@ complex: '(' qual ')' array {
        }
        ;
 
-array: '[' ']'                   { $$ = alloctype(kArray); if(!$$) YYERROR; $$->val.arr.inner = NULL; $$->val.arr.size.ptr = NULL; }
-     | '[' INT_LITERAL ']'       { $$ = alloctype(kArray); if(!$$) YYERROR; $$->val.arr.inner = NULL; $$->val.arr.size = $2; }
-     | array '[' INT_LITERAL ']' { $$ = alloctype(kArray); if(!$$) YYERROR; $$->val.arr.inner = NULL; $$->val.arr.size = $3; array_set_base($1, $$); $$ = $1; }
+array: '[' ']'                           { $$ = alloctype(kArray); if(!$$) YYERROR; $$->val.arr.inner = NULL; $$->val.arr.size.ptr = NULL; }
+     | '[' UNTYPED_INT_LITERAL ']'       { $$ = alloctype(kArray); if(!$$) YYERROR; $$->val.arr.inner = NULL; $$->val.arr.size = $2; }
+     | array '[' UNTYPED_INT_LITERAL ']' { $$ = alloctype(kArray); if(!$$) YYERROR; $$->val.arr.inner = NULL; $$->val.arr.size = $3; array_set_base($1, $$); $$ = $1; }
      ;
 
 qual.opt: /* empty */ { $$ = NULL; }
@@ -365,26 +378,18 @@ flat: basic ptr.opt {
     ;
 
 ptr.opt: /* empty */                        { $$ = NULL; }
-       | ptr.opt member.opt '*' const.opt volatile.opt {
-           if($2)
-           {
-               $$ = $2;
-               $$->val.mem.inner = $1;
-           }
-           else
-           {
-               $$ = alloctype(kPtr);
-               if(!$$) YYERROR;
-               $$->val.inner = $1;
-           }
-           if($4)
+       | ptr.opt '*' const.opt volatile.opt {
+           $$ = alloctype(kPtr);
+           if(!$$) YYERROR;
+           $$->val.inner = $1;
+           if($3)
            {
                type_t *tmp = alloctype(kConst);
                if(!tmp) YYERROR;
                tmp->val.inner = $$;
                $$ = tmp;
            }
-           if($5)
+           if($4)
            {
                type_t *tmp = alloctype(kVolatile);
                if(!tmp) YYERROR;
@@ -430,60 +435,84 @@ volatile.opt: /* empty */ { $$ = 0; }
             ;
 
 template.opt: /* empty */           { $$ = NULL; }
-            /*| '<' template_args '>' { $$ = $2; }*/
-            | '<' typelist '>'      { $$ = $2; }
+            | '<' template_args '>' { $$ = $2; }
             ;
 
-/*template_args: type
-             | template_args ',' type
-             | integer
-             | template_args ',' integer
-             ;*/
+template_args: type                     { $$ = $1; }
+             | template_args ',' type   { $$ = $1; list_set_last($$, $3); }
+             | number                   { $$ = $1; }
+             | template_args ',' number { $$ = $1; list_set_last($$, $3); }
+             ;
 
-data: primitive         { $$ = $1; }
-    | name template.opt {
-        if($2)
-        {
-            $$ = alloctype(kTemplate);
-            if(!$$) YYERROR;
-            $$->val.tpl.name = $1;
-            $$->val.tpl.types = $2;
-        }
-        else
-        {
-            $$ = $1;
-        }
-    }
+data: primitive { $$ = $1; }
+    | name      { $$ = $1; }
     ;
 
 name: literal            { $$ = $1; }
-    | name DELIM literal { $$ = $3; $$->val.name.next = $1; }
+    | name DELIM literal { $$ = $3; *($$->kind == kName ? &$$->val.name.next : &$$->val.tpl.name->val.name.next) = $1; }
     ;
 
-literal: NAME_LITERAL {
-            $$ = alloctype(kName);
-            if(!$$) YYERROR;
-            $$->val.name.str = $1;
-            $$->val.name.next = NULL;
+literal: NAME_LITERAL template.opt {
+            if($2)
+            {
+                $$ = alloctype(kTemplate);
+                if(!$$) YYERROR;
+                type_t *tmp = $$->val.tpl.name = alloctype(kName);
+                if(!tmp) YYERROR;
+                tmp->val.name.str = $1;
+                tmp->val.name.next = NULL;
+                $$->val.tpl.types = $2;
+            }
+            else
+            {
+                $$ = alloctype(kName);
+                if(!$$) YYERROR;
+                $$->val.name.str = $1;
+                $$->val.name.next = NULL;
+            }
        }
        ;
 
-primitive: BOOL                 { $$ = alloctype(kBool);    if(!$$) YYERROR; }
-         | CHAR                 { $$ = alloctype(kChar);    if(!$$) YYERROR; }
-         | SIGNED CHAR          { $$ = alloctype(kSChar);   if(!$$) YYERROR; }
-         | UNSIGNED CHAR        { $$ = alloctype(kUChar);   if(!$$) YYERROR; }
-         | SHORT                { $$ = alloctype(kShort);   if(!$$) YYERROR; }
-         | UNSIGNED SHORT       { $$ = alloctype(kUShort);  if(!$$) YYERROR; }
-         | INT                  { $$ = alloctype(kInt);     if(!$$) YYERROR; }
-         | UNSIGNED INT         { $$ = alloctype(kUInt);    if(!$$) YYERROR; }
-         | LONG                 { $$ = alloctype(kLong);    if(!$$) YYERROR; }
-         | UNSIGNED LONG        { $$ = alloctype(kULong);   if(!$$) YYERROR; }
-         | LONG LONG            { $$ = alloctype(kLLong);   if(!$$) YYERROR; }
-         | UNSIGNED LONG LONG   { $$ = alloctype(kULLong);  if(!$$) YYERROR; }
-         | FLOAT                { $$ = alloctype(kFloat);   if(!$$) YYERROR; }
-         | DOUBLE               { $$ = alloctype(kDouble);  if(!$$) YYERROR; }
-         | LONG DOUBLE          { $$ = alloctype(kLDouble); if(!$$) YYERROR; }
+number: '(' integer ')' UNTYPED_INT_LITERAL {
+          $$ = alloctype(kNumber);
+          if(!$$) YYERROR;
+          $$->val.number.type = $2;
+          $$->val.number.num = $4;
+      }
+      | typednumber {
+          $$ = alloctype(kNumber);
+          if(!$$) YYERROR;
+          $$->val.number.type = alloctype($1.kind);
+          if(!$$->val.number.type) YYERROR;
+          $$->val.number.num = $1.str;
+      }
+      ;
+
+typednumber: TYPED_INT_LITERAL   { $$ = $1; }
+           | UNTYPED_INT_LITERAL { $$.str = $1; $$.kind = kInt; }
+           | TRUE_LITERAL        { $$.str = (str_t){ .ptr = (void*)(ptrdiff_t)-1, .len = 1 }; $$.kind = kBool; }
+           | FALSE_LITERAL       { $$.str = (str_t){ .ptr = (void*)(ptrdiff_t)-1, .len = 0 }; $$.kind = kBool; }
+           ;
+
+primitive: integer     { $$ = $1; }
+         | BOOL        { $$ = alloctype(kBool);    if(!$$) YYERROR; }
+         | FLOAT       { $$ = alloctype(kFloat);   if(!$$) YYERROR; }
+         | DOUBLE      { $$ = alloctype(kDouble);  if(!$$) YYERROR; }
+         | LONG DOUBLE { $$ = alloctype(kLDouble); if(!$$) YYERROR; }
          ;
+
+integer: CHAR               { $$ = alloctype(kChar);   if(!$$) YYERROR; }
+       | SIGNED CHAR        { $$ = alloctype(kSChar);  if(!$$) YYERROR; }
+       | UNSIGNED CHAR      { $$ = alloctype(kUChar);  if(!$$) YYERROR; }
+       | SHORT              { $$ = alloctype(kShort);  if(!$$) YYERROR; }
+       | UNSIGNED SHORT     { $$ = alloctype(kUShort); if(!$$) YYERROR; }
+       | INT                { $$ = alloctype(kInt);    if(!$$) YYERROR; }
+       | UNSIGNED INT       { $$ = alloctype(kUInt);   if(!$$) YYERROR; }
+       | LONG               { $$ = alloctype(kLong);   if(!$$) YYERROR; }
+       | UNSIGNED LONG      { $$ = alloctype(kULong);  if(!$$) YYERROR; }
+       | LONG LONG          { $$ = alloctype(kLLong);  if(!$$) YYERROR; }
+       | UNSIGNED LONG LONG { $$ = alloctype(kULLong); if(!$$) YYERROR; }
+       ;
 
 varargs: VARARGS { $$ = alloctype(kVarargs); if(!$$) YYERROR; };
 
@@ -521,6 +550,9 @@ static void freetype(type_t *t)
             break;
         case kName:
             if(t->val.name.next) freetype(t->val.name.next);
+            break;
+        case kNumber:
+            if(t->val.number.type) freetype(t->val.number.type);
             break;
         case kTemplate:
             if(t->val.tpl.name) freetype(t->val.tpl.name);
@@ -636,7 +668,14 @@ static void complex_set_base(type_t *t, type_t *base)
 
 static void yyerror(state_t *state, const char *s)
 {
-    WRN("cxx_mangle: %s at \"%s\"", s, &state->input[state->pos]);
+    if(state->input[state->pos - 1] == '\0')
+    {
+        WRN("cxx_mangle: %s at end of input", s);
+    }
+    else
+    {
+        WRN("cxx_mangle: %s at \"%s\"", s, &state->input[state->pos - 1]);
+    }
 }
 
 static int yylex(YYSTYPE *lvalp, state_t *state)
@@ -655,7 +694,6 @@ static int yylex(YYSTYPE *lvalp, state_t *state)
                 state->input = state->moreinput;
                 state->moreinput = NULL;
                 state->pos = 0;
-                //return CLASS_DELIM;
                 return DELIM;
             }
             return YYEOF;
@@ -684,8 +722,6 @@ static int yylex(YYSTYPE *lvalp, state_t *state)
         {
             return ERROR;
         }
-        // If we supported full C++ declarations, we'd have to allow things like 3ull here.
-        // But these are only used in template literals, which we currently don't support.
         while(1)
         {
             c = state->input[state->pos];
@@ -697,13 +733,56 @@ static int yylex(YYSTYPE *lvalp, state_t *state)
             // Consume
             ++state->pos;
         }
+        int end = state->pos;
+        // Consume "ull" suffixes if present
+        char p = '\0';
+        int kind = -1;
+        while(1)
+        {
+            switch(c)
+            {
+                case 'u':
+                case 'U':
+                    switch(kind)
+                    {
+                        case -1:     kind = kUInt;   break;
+                        case kLong:  kind = kULong;  break;
+                        case kLLong: kind = kULLong; break;
+                        default: return ERROR;
+                    }
+                    break;
+                case 'l':
+                case 'L':
+                    switch(kind)
+                    {
+                        case -1:     kind = kLong;  break;
+                        case kUInt:  kind = kULong; break;
+                        case kLong:  if(p != c) return ERROR; kind = kLLong;  break;
+                        case kULong: if(p != c) return ERROR; kind = kULLong; break;
+                        default: return ERROR;
+                    }
+                    break;
+                default:
+                    goto suffix_done;
+            }
+            p = c;
+            // Don't add this to the literal
+            c = state->input[++state->pos];
+        }
+    suffix_done:;
         // If the first non-digit is alphanumeric, then syntax error
         if(c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
         {
             return ERROR;
         }
-        lvalp->str = (str_t){ .ptr = state->input + pos, .len = state->pos - pos };
-        return INT_LITERAL;
+        if(kind != -1)
+        {
+            lvalp->num.str = (str_t){ .ptr = state->input + pos, .len = end - pos };
+            lvalp->num.kind = kind;
+            return TYPED_INT_LITERAL;
+        }
+        lvalp->str = (str_t){ .ptr = state->input + pos, .len = end - pos };
+        return UNTYPED_INT_LITERAL;
     }
     if(c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
     {
@@ -730,11 +809,13 @@ static int yylex(YYSTYPE *lvalp, state_t *state)
                 if(strncmp(ptr, "char", 4) == 0) return CHAR;
                 if(strncmp(ptr, "long", 4) == 0) return LONG;
                 if(strncmp(ptr, "void", 4) == 0) return VOID;
+                if(strncmp(ptr, "true", 4) == 0) return TRUE_LITERAL;
                 break;
             case 5:
                 if(strncmp(ptr, "const", 5) == 0) return CONST;
                 if(strncmp(ptr, "short", 5) == 0) return SHORT;
                 if(strncmp(ptr, "float", 5) == 0) return FLOAT;
+                if(strncmp(ptr, "false", 5) == 0) return FALSE_LITERAL;
                 break;
             case 6:
                 if(strncmp(ptr, "signed", 6) == 0) return SIGNED;
@@ -774,6 +855,12 @@ bool compare_types(type_t *a, type_t *b)
             if(a->val.name.next == NULL && b->val.name.next == NULL) return true;
             if(a->val.name.next == NULL || b->val.name.next == NULL) return false;
             return compare_types(a->val.name.next, b->val.name.next);
+        case kNumber:
+            if(a->val.number.num.len != b->val.number.num.len) return false;
+            if(a->val.number.num.ptr == b->val.number.num.ptr) return true;
+            if(a->val.number.num.ptr == (void*)(ptrdiff_t)-1 || b->val.number.num.ptr == (void*)(ptrdiff_t)-1) return false;
+            if(strncmp(a->val.number.num.ptr, b->val.number.num.ptr, a->val.number.num.len) != 0) return false;
+            return compare_types(a->val.number.type, b->val.number.type);
         case kArray:
             return a->val.arr.size.len == b->val.arr.size.len
                 && strncmp(a->val.arr.size.ptr, b->val.arr.size.ptr, a->val.arr.size.len) == 0
@@ -905,6 +992,24 @@ do \
                 {
                     P("%u%.*s", t->val.name.str.len, t->val.name.str.len, t->val.name.str.ptr);
                 }
+                break;
+            }
+            case kNumber:
+            {
+                P("L");
+                if(!cxx_mangle_type(buf, sz, i, arr, t->val.number.type))
+                {
+                    return false;
+                }
+                if(t->val.number.num.ptr == (void*)(ptrdiff_t)-1)
+                {
+                    P("%u", t->val.number.num.len);
+                }
+                else
+                {
+                    P("%.*s", t->val.number.num.len, t->val.number.num.ptr);
+                }
+                P("E");
                 break;
             }
             case kTemplate:
