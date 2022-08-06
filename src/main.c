@@ -1362,6 +1362,7 @@ int main(int argc, const char **argv)
             {
                 if(strncmp(bsyms[i].name, "__ZTV", 5) == 0)
                 {
+                    // Despite all appearances, this is actually proper
                     char *str = NULL;
                     asprintf(&str, "__ZNK%s12getMetaClassEv", bsyms[i].name + 5);
                     if(!str)
@@ -2424,9 +2425,16 @@ int main(int argc, const char **argv)
                             }
                             else
                             {
+                                const char *strname = meta->name;
+                                size_t slen = strlen(strname);
+                                if(!cxx_class_basename(&strname, &slen))
+                                {
+                                    ERR("cxx_class_basename() failed. Something is very broken.");
+                                    return -1;
+                                }
                                 mth += clslen;
                                 char *meth = NULL;
-                                asprintf(&meth, "%s%s%s", dest ? "~" : "", meta->name, mth);
+                                asprintf(&meth, "%s%.*s%s", dest ? "~" : "", (int)slen, strname, mth);
                                 if(!meth)
                                 {
                                     ERRNO("asprintf(structor)");
@@ -2511,15 +2519,30 @@ int main(int argc, const char **argv)
                             char *sym = NULL;
                             if(structor)
                             {
+                                char *tmp = cxx_mangle(className, NULL);
+                                if(!tmp)
+                                {
+                                    WRN("Failed to mangle %s", className);
+                                    break;
+                                }
                                 // TODO: Everywhere else I support both con- and destructors and don't make any assumptions about indices.
                                 //       But both destructors look exactly the same de-mangled, so this is the only indicator I have, at least for now.
                                 //       I guess this will at least spew a warning if things ever break. :|
-                                asprintf(&sym, "__ZN%zu%sD%zuEv", strlen(className), className, 1 - idx);
+                                if(tmp[3] == 'N')
+                                {
+                                    tmp[strlen(tmp)-1] = '\0';
+                                    asprintf(&sym, "%sD%zuEv", tmp, 1 - idx);
+                                }
+                                else
+                                {
+                                    asprintf(&sym, "__ZN%sD%zuEv", tmp + 3, 1 - idx);
+                                }
                                 if(!sym)
                                 {
                                     ERRNO("asprintf(sym)");
                                     return -1;
                                 }
+                                free(tmp);
                             }
                             else
                             {
@@ -2784,16 +2807,16 @@ int main(int argc, const char **argv)
                                 }
                                 else
                                 {
-                                    char *strname = mname;
-                                    while(true)
+                                    const char *strname = mname;
+                                    size_t slen = strlen(strname);
+                                    if(!cxx_class_basename(&strname, &slen))
                                     {
-                                        char *m = strstr(strname, "::");
-                                        if(!m) break;
-                                        strname = m + 2;
+                                        ERR("cxx_class_basename() failed. Something is very broken.");
+                                        return -1;
                                     }
                                     mth += clslen;
                                     char *meth = NULL;
-                                    asprintf(&meth, "%s%s%s", dest ? "~" : "", strname, mth);
+                                    asprintf(&meth, "%s%.*s%s", dest ? "~" : "", (int)slen, strname, mth);
                                     if(!meth)
                                     {
                                         ERRNO("asprintf(structor)");
@@ -2851,14 +2874,29 @@ int main(int argc, const char **argv)
                         {
                             if(ent->structor)
                             {
+                                char *tmp = cxx_mangle(ent->class, NULL);
+                                if(!tmp)
+                                {
+                                    ERR("Failed to mangle %s", ent->class);
+                                    return -1;
+                                }
                                 // TODO: See above
                                 char *sym = NULL;
-                                asprintf(&sym, "__ZN%lu%sD%luEv", strlen(ent->class), ent->class, 1 - idx);
+                                if(tmp[3] == 'N')
+                                {
+                                    tmp[strlen(tmp)-1] = '\0';
+                                    asprintf(&sym, "%sD%zuEv", tmp, 1 - idx);
+                                }
+                                else
+                                {
+                                    asprintf(&sym, "__ZN%sD%zuEv", tmp + 3, 1 - idx);
+                                }
                                 if(!sym)
                                 {
                                     ERRNO("asprintf(ent->mangled)");
                                     return -1;
                                 }
+                                free(tmp);
                                 ent->mangled = sym;
                             }
                             else
@@ -2881,37 +2919,30 @@ int main(int argc, const char **argv)
                             {
                                 if(ent->structor)
                                 {
-                                    // TODO: See above
-                                    int i = 0;
-                                    char buf[512];
-                                    buf[0] = '\0';
-#define P(fmt, ...) \
-do \
-{ \
-i += snprintf(buf + i, sizeof(buf) - i, (fmt), ##__VA_ARGS__); \
-if(i >= sizeof(buf)) return -1; \
-} while(0)
-                                    P("__ZN");
-                                    const char *strname = ent->class;
-                                    while(true)
+                                    char *tmp = cxx_mangle(ent->class, NULL);
+                                    if(!tmp)
                                     {
-                                        const char *m = strstr(strname, "::");
-                                        if(!m)
-                                        {
-                                            P("%lu%s", strlen(strname), strname);
-                                            break;
-                                        }
-                                        P("%lu%.*s", m - strname, (int)(m - strname), strname);
-                                        strname = m + 2;
-                                    }
-                                    P("D%luEv", 1 - idx);
-#undef P
-                                    ent->mangled = strdup(buf);
-                                    if(!ent->mangled)
-                                    {
-                                        ERRNO("strdup(ent->mangled)");
+                                        ERR("Failed to mangle %s", ent->class);
                                         return -1;
                                     }
+                                    // TODO: See above
+                                    char *sym = NULL;
+                                    if(tmp[3] == 'N')
+                                    {
+                                        tmp[strlen(tmp)-1] = '\0';
+                                        asprintf(&sym, "%sD%zuEv", tmp, 1 - idx);
+                                    }
+                                    else
+                                    {
+                                        asprintf(&sym, "__ZN%sD%zuEv", tmp + 3, 1 - idx);
+                                    }
+                                    if(!sym)
+                                    {
+                                        ERRNO("asprintf(ent->mangled)");
+                                        return -1;
+                                    }
+                                    free(tmp);
+                                    ent->mangled = sym;
                                 }
                                 else
                                 {
