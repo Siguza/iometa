@@ -171,6 +171,13 @@ method: name DELIM NAME_LITERAL '(' arglist ')' const.opt volatile.opt {
           state->cnst = $5;
           state->vltl = $6;
       }
+      | name {
+          state->class = $1;
+          state->method = (str_t){};
+          state->args = NULL;
+          state->cnst = 0;
+          state->vltl = 0;
+      }
       ;
 
 arglist: /* empty */          { $$ = NULL; }
@@ -1152,11 +1159,12 @@ do \
     if(i >= sizeof(buf)) goto out; \
 } while(0)
 
-    P("__ZN%s%s", state.vltl ? "V" : "",  state.cnst ? "K" : "");
+    bool group = state.class && state.method.len;
+    P("__Z%s%s%s", group ? "N" : "", state.vltl ? "V" : "",  state.cnst ? "K" : "");
     ARRDEF(type_t*, stack, 32);
     int prev = i;
     bool ok = cxx_mangle_type(buf, sizeof(buf), &i, &stack, state.class);
-    if(ok)
+    if(ok && state.method.len)
     {
         if(buf[prev] == 'N')
         {
@@ -1166,7 +1174,7 @@ do \
                 buf[prev] = buf[prev+1];
             }
         }
-        P("%u%.*sE", state.method.len, state.method.len, state.method.ptr);
+        P("%u%.*s%s", state.method.len, state.method.len, state.method.ptr, group ? "E" : "");
         if(!state.args)
         {
             P("v");
