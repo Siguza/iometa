@@ -15,7 +15,7 @@
 #include <stdint.h>
 
 bool cxx_class_basename(const char **ptr, size_t *len);
-bool cxx_consume_name(const char **ptr);
+int cxx_consume_name(const char **ptr, const char *end, bool wantmethod);
 
 bool cxx_compute_pac(const char *sym, uint16_t *pac);
 bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr, bool *structorptr);

@@ -134,15 +134,32 @@ bool cxx_class_basename(const char **ptr, size_t *len)
     return true;
 }
 
-static int cxx_consume_name_segment(const char **ptr)
+// 0 = error
+// 1 = leaf
+// 2 = any
+// 3 = template
+static int cxx_consume_name_segment(const char **ptr, const char *end, bool allowmethod)
 {
     const char *str = *ptr;
+    if(end && str >= end)
+    {
+        return 0;
+    }
     bool structor = false;
     char c = *str;
     if(c == '~')
     {
+        if(!allowmethod)
+        {
+            return 0;
+        }
         structor = true;
-        c = *++str;
+        ++str;
+        if(end && str >= end)
+        {
+            return 0;
+        }
+        c = *str;
     }
     if(!isal(c))
     {
@@ -150,21 +167,31 @@ static int cxx_consume_name_segment(const char **ptr)
     }
     do
     {
-        c = *++str;
+        ++str;
+        if(end && str >= end)
+        {
+            break;
+        }
+        c = *str;
     } while(isan(c));
     if(structor)
     {
         *ptr = str;
         return 1;
     }
-    if(c == '<')
+    int ret = 2;
+    if((!end || str < end) && c == '<')
     {
         ++str;
         size_t depth = 1;
         while(1)
         {
+            if(end && str >= end)
+            {
+                return 0;
+            }
             c = *str++;
-            if(c == '\0' || c == '\n')
+            if(c == '\0' || c == '\n' || c == '#')
             {
                 return 0;
             }
@@ -177,34 +204,44 @@ static int cxx_consume_name_segment(const char **ptr)
                 break;
             }
         }
+        ret = 3;
     }
     *ptr = str;
-    return 2;
+    return ret;
 }
 
-bool cxx_consume_name(const char **ptr)
+// 0 = error
+// 1 = single
+// 2 = multi
+int cxx_consume_name(const char **ptr, const char *end, bool wantmethod)
 {
+    int ret = 1;
     const char *str = *ptr;
     while(1)
     {
-        int r = cxx_consume_name_segment(&str);
+        int r = cxx_consume_name_segment(&str, end, wantmethod);
         if(r == 0)
         {
-            return false;
+            return 0;
         }
         if(r == 1)
         {
             break;
         }
-        if(str[0] == ':' && str[1] == ':')
+        if((!end || end - str > 2) && str[0] == ':' && str[1] == ':')
         {
+            ret = 2;
             str += 2;
             continue;
+        }
+        if(r == 3 && wantmethod)
+        {
+            return 0;
         }
         break;
     }
     *ptr = str;
-    return true;
+    return ret;
 }
 
 __attribute__((unused)) // XXX
@@ -250,8 +287,8 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
     if(!str || r != 0) goto out;
 
     const char *end = str;
-    if(!cxx_consume_name(&end)) goto out;
-    if(end - str < 4 || end[-1] == '>' || end[0] != '(') goto out;
+    if(cxx_consume_name(&end, NULL, true) == 0) goto out;
+    if(end - str < 4 || end[0] != '(') goto out;
     for(end -= 3; end > str; --end)
     {
         if(end[0] == ':' && end[1] == ':')

@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020 Siguza
+/* Copyright (c) 2018-2022 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,6 +13,7 @@
 #include <stdio.h>              // printf
 #include <stdlib.h>             // malloc, free, qsort
 
+#include "cxx.h"
 #include "meta.h"
 #include "symmap.h"
 #include "util.h"
@@ -126,8 +127,7 @@ do \
                 ++mem;
             }
             // Empty lines are permitted as "no name assigned"
-            ch = *mem;
-            if(mem >= end || ch == '\n' || ch == '#')
+            if(mem >= end || (ch = *mem) == '\n' || ch == '#')
             {
                 if(ch == '#')
                 {
@@ -151,34 +151,10 @@ do \
                        *methname  = NULL,
                        *namestart = mem;
             // Seek end of identifier
-            while(mem < end && isan(*mem))
-            {
-                ++mem;
-            }
-            if(mem >= end)
+            int r = cxx_consume_name((const char**)&mem, end, true);
+            if(r == 0 || mem >= end)
             {
                 ERR("Symbol map, line %lu: incomplete method declaration", line);
-                goto bad;
-            }
-            // If we are at "::", this is a class name
-            if(mem < end - 1 && mem[0] == ':' && mem[1] == ':')
-            {
-                *mem = '\0'; // terminate class name
-                mem += 2;
-                classname = namestart;
-                namestart = mem;
-            }
-            if(mem < end && *mem == '~')
-            {
-                ++mem;
-            }
-            while(mem < end && isan(*mem))
-            {
-                ++mem;
-            }
-            if(mem >= end)
-            {
-                ERR("Symbol map, line %lu: incomplete method declaration (identifier)", line);
                 goto bad;
             }
             ch = *mem;
@@ -187,7 +163,31 @@ do \
                 ERR("Symbol map, line %lu: expected '(', got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
                 goto bad;
             }
-            while(mem < end && *mem != '\n' && *mem != '#')
+            if(r == 2) // We have a class name
+            {
+                if(mem - namestart < 4)
+                {
+                    ERR("Symbol map, line %lu: bad identifier", line);
+                    goto bad;
+                }
+                char *start = mem - 3;
+                for(; start > namestart; --start)
+                {
+                    if(start[0] == ':' && start[1] == ':')
+                    {
+                        break;
+                    }
+                }
+                if(start == namestart)
+                {
+                    ERR("Symbol map, line %lu: failed to parse class name", line);
+                    goto bad;
+                }
+                *start = '\0'; // terminate class name
+                classname = namestart;
+                namestart = start + 2;
+            }
+            while(mem < end && (ch = *mem) != '\n' && ch != '#')
             {
                 ++mem;
             }
@@ -237,16 +237,17 @@ do \
             DBG("Got symmap class");
 
             const char *classname = mem;
-            while(mem < end && isan(*mem))
+            if(cxx_consume_name((const char**)&mem, end, false) == 0)
             {
-                ++mem;
+                ERR("Symbol map, line %lu: incomplete class name", line);
+                goto bad;
             }
             char *pos = mem;
-            while(isws(*mem))
+            while(mem < end && isws(*mem))
             {
                 ++mem;
             }
-            if(*mem == '#')
+            if(mem < end && *mem == '#')
             {
                 while(mem < end && *mem != '\n')
                 {
