@@ -2341,17 +2341,17 @@ int main(int argc, const char **argv)
                     if(!ignore_symmap && idx >= pnmeth && meta->symclass)
                     {
                         symmap_method_t *smeth = &meta->symclass->methods[idx - pnmeth];
-                        if(method && smeth->method && !smeth->structor && (strcmp(class, smeth->class) != 0 || strcmp(method, smeth->method) != 0))
+                        if(smeth->method)
                         {
-                            WRN("Overriding %s::%s from symtab with %s::%s from symmap", class, method, smeth->class, smeth->method);
-                            // Clear symbol
-                            cxx_sym = NULL;
-                        }
-                        class = smeth->class;
-                        method = smeth->method;
-                        structor = smeth->structor;
-                        if(method)
-                        {
+                            if(method && !smeth->structor && (strcmp(class, smeth->class) != 0 || strcmp(method, smeth->method) != 0))
+                            {
+                                WRN("Overriding %s::%s from symtab with %s::%s from symmap", class, method, smeth->class, smeth->method);
+                                // Clear symbol
+                                cxx_sym = NULL;
+                            }
+                            class = smeth->class;
+                            method = smeth->method;
+                            structor = smeth->structor;
                             authoritative = true;
                         }
                     }
