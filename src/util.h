@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020 Siguza
+/* Copyright (c) 2018-2022 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -152,9 +152,19 @@ static inline bool isws(char ch)
     return ch == ' ' || ch == '\t' || ch == '\r'; // disregard newline by design
 }
 
+static inline bool isal(char ch)
+{
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+}
+
+static inline bool isdg(char ch)
+{
+    return ch >= '0' && ch <= '9';
+}
+
 static inline bool isan(char ch)
 {
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
+    return isal(ch) || isdg(ch);
 }
 
 int map_file(const char *file, int prot, void **addrp, size_t *lenp);

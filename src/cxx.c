@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020 Siguza
+/* Copyright (c) 2018-2022 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -92,19 +92,136 @@ bool cxx_compute_pac(const char *sym, uint16_t *pac)
     return true;
 }
 
-static int cxx_demangle_num(const char **ptr)
+bool cxx_class_basename(const char **ptr, size_t *len)
+{
+    const char *str = *ptr;
+    size_t end = *len;
+    if(!end)
+    {
+        return false;
+    }
+    if(str[end-1] == '>')
+    {
+        size_t depth = 1;
+        for(--end; end > 0; --end)
+        {
+            char c = str[end-1];
+            if(c == '>')
+            {
+                ++depth;
+            }
+            else if(c == '<' && --depth == 0)
+            {
+                --end;
+                break;
+            }
+        }
+        if(depth != 0)
+        {
+            return false;
+        }
+    }
+    for(size_t i = end; i >= 2; --i)
+    {
+        if(str[i-1] == ':' && str[i-2] == ':')
+        {
+            *ptr = str + i;
+            *len = end - i;
+            return true;
+        }
+    }
+    *len = end;
+    return true;
+}
+
+static int cxx_consume_name_segment(const char **ptr)
+{
+    const char *str = *ptr;
+    bool structor = false;
+    char c = *str;
+    if(c == '~')
+    {
+        structor = true;
+        c = *++str;
+    }
+    if(!isal(c))
+    {
+        return 0;
+    }
+    do
+    {
+        c = *++str;
+    } while(isan(c));
+    if(structor)
+    {
+        *ptr = str;
+        return 1;
+    }
+    if(c == '<')
+    {
+        ++str;
+        size_t depth = 1;
+        while(1)
+        {
+            c = *str++;
+            if(c == '\0' || c == '\n')
+            {
+                return 0;
+            }
+            if(c == '<')
+            {
+                ++depth;
+            }
+            else if(c == '>' && --depth == 0)
+            {
+                break;
+            }
+        }
+    }
+    *ptr = str;
+    return 2;
+}
+
+bool cxx_consume_name(const char **ptr)
+{
+    const char *str = *ptr;
+    while(1)
+    {
+        int r = cxx_consume_name_segment(&str);
+        if(r == 0)
+        {
+            return false;
+        }
+        if(r == 1)
+        {
+            break;
+        }
+        if(str[0] == ':' && str[1] == ':')
+        {
+            str += 2;
+            continue;
+        }
+        break;
+    }
+    *ptr = str;
+    return true;
+}
+
+__attribute__((unused)) // XXX
+static size_t cxx_demangle_num(const char **ptr)
 {
     const char *sym = *ptr;
-    if(!(*sym >= '0' && *sym <= '9'))
+    char c = *sym;
+    if(!isdg(c))
     {
         return -1;
     }
-    int ret = 0;
-    while(*sym >= '0' && *sym <= '9')
+    size_t ret = 0;
+    do
     {
-        ret = (ret * 10) + (*sym - '0');
-        ++sym;
-    }
+        ret = (ret * 10) + (c - '0');
+        c = *++sym;
+    } while(isdg(c));
     *ptr = sym;
     return ret;
 }
@@ -132,23 +249,35 @@ bool cxx_demangle(const char *sym, const char **classptr, const char **methodptr
     str = __cxa_demangle(sym + 1, NULL, NULL, &r);
     if(!str || r != 0) goto out;
 
-    int len = 0;
-    for(int i = 0; str[i] != '\0' && str[i] != '('; ++i)
+    const char *end = str;
+    if(!cxx_consume_name(&end)) goto out;
+    if(end - str < 4 || end[-1] == '>' || end[0] != '(') goto out;
+    for(end -= 3; end > str; --end)
     {
-        if(str[i] == ':' && str[i+1] == ':')
+        if(end[0] == ':' && end[1] == ':')
         {
-            len = i;
             break;
         }
     }
-    if(!len) goto out;
+    if(end == str) goto out;
 
-    str[len] = '\0';
+    size_t len = end - str;
+    str[len+0] = '\0';
     str[len+1] = '\0';
-    const char *p = sym + 4;
-    int slen = cxx_demangle_num(&p);
-    *structorptr = slen == len && strncmp(p, str, len) == 0 && (p[len] == 'C' || p[len] == 'D');
-    *methodptr = str + len + 2;
+#if 0
+    // TODO: This would be cleaner, but breaks on templated classes, and is
+    //       probably also pretty slow... not sure if worth fixing?
+
+    const char *base = str;
+    if(!cxx_class_basename(&base, &len)) goto out;
+
+    const char *p = sym + (sym[3] == 'N' ? 4 : 3);
+    size_t slen = cxx_demangle_num(&p);
+    *structorptr = slen == len && strncmp(p, base, len) == 0 && (p[len] == 'C' || p[len] == 'D');
+#else
+    *structorptr = end[2] == '~';
+#endif
+    *methodptr = end + 2;
     *classptr = str;
     str = NULL; // prevent free
     retval = true;
