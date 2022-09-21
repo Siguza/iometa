@@ -260,6 +260,7 @@ static int validate_fat(void **machop, size_t *machosizep, mach_hdr_t **hdrp, co
         return -1;
     }
 
+    size_t filesize = machosize;
     fat_hdr_t *fat = (fat_hdr_t*)hdr;
     if(fat->magic == FAT_CIGAM)
     {
@@ -267,33 +268,46 @@ static int validate_fat(void **machop, size_t *machosizep, mach_hdr_t **hdrp, co
         fat_arch_t *arch = (fat_arch_t*)(fat + 1);
         for(size_t i = 0; i < SWAP32(fat->nfat_arch); ++i)
         {
-            if(SWAP32(arch[i].cputype) == CPU_TYPE_ARM64)
+            uint32_t cputype = SWAP32(arch[i].cputype);
+            if(cputype == CPU_TYPE_ARM64)
             {
                 uint32_t offset = SWAP32(arch[i].offset);
                 uint32_t newsize = SWAP32(arch[i].size);
-                if(offset > machosize || newsize > machosize - offset)
+                if(offset > filesize || newsize > filesize - offset)
                 {
                     if(name) ERR("Embedded fat arch out of bounds (%s).", name);
                     else     ERR("Fat arch out of bounds.");
-                    return -1;
+                    continue;
                 }
                 if(newsize < sizeof(mach_hdr_t))
                 {
                     if(name) ERR("Embedded fat arch is too short to contain a Mach-O (%s).", name);
                     else     ERR("Fat arch is too short to contain a Mach-O.");
-                    return -1;
+                    continue;
                 }
-                macho = (void*)((uintptr_t)hdr + offset);
+                uint32_t subtype = SWAP32(arch[i].cpusubtype);
+                mach_hdr_t *candidate = (void*)((uintptr_t)fat + offset);
+                if(candidate->cputype != cputype || candidate->cpusubtype != subtype)
+                {
+                    if(name) ERR("Embedded fat arch doesn't match Mach-O arch (%s).", name);
+                    else     ERR("Fat arch doesn't match Mach-O arch.");
+                    continue;
+                }
+                macho = candidate;
                 machosize = newsize;
                 hdr = macho;
                 found = true;
-                break;
+                // Prefer arm64e
+                if((subtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E)
+                {
+                    break;
+                }
             }
         }
         if(!found)
         {
-            if(name) ERR("No arm64 slice in embedded fat binary (%s).", name);
-            else     ERR("No arm64 slice in fat binary.");
+            if(name) ERR("No (valid) arm64(e) slice in embedded fat binary (%s).", name);
+            else     ERR("No (valid) arm64(e) slice in fat binary.");
             return -1;
         }
         *machop     = macho;
@@ -325,8 +339,8 @@ int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const c
     }
     if(hdr->cputype != CPU_TYPE_ARM64)
     {
-        if(name) ERR("Wrong embedded architecture, only arm64 is supported (%s).", name);
-        else     ERR("Wrong architecture, only arm64 is supported.");
+        if(name) ERR("Wrong embedded architecture, only arm64(e) is supported (%s).", name);
+        else     ERR("Wrong architecture, only arm64(e) is supported.");
         return -1;
     }
     uint32_t subtype = hdr->cpusubtype & CPU_SUBTYPE_MASK;
