@@ -71,7 +71,7 @@ void* addr2ptr(void *macho, kptr_t addr)
         if(cmd->cmd == MACH_SEGMENT)
         {
             mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(addr >= seg->vmaddr && addr < seg->vmaddr + seg->vmsize)
+            if(addr >= seg->vmaddr && addr < seg->vmaddr + seg->filesize)
             {
                 return (void*)((uintptr_t)macho + seg->fileoff + (addr - seg->vmaddr));
             }
@@ -88,7 +88,7 @@ mach_seg_t* seg4ptr(void *macho, void *ptr)
         if(cmd->cmd == MACH_SEGMENT)
         {
             mach_seg_t *seg = (mach_seg_t*)cmd;
-            if(p >= (char*)((uintptr_t)macho + seg->fileoff) && p < (char*)((uintptr_t)macho + seg->fileoff + seg->vmsize))
+            if(p >= (char*)((uintptr_t)macho + seg->fileoff) && p < (char*)((uintptr_t)macho + seg->fileoff + seg->filesize))
             {
                 return seg;
             }
@@ -140,7 +140,7 @@ kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *bind, bool 
         }
         if(pp.pac.bind) return pp.pac.off & 0xffff;
         if(pp.pac.auth) return base + pp.pac.off;
-        return (kptr_t)pp.raw.lo;
+        return (kptr_t)pp.raw.lo + (fixupKind == DYLD_CHAINED_PTR_ARM64E ? 0 : base);
     }
     if(bind) *bind = false;
     if(auth) *auth = false;
