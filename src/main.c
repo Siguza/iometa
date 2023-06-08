@@ -1462,6 +1462,7 @@ int main(int argc, const char **argv)
                         {
                             STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                             {
+                                bti_t     *bti = (bti_t*    )(mem - 1);
                                 adr_t     *adr = (adr_t*    )(mem + 0);
                                 add_imm_t *add = (add_imm_t*)(mem + 1);
                                 ret_t     *ret = (ret_t*    )(mem + 2);
@@ -1496,6 +1497,10 @@ int main(int argc, const char **argv)
                                         }
                                         else
                                         {
+                                            if((void*)bti >= kernel && is_bti(bti))
+                                            {
+                                                refloc -= 4;
+                                            }
                                             DBG("OSMetaClass::getMetaClass: " ADDR, refloc);
                                             OSObjectGetMetaClass = refloc;
                                         }
@@ -1533,9 +1538,7 @@ int main(int argc, const char **argv)
             for(size_t i = 0; is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, ovtab, OSObjectVtab, i); ++i)
             {
                 bool bind = false;
-                // DEBUG
-                kptr_t VtabMethod = kuntag(kbase, fixupKind, ovtab[i], &bind, NULL, NULL, NULL);
-                if(VtabMethod == OSObjectGetMetaClass || VtabMethod == OSObjectGetMetaClass - 4)
+                if(kuntag(kbase, fixupKind, ovtab[i], &bind, NULL, NULL, NULL) == OSObjectGetMetaClass)
                 {
                     if(bind)
                     {
