@@ -1533,7 +1533,9 @@ int main(int argc, const char **argv)
             for(size_t i = 0; is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, ovtab, OSObjectVtab, i); ++i)
             {
                 bool bind = false;
-                if(kuntag(kbase, fixupKind, ovtab[i], &bind, NULL, NULL, NULL) == OSObjectGetMetaClass)
+                // DEBUG
+                kptr_t VtabMethod = kuntag(kbase, fixupKind, ovtab[i], &bind, NULL, NULL, NULL);
+                if(VtabMethod == OSObjectGetMetaClass || VtabMethod == OSObjectGetMetaClass - 4)
                 {
                     if(bind)
                     {
@@ -2070,6 +2072,10 @@ int main(int argc, const char **argv)
                                             else if((state.valid & 0xff) == 0xf && (state.wide & 0xf) == 0x9) // hell do I know
                                             {
                                                 allocsz = state.x[1];
+                                            }
+                                            else if((state.valid & 0xff) == 0x3 && (state.wide & 0x1ff) == 0x1) // muirey: hell do I know
+                                            {
+                                                allocsz = state.x[(state.valid & 0x100) ? 8 : 1];
                                             }
                                             else
                                             {

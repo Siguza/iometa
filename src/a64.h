@@ -328,6 +328,13 @@ typedef struct
              op  : 21;
 } bra_t;
 
+typedef struct
+{
+    uint32_t op2    :  8,
+             CRm    :  4,
+             op     : 20;
+} bti_t;
+
 typedef uint32_t nop_t;
 typedef uint32_t ret_t;
 #pragma pack()
@@ -834,6 +841,11 @@ static inline bool is_orr(orr_t *orr)
 static inline bool is_eor(eor_t *eor)
 {
     return eor->op == 0b10100100;
+}
+
+static inline bool is_bti(bti_t *bti)
+{
+    return bti->op == 0b11010101000000110010;
 }
 
 // and/orr/eor - holy clusterfuck

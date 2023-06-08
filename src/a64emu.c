@@ -79,7 +79,8 @@ bool is_linear_inst(void *ptr)
            is_pacga(ptr) ||
            is_aut(ptr) ||
            is_autsys(ptr) ||
-           is_nop(ptr);
+           is_nop(ptr) ||
+           is_bti(ptr);
 }
 
 // This is quite possibly the trickiest part: finding the start of the function.
@@ -220,6 +221,8 @@ static inline void update_nzcv(a64_state_t *state, uint64_t Rd, uint64_t Rn, uin
 // it is specifically marked as "host memory".
 emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_state_t *state, uint32_t *from, a64cb_t check, void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour)
 {
+    #define TIMEOUT 3000
+
     if(init)
     {
         for(size_t i = 0; i < 32; ++i)
@@ -233,11 +236,15 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         state->wide   = 0;
         state->host   = 0;
     }
-    for(; check(from, arg); ++from)
+    uint32_t insnsEmulated = 0;
+    for(; check(from, arg); ++from, ++insnsEmulated)
     {
+        if (insnsEmulated > TIMEOUT)
+            return kEmuErr;
+
         void *ptr = from;
         kptr_t addr = off2addr(kernel, (uintptr_t)from - (uintptr_t)kernel);
-        if(is_nop(ptr) || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr))
+        if(is_nop(ptr) || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr) || is_bti(ptr))
         {
             // Ignore/no change
         }
