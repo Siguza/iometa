@@ -848,6 +848,16 @@ static inline bool is_bti(bti_t *bti)
     return bti->op == 0b11010101000000110010;
 }
 
+static inline bool is_ands_reg(and_reg_t *and)
+{
+    return and->op == 0b1101010 && and->N == 0;
+}
+
+static inline bool is_ands(and_t *and)
+{
+    return and->op == 0b11100100;
+}
+
 // and/orr/eor - holy clusterfuck
 
 extern uint64_t DecodeBitMasks(uint8_t N, uint8_t imms, uint8_t immr, uint8_t bits);
