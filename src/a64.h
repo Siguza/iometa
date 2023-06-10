@@ -845,7 +845,9 @@ static inline bool is_eor(eor_t *eor)
 
 static inline bool is_bti(bti_t *bti)
 {
-    return bti->op == 0b11010101000000110010;
+    return bti->op == 0b11010101000000110010 &&
+           bti->CRm == 0b0100 &&
+           (bti->op2 & 0b00111111) == 0b011111;
 }
 
 static inline bool is_ands_reg(and_reg_t *and)
