@@ -1303,7 +1303,7 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     ERR("Bug in a64_emulate (case and/orr/eor) at " ADDR, addr);
                     exit(-1);
                 }
-                if(orr->Rd != 31)
+                if(!want_nzcv || orr->Rd != 31)
                 {
                     state->x[orr->Rd] = Rd;
                     state->valid |= 1 << orr->Rd;
