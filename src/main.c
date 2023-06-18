@@ -3037,7 +3037,6 @@ int main(int argc, const char **argv)
                     }
                     if(!iaddr)
                     {
-                        WRN("No kmod_info for %s", name);
                         continue;
                     }
                     kmod_info_t *kmod = addr2ptr(kernel, iaddr);
