@@ -3077,16 +3077,15 @@ int main(int argc, const char **argv)
                     }
                 }
             }
+            haveBundles = true;
             for(size_t i = 0; i < metas.idx; ++i)
             {
                 metaclass_t *meta = &metas.val[i];
                 if(!meta->bundle)
                 {
-                    ERR("Metaclass without a bundle: %s (" ADDR ")", meta->name, meta->callsite);
-                    return -1;
+                    haveBundles = false;
                 }
             }
-            haveBundles = true;
         }
         else if(hdr->filetype == MH_EXECUTE)
         {
@@ -3250,7 +3249,7 @@ int main(int argc, const char **argv)
                     }
                 }
             }
-            if(hdr->filetype == MH_EXECUTE)
+            if(hdr->filetype == MH_EXECUTE || hdr->filetype == MH_FILESET)
             {
                 if(!prelink_info) prelink_info = get_prelink_info(hdr);
 
@@ -3365,6 +3364,15 @@ int main(int argc, const char **argv)
                         }
                     }
                 }
+            }
+        }
+        for(size_t i = 0; i < metas.idx; ++i)
+        {
+            metaclass_t *meta = &metas.val[i];
+            if(!meta->bundle)
+            {
+                ERR("Metaclass without a bundle: %s (" ADDR ")", meta->name, meta->callsite);
+                return -1;
             }
         }
         if(filt_bundle)
