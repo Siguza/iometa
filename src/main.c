@@ -3336,6 +3336,10 @@ int main(int argc, const char **argv)
                             continue;
                         }
                         DBG("Kext %s at " ADDR, str, kext_base);
+                        if(kext_base == 0x7fffffffffffffff)
+                        {
+                            continue;
+                        }
                         mach_hdr_t *hdr2 = addr2ptr(kernel, kext_base);
                         if(!hdr2)
                         {
