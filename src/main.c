@@ -1497,7 +1497,7 @@ int main(int argc, const char **argv)
                                         }
                                         else
                                         {
-                                            if((void*)bti >= kernel && is_bti(bti))
+                                            if((void*)bti >= kernel && is_bti(bti) && (bti->op2 & 0xc0) == 0x40)
                                             {
                                                 refloc -= 4;
                                             }
@@ -1826,7 +1826,7 @@ int main(int argc, const char **argv)
                                     if(meta->addr == addr)
                                     {
                                         bti_t* bti = (bti_t*)(adr - 1);
-                                        if((void*)bti >= kernel && is_bti(bti))
+                                        if((void*)bti >= kernel && is_bti(bti) && (bti->op2 & 0xc0) == 0x40)
                                         {
                                             func -= 4;
                                         }
