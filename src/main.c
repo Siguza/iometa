@@ -1462,6 +1462,7 @@ int main(int argc, const char **argv)
                         {
                             STEP_MEM(uint32_t, mem, (uintptr_t)kernel + seg->fileoff, seg->filesize, 3)
                             {
+                                bti_t     *bti = (bti_t*    )(mem - 1);
                                 adr_t     *adr = (adr_t*    )(mem + 0);
                                 add_imm_t *add = (add_imm_t*)(mem + 1);
                                 ret_t     *ret = (ret_t*    )(mem + 2);
@@ -1496,6 +1497,10 @@ int main(int argc, const char **argv)
                                         }
                                         else
                                         {
+                                            if((void*)bti >= kernel && is_bti(bti) && (bti->op2 & 0xc0) == 0x40)
+                                            {
+                                                refloc -= 4;
+                                            }
                                             DBG("OSMetaClass::getMetaClass: " ADDR, refloc);
                                             OSObjectGetMetaClass = refloc;
                                         }
@@ -1820,6 +1825,11 @@ int main(int argc, const char **argv)
                                     metaclass_t *meta = &metas.val[i];
                                     if(meta->addr == addr)
                                     {
+                                        bti_t* bti = (bti_t*)(adr - 1);
+                                        if((void*)bti >= kernel && is_bti(bti) && (bti->op2 & 0xc0) == 0x40)
+                                        {
+                                            func -= 4;
+                                        }
                                         DBG("Got func " ADDR " referencing MetaClass %s", func, meta->name);
                                         //candidates.idx = 0;
                                         if(!meta->vtab)
@@ -2070,6 +2080,10 @@ int main(int argc, const char **argv)
                                             else if((state.valid & 0xff) == 0xf && (state.wide & 0xf) == 0x9) // hell do I know
                                             {
                                                 allocsz = state.x[1];
+                                            }
+                                            else if((state.valid & 0xff) == 0x3 && (state.wide & 0x1ff) == 0x1) // muirey: hell do I know
+                                            {
+                                                allocsz = state.x[(state.valid & 0x100) ? 8 : 1];
                                             }
                                             else
                                             {
@@ -3028,7 +3042,6 @@ int main(int argc, const char **argv)
                     }
                     if(!iaddr)
                     {
-                        WRN("No kmod_info for %s", name);
                         continue;
                     }
                     kmod_info_t *kmod = addr2ptr(kernel, iaddr);
@@ -3068,16 +3081,15 @@ int main(int argc, const char **argv)
                     }
                 }
             }
+            haveBundles = true;
             for(size_t i = 0; i < metas.idx; ++i)
             {
                 metaclass_t *meta = &metas.val[i];
                 if(!meta->bundle)
                 {
-                    ERR("Metaclass without a bundle: %s (" ADDR ")", meta->name, meta->callsite);
-                    return -1;
+                    haveBundles = false;
                 }
             }
-            haveBundles = true;
         }
         else if(hdr->filetype == MH_EXECUTE)
         {
@@ -3241,7 +3253,7 @@ int main(int argc, const char **argv)
                     }
                 }
             }
-            if(hdr->filetype == MH_EXECUTE)
+            if(hdr->filetype == MH_EXECUTE || hdr->filetype == MH_FILESET)
             {
                 if(!prelink_info) prelink_info = get_prelink_info(hdr);
 
@@ -3329,6 +3341,10 @@ int main(int argc, const char **argv)
                             continue;
                         }
                         DBG("Kext %s at " ADDR, str, kext_base);
+                        if(kext_base == 0x7fffffffffffffff)
+                        {
+                            continue;
+                        }
                         mach_hdr_t *hdr2 = addr2ptr(kernel, kext_base);
                         if(!hdr2)
                         {
@@ -3356,6 +3372,15 @@ int main(int argc, const char **argv)
                         }
                     }
                 }
+            }
+        }
+        for(size_t i = 0; i < metas.idx; ++i)
+        {
+            metaclass_t *meta = &metas.val[i];
+            if(!meta->bundle)
+            {
+                ERR("Metaclass without a bundle: %s (" ADDR ")", meta->name, meta->callsite);
+                return -1;
             }
         }
         if(filt_bundle)

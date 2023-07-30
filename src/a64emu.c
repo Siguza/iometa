@@ -51,9 +51,11 @@ bool is_linear_inst(void *ptr)
            is_and(ptr) ||
            is_orr(ptr) ||
            is_eor(ptr) ||
+           is_ands(ptr) ||
            is_and_reg(ptr) ||
            is_orr_reg(ptr) ||
            is_eor_reg(ptr) ||
+           is_ands_reg(ptr) ||
            is_str_pre(ptr) ||
            is_str_post(ptr) ||
            is_str_uoff(ptr) ||
@@ -79,7 +81,8 @@ bool is_linear_inst(void *ptr)
            is_pacga(ptr) ||
            is_aut(ptr) ||
            is_autsys(ptr) ||
-           is_nop(ptr);
+           is_nop(ptr) ||
+           is_bti(ptr);
 }
 
 // This is quite possibly the trickiest part: finding the start of the function.
@@ -220,6 +223,8 @@ static inline void update_nzcv(a64_state_t *state, uint64_t Rd, uint64_t Rn, uin
 // it is specifically marked as "host memory".
 emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_state_t *state, uint32_t *from, a64cb_t check, void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour)
 {
+    #define TIMEOUT 3000
+
     if(init)
     {
         for(size_t i = 0; i < 32; ++i)
@@ -233,11 +238,15 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
         state->wide   = 0;
         state->host   = 0;
     }
-    for(; check(from, arg); ++from)
+    uint32_t insnsEmulated = 0;
+    for(; check(from, arg); ++from, ++insnsEmulated)
     {
+        if (insnsEmulated > TIMEOUT)
+            return kEmuErr;
+
         void *ptr = from;
         kptr_t addr = off2addr(kernel, (uintptr_t)from - (uintptr_t)kernel);
-        if(is_nop(ptr) || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr))
+        if(is_nop(ptr) || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr) || is_bti(ptr))
         {
             // Ignore/no change
         }
@@ -1268,15 +1277,16 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
             state->q[movi->Rd] = get_movi_imm(movi);
             state->qvalid |= 1 << movi->Rd;
         }
-        else if(is_and(ptr) || is_orr(ptr) || is_eor(ptr))
+        else if(is_and(ptr) || is_orr(ptr) || is_eor(ptr) || is_ands(ptr))
         {
+            bool want_nzcv = is_ands(ptr);
             orr_t *orr = ptr;
             if(orr->Rn == 31 || (state->valid & (1 << orr->Rn)))
             {
                 uint64_t Rd,
                          Rn = (orr->Rn == 31 ? 0 : state->x[orr->Rn]),
                          Rm = get_orr_imm(orr);
-                if(is_and(orr))
+                if(is_and(orr) || is_ands(orr))
                 {
                     Rd = Rn & Rm;
                 }
@@ -1293,52 +1303,64 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                     ERR("Bug in a64_emulate (case and/orr/eor) at " ADDR, addr);
                     exit(-1);
                 }
-                state->x[orr->Rd] = Rd;
-                state->valid |= 1 << orr->Rd;
-                state->wide = (state->wide & ~(1 << orr->Rd)) | (orr->sf << orr->Rd);
-                HOST_SET(state, orr->Rd, 0);
+                if(!want_nzcv || orr->Rd != 31)
+                {
+                    state->x[orr->Rd] = Rd;
+                    state->valid |= 1 << orr->Rd;
+                    state->wide = (state->wide & ~(1 << orr->Rd)) | (orr->sf << orr->Rd);
+                    HOST_SET(state, orr->Rd, 0);
+                }
+                if(want_nzcv)
+                {
+                    update_nzcv(state, Rd, Rn, Rm, !!orr->sf);
+                }
             }
             else
             {
                 state->valid &= ~(1 << orr->Rd);
+                if(want_nzcv)
+                {
+                    state->nzcv_valid = 0;
+                }
             }
         }
-        else if(is_and_reg(ptr) || is_orr_reg(ptr) || is_eor_reg(ptr))
+        else if(is_and_reg(ptr) || is_orr_reg(ptr) || is_eor_reg(ptr) || is_ands_reg(ptr))
         {
+            bool want_nzcv = is_ands_reg(ptr);
             orr_reg_t *orr = ptr;
-            if(orr->Rd != 31)
+            if((orr->Rn == 31 || (state->valid & (1 << orr->Rn))) && (orr->Rm == 31 || (state->valid & (1 << orr->Rm))))
             {
-                if((orr->Rn == 31 || (state->valid & (1 << orr->Rn))) && (orr->Rm == 31 || (state->valid & (1 << orr->Rm))))
+                uint64_t Rn = (orr->Rn == 31 ? 0 : state->x[orr->Rn]),
+                            Rm = (orr->Rm == 31 ? 0 : state->x[orr->Rm]);
+                switch(orr->shift)
                 {
-                    uint64_t Rn = (orr->Rn == 31 ? 0 : state->x[orr->Rn]),
-                             Rm = (orr->Rm == 31 ? 0 : state->x[orr->Rm]);
-                    switch(orr->shift)
-                    {
-                        case 0b00: Rm =          Rm << orr->imm; break; // LSL
-                        case 0b01: Rm =          Rm >> orr->imm; break; // LSR
-                        case 0b10: Rm = (int64_t)Rm >> orr->imm; break; // ASR
-                        default:
-                            WRN("Bad and/orr/eor shift at " ADDR, addr);
-                            return kEmuErr;
-                    }
-                    uint64_t Rd;
-                    if(is_and_reg(orr))
-                    {
-                        Rd = Rn & Rm;
-                    }
-                    else if(is_orr_reg(orr))
-                    {
-                        Rd = Rn | Rm;
-                    }
-                    else if(is_eor_reg(orr))
-                    {
-                        Rd = Rn ^ Rm;
-                    }
-                    else
-                    {
-                        ERR("Bug in a64_emulate (case and_reg/orr_reg/eor_reg) at " ADDR, addr);
-                        exit(-1);
-                    }
+                    case 0b00: Rm =          Rm << orr->imm; break; // LSL
+                    case 0b01: Rm =          Rm >> orr->imm; break; // LSR
+                    case 0b10: Rm = (int64_t)Rm >> orr->imm; break; // ASR
+                    default:
+                        WRN("Bad and/orr/eor shift at " ADDR, addr);
+                        return kEmuErr;
+                }
+                uint64_t Rd;
+                if(is_and_reg(orr) || is_ands_reg(orr))
+                {
+                    Rd = Rn & Rm;
+                }
+                else if(is_orr_reg(orr))
+                {
+                    Rd = Rn | Rm;
+                }
+                else if(is_eor_reg(orr))
+                {
+                    Rd = Rn ^ Rm;
+                }
+                else
+                {
+                    ERR("Bug in a64_emulate (case and_reg/orr_reg/eor_reg) at " ADDR, addr);
+                    exit(-1);
+                }
+                if(orr->Rd != 31)
+                {
                     state->x[orr->Rd] = Rd;
                     state->valid |= 1 << orr->Rd;
                     // Because mov is an alias of orr
@@ -1366,9 +1388,17 @@ emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_st
                         HOST_SET(state, orr->Rd, 0);
                     }
                 }
-                else
+                if(want_nzcv)
                 {
-                    state->valid &= ~(1 << orr->Rd);
+                    update_nzcv(state, Rd, Rn, Rm, !!orr->sf);
+                }
+            }
+            else
+            {
+                state->valid &= ~(1 << orr->Rd);
+                if(want_nzcv)
+                {
+                    state->nzcv_valid = 0;
                 }
             }
         }
