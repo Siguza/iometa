@@ -273,7 +273,9 @@ static bool macho_validate_fixup_chain(const mach_hdr_t *hdr, kptr_t base, fixup
             return false;
         }
         ptr = (const kptr_t*)((uintptr_t)ptr + skip);
-        if((uintptr_t)ptr > (uintptr_t)end - sizeof(kptr_t))
+        // TODO: Can't do -sizeof(kptr_t) here because there can be ptrs at +0x3ffc,
+        //       but I still wanna make sure we don't run off the end of a segment.
+        if((uintptr_t)ptr >= (uintptr_t)end)
         {
             ERR("Mach-O chained fixup at " ADDR " skips past the end of its segment/page.", addr);
             return false;
