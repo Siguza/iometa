@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2022 Siguza
+/* Copyright (c) 2018-2024 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -97,7 +97,7 @@ do \
             ++mem;
         }
         if(mem >= end) break;
-        DBG("Symmap line %lu", line);
+        DBG(2, "Symmap line %lu", line);
 
         ch = *mem;
 
@@ -112,7 +112,7 @@ do \
         // This is a method
         else if(ch == '-')
         {
-            DBG("Got symmap method");
+            DBG(2, "Got symmap method");
 
             // Must have seen a class name before
             if(!current.class)
@@ -234,7 +234,7 @@ do \
         // This is a class name
         else
         {
-            DBG("Got symmap class");
+            DBG(2, "Got symmap class");
 
             const char *classname = mem;
             if(cxx_consume_name((const char**)&mem, end, false) == 0)
@@ -305,7 +305,7 @@ do \
                        *cur  = &ptr[i];
         if(strcmp(prev->name, cur->name) == 0)
         {
-            DBG("Duplicate symmap class: %s", cur->name);
+            DBG(2, "Duplicate symmap class: %s", cur->name);
             cur->duplicate = 1;
             if(prev->num != cur->num)
             {
@@ -403,7 +403,7 @@ bool print_symmap(void *classes, symmap_t *symmap, opt_t opt)
                     *cur  = list[i];
         if(strcmp(prev->name, cur->name) == 0)
         {
-            DBG("Duplicate class: %s", cur->name);
+            DBG(2, "Duplicate class: %s", cur->name);
             cur->duplicate = 1;
             if(prev->nmethods != cur->nmethods)
             {

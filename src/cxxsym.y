@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2022 Siguza
+/* Copyright (c) 2018-2024 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -151,6 +151,8 @@ static void list_set_last(type_t *t, type_t *last);
 static void inner_set_base(type_t *t, type_t *base);
 static void array_set_base(type_t *t, type_t *base);
 static void complex_set_base(type_t *t, type_t *base);
+// Workaround to silence -Wunused-but-set-variable on `yynerrs`
+#define yyerror(state, s) do { (void)yynerrs; yyerror(state, s); } while(0)
 %}
 
 %destructor { freetype($$); } arglist typelist type complex array qual.opt qual flat ptr.opt ref.opt member.opt basic template.opt template_args data name literal number primitive integer varargs void block
@@ -528,6 +530,8 @@ void: VOID { $$ = alloctype(kVoid); if(!$$) YYERROR; };
 block: BLOCK { $$ = alloctype(kBlock); if(!$$) YYERROR; $$->val.inner = NULL; };
 
 %%
+
+#undef yyerror
 
 // ------------------------------ Parsing ------------------------------
 

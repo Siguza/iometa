@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020 Siguza
+/* Copyright (c) 2018-2024 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,9 +11,11 @@
 #ifndef MACHO_H
 #define MACHO_H
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>             // size_t
 #include <stdint.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 #ifdef CPU_TYPE_ARM64
 #   undef CPU_TYPE_ARM64
@@ -32,6 +34,7 @@
 #define VM_PROT_READ                       0x1
 #define VM_PROT_WRITE                      0x2
 #define VM_PROT_EXECUTE                    0x4
+#define VM_PROT_ALL                        0x7
 #define CPU_TYPE_ARM64              0x0100000c
 #define CPU_SUBTYPE_MASK            0x00ffffff
 #define CPU_SUBTYPE_ARM64_ALL              0x0
@@ -41,12 +44,16 @@
 #define MH_EXECUTE                  0x00000002
 #define MH_KEXT_BUNDLE              0x0000000b
 #define MH_FILESET                  0x0000000c
+#define MH_DYLIB_IN_CACHE           0x80000000
+#define LC_REQ_DYLD                 0x80000000
 #define LC_SYMTAB                   0x00000002
 #define LC_DYSYMTAB                 0x0000000b
 #define LC_SEGMENT_64               0x00000019
 #define LC_UUID                     0x0000001b
 #define LC_DYLD_CHAINED_FIXUPS      0x80000034
 #define LC_FILESET_ENTRY            0x80000035
+#define SECTION_TYPE                0x000000ff
+#define S_ZEROFILL                         0x1
 #define N_STAB                            0xe0
 #define N_TYPE                            0x0e
 #define N_EXT                             0x01
@@ -212,9 +219,9 @@ struct dyld_chained_import
 };
 
 // My aliases
-#define ADDR                                    "0x%016llx"
-#define MACH_MAGIC                              MH_MAGIC_64
-#define MACH_SEGMENT                            LC_SEGMENT_64
+#define ADDR                                    "0x%016" PRIx64
+//#define MACH_MAGIC                              MH_MAGIC_64
+//#define MACH_SEGMENT                            LC_SEGMENT_64
 typedef struct fat_header                       fat_hdr_t;
 typedef struct fat_arch                         fat_arch_t;
 typedef struct mach_header_64                   mach_hdr_t;
@@ -231,13 +238,6 @@ typedef struct dyld_chained_starts_in_image     fixup_seg_t;
 typedef struct dyld_chained_starts_in_segment   fixup_starts_t;
 typedef struct dyld_chained_import              fixup_import_t;
 typedef uint64_t                                kptr_t;
-typedef enum
-{
-    DYLD_CHAINED_PTR_NONE                       = 0, // pacptr.raw
-    DYLD_CHAINED_PTR_ARM64E                     = 1, // pacptr.pac
-    DYLD_CHAINED_PTR_ARM64E_KERNEL              = 7, // pacptr.cache, virt offset from kbase
-    DYLD_CHAINED_PTR_64_KERNEL_CACHE            = 8, // pacptr.cache, file offset
-} fixup_kind_t;
 
 typedef struct
 {
@@ -245,6 +245,7 @@ typedef struct
     const char *name;
 } sym_t;
 
+#if 0
 #define FOREACH_CMD(_hdr, _cmd) \
 for( \
     mach_lc_t *_cmd = (mach_lc_t*)(_hdr + 1), *_end = (mach_lc_t*)((uintptr_t)_cmd + _hdr->sizeofcmds - sizeof(mach_lc_t)); \
@@ -274,5 +275,47 @@ kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms);
 bool macho_extract_symbols(void *macho, mach_stab_t *stab, sym_t **symp, size_t *nsymp);
 bool macho_extract_reloc(void *macho, kptr_t base, mach_dstab_t *dstab, mach_nlist_t *symtab, char *strtab, sym_t **exrelocp, size_t *nexrelocp);
 bool macho_extract_chained_imports(void *macho, kptr_t base, struct linkedit_data_command *cmd, sym_t **exrelocp, size_t *nexrelocp);
+#else
+// Actual custom impl
+typedef struct _macho macho_t;
+
+macho_t* macho_open(const char *file);
+void macho_close(macho_t *macho);
+
+bool macho_is_kext(macho_t *macho);
+bool macho_has_pac(macho_t *macho);
+
+bool macho_is_ptr(macho_t *macho, const void *loc);
+kptr_t macho_fixup(macho_t *macho, kptr_t ptr, bool *bind, bool *auth, uint16_t *pac, size_t *skip);
+
+kptr_t macho_base(macho_t *macho);
+kptr_t macho_ptov(macho_t *macho, const void *ptr);
+const void* macho_vtop(macho_t *macho, kptr_t addr, size_t size);
+void* macho_vtop_rw(macho_t *macho, kptr_t addr, size_t size);
+
+// NOTE: Zerofill ranges excluded here
+bool macho_segment(macho_t *macho, const char *segment, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
+bool macho_section(macho_t *macho, const char *segment, const char *section, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
+bool macho_segment_for_addr(macho_t *macho, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
+bool macho_section_for_addr(macho_t *macho, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
+bool macho_segment_for_ptr(macho_t *macho, const void *target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
+bool macho_section_for_ptr(macho_t *macho, const void *target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
+
+bool macho_foreach_map(macho_t *macho, bool (*cb)(const void *ptr, kptr_t addr, size_t size, uint32_t prot, void *arg), void *arg);
+bool macho_foreach_segment(macho_t *macho, bool (*cb)(const void *ptr, kptr_t addr, size_t size, uint32_t prot, const char *segment, void *arg), void *arg);
+bool macho_foreach_section(macho_t *macho, bool (*cb)(const void *ptr, kptr_t addr, size_t size, uint32_t prot, const char *segment, const char *section, void *arg), void *arg);
+
+bool macho_foreach_ptr(macho_t *macho, bool (*cb)(const kptr_t *ptr, void *arg), void *arg);
+bool macho_find_bytes(macho_t *macho, const void *bytes, size_t size, size_t alignment, bool (*cb)(kptr_t addr, void *arg), void *arg);
+
+bool macho_have_symbols(macho_t *macho);
+kptr_t macho_symbol(macho_t *macho, const char *sym);
+const sym_t* macho_symbols_for_prefix(macho_t *macho, const char *prefix, size_t *n);
+const sym_t* macho_symbols_for_addr(macho_t *macho, kptr_t addr, size_t *n);
+kptr_t macho_reloc(macho_t *macho, const char *sym);
+const char* macho_reloc_for_addr(macho_t *macho, kptr_t loc);
+
+CFTypeRef macho_prelink_info(macho_t *macho);
+#endif
 
 #endif

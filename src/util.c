@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020 Siguza
+/* Copyright (c) 2018-2024 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,12 +11,12 @@
 #include <fcntl.h>              // open
 #include <stdbool.h>
 #include <unistd.h>             // close
-#include <sys/mman.h>           // mmap
+#include <sys/mman.h>           // mmap, MAP_FAILED
 #include <sys/stat.h>           // fstat
 
 #include "util.h"
 
-bool debug = false;
+uint8_t debug = 0;
 const char *colorGray   = "\x1b[90m",
            *colorRed    = "\x1b[1;91m",
            *colorYellow = "\x1b[1;93m",

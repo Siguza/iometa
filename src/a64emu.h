@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020 Siguza
+/* Copyright (c) 2018-2024 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -53,6 +53,7 @@ typedef struct
     uint32_t valid;
     uint32_t qvalid;
     uint32_t wide;
+    // TODO: qwide
     uint64_t host; // 32x 2 bits, index into hostmem
     struct
     {
@@ -65,16 +66,16 @@ typedef struct
 #define HOST_GET(state, reg) ((uint8_t)(((state)->host >> ((reg) << 1)) & 3ULL))
 #define HOST_SET(state, reg, idx) do { ((state)->host = ((state)->host & ~(3ULL << ((reg) << 1))) | ((((uint64_t)idx) & 3ULL) << ((reg) << 1))); } while(0)
 
-typedef bool (*a64cb_t)(uint32_t *pos, void *arg);
+typedef bool (*a64cb_t)(const uint32_t *pos, void *arg);
 
-bool is_linear_inst(void *ptr);
+bool is_linear_inst(const void *ptr);
 
-uint32_t* find_function_start(void *kernel, mach_seg_t *seg, const char *name, uint32_t *fnstart, bool have_stack_frame);
+const uint32_t* find_function_start(macho_t *macho, const char *name, const uint32_t *fnstart, const uint32_t *bound, bool have_stack_frame);
 
-bool a64cb_check_equal(uint32_t *pos, void *arg);
-bool a64cb_check_bl(uint32_t *pos, void *arg);
+bool a64cb_check_equal(const uint32_t *pos, void *arg);
+bool a64cb_check_bl(const uint32_t *pos, void *arg);
 
-emu_ret_t a64_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, a64_state_t *state, uint32_t *from, a64cb_t check, void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour);
-bool multi_call_emulate(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, uint32_t *fncall, uint32_t *end, a64_state_t *state, void *sp, uint8_t *bitstr, uint32_t wantvalid, const char *name);
+emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, a64cb_t check, void *arg, bool init, bool warnUnknown, emu_fn_behaviour_t fn_behaviour);
+bool multi_call_emulate(macho_t *macho, const uint32_t *fncall, const uint32_t *end, a64_state_t *state, void *sp, uint8_t *bitstr, uint32_t wantvalid, const char *name);
 
 #endif

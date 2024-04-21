@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2022 Siguza
+/* Copyright (c) 2018-2024 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -57,8 +57,6 @@ How this works:
 #include <sys/mman.h>           // PROT_READ, PROT_WRITE
 #include <CoreFoundation/CoreFoundation.h>
 
-extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, CFOptionFlags options, CFStringRef *errorString);
-
 #include "a64.h"
 #include "a64emu.h"
 #include "cxx.h"
@@ -89,6 +87,7 @@ typedef struct
 } kmod_info_t;
 #pragma pack()
 
+#if 0
 typedef struct
 {
     uint32_t count;
@@ -120,29 +119,30 @@ static int compare_addrs(const void *a, const void *b)
     if(adda == addb) return 0;
     return adda < addb ? -1 : 1;
 }
+#endif
 
-static bool get_import_target(adr_t *adrp, kptr_t alias, bool space_for_4, kptr_t *addr)
+static bool get_import_target(const adr_t *adrp, kptr_t alias, bool space_for_4, kptr_t *addr)
 {
-    ldr_imm_uoff_t *ldr1 = (ldr_imm_uoff_t*)(adrp + 1);
-    br_t *br = (br_t*)(adrp + 2);
-    add_imm_t *add = (add_imm_t*)(adrp + 1);
-    ldr_imm_uoff_t *ldr2 = (ldr_imm_uoff_t*)(adrp + 2);
-    bra_t *bra = (bra_t*)(adrp + 3);
+    const ldr_uoff_t *ldr1 = (const ldr_uoff_t*)(adrp + 1);
+    const br_t *br = (const br_t*)(adrp + 2);
+    const add_imm_t *add = (const add_imm_t*)(adrp + 1);
+    const ldr_uoff_t *ldr2 = (const ldr_uoff_t*)(adrp + 2);
+    const bra_t *bra = (const bra_t*)(adrp + 3);
     if
     (
-        is_ldr_imm_uoff(ldr1) && ldr1->sf == 1 && is_br(br) &&  // Types
+        is_ldr_uoff(ldr1) && ldr1->sf == 1 && is_br(br) &&  // Types
         adrp->Rd == ldr1->Rn && ldr1->Rt == br->Rn              // Registers
     )
     {
-        *addr = (alias & ~0xfffULL) + get_adr_off(adrp) + get_ldr_imm_uoff(ldr1);
+        *addr = (alias & ~0xfffULL) + get_adr_off(adrp) + get_ldr_uoff(ldr1);
         return true;
     }
     else if
     (
         space_for_4 &&
-        is_add_imm(add) && add->sf == 1 && is_ldr_imm_uoff(ldr2) && ldr2->sf == 1 && is_bra(bra) && // Types
+        is_add_imm(add) && add->sf == 1 && is_ldr_uoff(ldr2) && ldr2->sf == 1 && is_bra(bra) && // Types
         adrp->Rd == add->Rn && add->Rd == ldr2->Rn && ldr2->Rt == bra->Rn && ldr2->Rn == bra->Rm && // Registers
-        get_ldr_imm_uoff(ldr2) == 0
+        get_ldr_uoff(ldr2) == 0
     )
     {
         *addr = (alias & ~0xfffULL) + get_adr_off(adrp) + get_add_sub_imm(add);
@@ -151,6 +151,7 @@ static bool get_import_target(adr_t *adrp, kptr_t alias, bool space_for_4, kptr_
     return false;
 }
 
+#if 0
 static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fixupKind, bool have_plk_text_exec, sym_t *exreloc, size_t nexreloc, const char *sym)
 {
     kptr_t relocAddr = find_sym_by_name(sym, exreloc, nexreloc);
@@ -188,60 +189,62 @@ static kptr_t find_stub_for_reloc(void *kernel, mach_hdr_t *hdr, fixup_kind_t fi
     }
     return 0;
 }
-
-static bool is_part_of_vtab(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, relocrange_t *locreloc, size_t nlocreloc, sym_t *exreloc, size_t nexreloc, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+#else
+typedef struct
 {
-    if(idx == 0)
+    kptr_t reloc;
+    kptr_t alias;
+} find_stub_for_reloc_args_t;
+
+static bool find_stub_for_reloc_cb(const void *ptr, kptr_t addr, size_t size, uint32_t prot, void *arg)
+{
+    if(!(prot & VM_PROT_EXECUTE))
     {
         return true;
     }
-    if(fixupKind != DYLD_CHAINED_PTR_NONE)
+    find_stub_for_reloc_args_t *args = arg;
+    STEP_MEM(uint32_t, mem, ptr, size, 3)
     {
-        bool bind;
-        size_t skip = 0;
-        kuntag(kbase, fixupKind, vtab[idx - 1], &bind, NULL, NULL, &skip);
-        if(skip == sizeof(kptr_t))
+        const adr_t *adrp = (const adr_t*)mem;
+        if(!is_adrp(adrp))
         {
-            return true;
+            continue;
         }
-        if(skip != 0)
+        kptr_t offset = (uintptr_t)adrp - (uintptr_t)ptr;
+        kptr_t alias = addr + offset;
+        kptr_t target = 0;
+        if(!get_import_target(adrp, alias, (size - offset) / sizeof(uint32_t) >= 4, &target))
         {
-            return false;
+            continue;
         }
-        // If skip is == 0, it's possible that a new fixup chain starts right here
-        return is_in_fixup_chain(kernel, kbase, &vtab[idx]);
+        if(target == args->reloc)
+        {
+            args->alias = alias;
+            return false; // stop searching
+        }
     }
-    else
-    {
-        kptr_t val = vtabaddr + sizeof(kptr_t) * idx;
-        const char *sym = find_sym_by_addr(val, exreloc, nexreloc);
-        if(sym)
-        {
-            return true;
-        }
-        return bsearch(&val, locreloc, nlocreloc, sizeof(*locreloc), &compare_range) != NULL;
-    }
+    return true;
 }
 
-static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str)
+static kptr_t find_stub_for_reloc(macho_t *macho, const char *sym)
 {
-    ARRCAST(kptr_t, arr, arg);
-    size_t len = strlen(str) + 1;
-    for(size_t off = 0; off < kernelsize; )
+    kptr_t reloc = macho_reloc(macho, sym);
+    if(!reloc)
     {
-        const char *ptr = memmem((void*)((uintptr_t)kernel + off), kernelsize - off, str, len);
-        if(!ptr)
-        {
-            break;
-        }
-        size_t diff = (uintptr_t)ptr - (uintptr_t)kernel;
-        kptr_t ref = off2addr(kernel, diff);
-        DBG("strref(%s): " ADDR, str, ref);
-        ARRPUSH(*arr, ref);
-        off = diff + len;
+        return 0;
     }
+    DBG(1, "Found stub for %s at " ADDR, sym, reloc);
+    find_stub_for_reloc_args_t args =
+    {
+        .reloc = reloc,
+        .alias = 0,
+    };
+    macho_foreach_map(macho, &find_stub_for_reloc_cb, &args);
+    return args.alias;
 }
+#endif
 
+#if 0
 static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_t kbase, fixup_kind_t fixupKind, bool have_plk_text_exec, void *arr, kptr_t func)
 {
     if(hdr->filetype != MH_KEXT_BUNDLE)
@@ -387,7 +390,201 @@ static void find_imports(void *kernel, size_t kernelsize, mach_hdr_t *hdr, kptr_
         ARRFREE(refs);
     }
 }
+#else
+typedef struct
+{
+    macho_t *macho;
+    void *refs;
+    kptr_t func;
+} find_imports_ref_args_t;
 
+static bool find_imports_ref_cb(const kptr_t *ptr, void *arg)
+{
+    find_imports_ref_args_t *args = arg;
+    ARRCAST(kptr_t, refs, args->refs);
+    bool bind = false;
+    kptr_t addr = macho_fixup(args->macho, *ptr, &bind, NULL, NULL, NULL);
+    if(!bind && addr == args->func)
+    {
+        kptr_t ref = macho_ptov(args->macho, ptr);
+        DBG(1, "ref: " ADDR, ref);
+        ARRPUSH(*refs, ref);
+    }
+    return true;
+}
+
+typedef struct
+{
+    void *refs;
+    void *arr;
+} find_imports_alias_args_t;
+
+static bool find_imports_alias_cb(const void *ptr, kptr_t addr, size_t size, uint32_t prot, void *arg)
+{
+    if(!(prot & VM_PROT_EXECUTE))
+    {
+        return true;
+    }
+    find_imports_alias_args_t *args = arg;
+    ARRCAST(kptr_t, refs, args->refs);
+    ARRCAST(kptr_t, aliases, args->arr);
+    STEP_MEM(uint32_t, mem, ptr, size, 3)
+    {
+        const adr_t *adrp = (const adr_t*)mem;
+        if(!is_adrp(adrp))
+        {
+            continue;
+        }
+        kptr_t offset = (uintptr_t)adrp - (uintptr_t)ptr;
+        kptr_t alias = addr + offset;
+        kptr_t target = 0;
+        if(!get_import_target(adrp, alias, (size - offset) / sizeof(uint32_t) >= 4, &target))
+        {
+            continue;
+        }
+        for(size_t i = 0; i < refs->idx; ++i)
+        {
+            if(target == refs->val[i])
+            {
+                DBG(1, "alias: " ADDR, alias);
+                ARRPUSH(*aliases, alias);
+                return false; // stop searching
+            }
+        }
+    }
+    return true;
+}
+
+static bool find_imports(macho_t *macho, void *arr, kptr_t func)
+{
+    if(macho_is_kext(macho))
+    {
+        return true;
+    }
+
+    ARRDEF(kptr_t, refs, NUM_KEXTS_EXPECT);
+    find_imports_ref_args_t ptr_args =
+    {
+        .macho = macho,
+        .refs = &refs,
+        .func = func,
+    };
+    if(!macho_foreach_ptr(macho, &find_imports_ref_cb, &ptr_args))
+    {
+        return false;
+    }
+    find_imports_alias_args_t map_args =
+    {
+        .refs = &refs,
+        .arr = arr,
+    };
+    macho_foreach_map(macho, &find_imports_alias_cb, &map_args);
+    ARRFREE(refs);
+    return true;
+}
+#endif
+
+#if 0
+static bool is_part_of_vtab(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, relocrange_t *locreloc, size_t nlocreloc, sym_t *exreloc, size_t nexreloc, kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+{
+    if(idx == 0)
+    {
+        return true;
+    }
+    if(fixupKind != DYLD_CHAINED_PTR_NONE)
+    {
+        bool bind;
+        size_t skip = 0;
+        macho_fixup(macho, vtab[idx - 1], &bind, NULL, NULL, &skip);
+        if(skip == sizeof(kptr_t))
+        {
+            return true;
+        }
+        if(skip != 0)
+        {
+            return false;
+        }
+        // If skip is == 0, it's possible that a new fixup chain starts right here
+        return macho_is_ptr(macho, &vtab[idx]);
+    }
+    else
+    {
+        kptr_t val = vtabaddr + sizeof(kptr_t) * idx;
+        const char *sym = find_sym_by_addr(val, exreloc, nexreloc);
+        if(sym)
+        {
+            return true;
+        }
+        return bsearch(&val, locreloc, nlocreloc, sizeof(*locreloc), &compare_range) != NULL;
+    }
+}
+#else
+static bool is_part_of_vtab(macho_t *macho, const kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+{
+    // TODO: hoist this to the callsites?
+    const void *segptr = NULL;
+    size_t segsize = 0;
+    if(!macho_segment_for_ptr(macho, vtab, &segptr, NULL, &segsize, NULL))
+    {
+        ERR("vtable ptr (" ADDR ") is not in any segment.", vtabaddr);
+        exit(-1);
+    }
+    if((segsize - ((uintptr_t)vtab - (uintptr_t)segptr)) / sizeof(kptr_t) <= idx)
+    {
+        return false;
+    }
+    return macho_is_ptr(macho, &vtab[idx]);
+}
+#endif
+
+#if 0
+static void find_str(void *kernel, size_t kernelsize, void *arg, const char *str)
+{
+    ARRCAST(kptr_t, arr, arg);
+    size_t len = strlen(str) + 1;
+    for(size_t off = 0; off < kernelsize; )
+    {
+        const char *ptr = memmem((void*)((uintptr_t)kernel + off), kernelsize - off, str, len);
+        if(!ptr)
+        {
+            break;
+        }
+        size_t diff = (uintptr_t)ptr - (uintptr_t)kernel;
+        kptr_t ref = off2addr(kernel, diff);
+        DBG("strref(%s): " ADDR, str, ref);
+        ARRPUSH(*arr, ref);
+        off = diff + len;
+    }
+}
+#else
+typedef struct
+{
+    void *arr;
+    const char *str;
+} find_str_args_t;
+
+static bool find_str_cb(kptr_t addr, void *arg)
+{
+    find_str_args_t *args = arg;
+    DBG(1, "strref(%s): " ADDR, args->str, addr);
+    ARRCAST(kptr_t, arr, args->arr);
+    ARRPUSH(*arr, addr);
+    return true;
+}
+
+static bool find_str(macho_t *macho, void *arg, const char *str)
+{
+    find_str_args_t args =
+    {
+        .arr = arg,
+        .str = str,
+    };
+    size_t len = strlen(str) + 1;
+    return macho_find_bytes(macho, str, len, 1, find_str_cb, &args);
+}
+#endif
+
+#if 0
 static CFTypeRef get_prelink_info(mach_hdr_t *hdr)
 {
     CFTypeRef info = NULL;
@@ -427,6 +624,501 @@ out:;
     if(err) CFRelease(err);
     return info;
 }
+#endif
+
+typedef struct
+{
+    macho_t *macho;
+    void *prev;
+    void *cur;
+    void *strrefs;
+    const char *str;
+    bool first;
+} OSMetaClassConstructor_args_t;
+
+static bool OSMetaClassConstructor_cb(const void *ptr, kptr_t addr, size_t size, uint32_t prot, void *arg)
+{
+    if(!(prot & VM_PROT_EXECUTE))
+    {
+        return true;
+    }
+    OSMetaClassConstructor_args_t *args = arg;
+    ARRCAST(kptr_t, strrefs, args->strrefs);
+    ARRCAST(kptr_t, curCand, args->cur);
+    ARRCAST(kptr_t, prevCand, args->prev);
+    STEP_MEM(uint32_t, mem, ptr, size, 2)
+    {
+        adr_t     *adr = (adr_t*    )(mem + 0);
+        add_imm_t *add = (add_imm_t*)(mem + 1);
+        if
+        (
+            (is_adr(adr)  && is_nop(mem + 1) && adr->Rd == 1) ||
+            (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 1)
+        )
+        {
+            kptr_t refloc = (uintptr_t)mem - (uintptr_t)ptr + addr,
+                   ref    = refloc;
+            if(is_adrp(adr))
+            {
+                ref &= ~0xfff;
+                ref += get_add_sub_imm(add);
+            }
+            ref += get_adr_off(adr);
+            for(size_t i = 0; i < strrefs->idx; ++i)
+            {
+                if(ref == strrefs->val[i])
+                {
+                    DBG(1, "Found ref to \"%s\" at " ADDR, args->str, refloc);
+                    goto look_for_bl;
+                }
+            }
+            continue;
+        look_for_bl:;
+            STEP_MEM(uint32_t, m, mem + 2, size - ((uintptr_t)(mem + 2) - (uintptr_t)ptr), 1)
+            {
+                kptr_t bladdr = (uintptr_t)m - (uintptr_t)ptr + addr,
+                       blref  = bladdr;
+                bl_t *bl = (bl_t*)m;
+                if(is_bl(bl))
+                {
+                    a64_state_t state;
+                    if(a64_emulate(args->macho, &state, mem, &a64cb_check_equal, (void*)m, true, true, kEmuFnIgnore) != kEmuEnd)
+                    {
+                        // a64_emulate should've printed error already
+                        goto skip;
+                    }
+                    if(!(state.valid & (1 << 1)) || !(state.wide & (1 << 1)) || state.x[1] != ref)
+                    {
+                        DBG(1, "Value of x1 changed, skipping...");
+                        goto skip;
+                    }
+                    blref += get_bl_off(bl);
+                    DBG(1, "Considering constructor " ADDR, blref);
+                    size_t idx = -1;
+                    for(size_t i = 0; i < curCand->idx; ++i)
+                    {
+                        if(curCand->val[i] == blref)
+                        {
+                            idx = i;
+                            break;
+                        }
+                    }
+                    // If we have this already, just skip
+                    if(idx == -1)
+                    {
+                        // first iteration: collect
+                        // subsequent iterations: eliminate
+                        if(!args->first)
+                        {
+                            idx = -1;
+                            for(size_t i = 0; i < prevCand->idx; ++i)
+                            {
+                                if(prevCand->val[i] == blref)
+                                {
+                                    idx = i;
+                                    break;
+                                }
+                            }
+                            if(idx == -1)
+                            {
+                                DBG(1, "Candidate " ADDR " not in prev list.", bladdr);
+                                goto skip;
+                            }
+                        }
+                        ARRPUSH(*curCand, blref);
+                    }
+                    goto skip;
+                }
+                else if(!is_linear_inst(m))
+                {
+                    WRN("Unexpected instruction at " ADDR, bladdr);
+                    goto skip;
+                }
+            }
+            ERR("Reached end of segment without finding bl from " ADDR, refloc);
+            return false;
+        }
+    skip:;
+    }
+    return true;
+}
+
+typedef struct
+{
+    kptr_t OSMetaClassMetaClass;
+    kptr_t OSObjectGetMetaClass;
+} getMetaClass_args_t;
+
+static bool getMetaClass_cb(const void *ptr, kptr_t addr, size_t size, uint32_t prot, void *arg)
+{
+    if(!(prot & VM_PROT_EXECUTE))
+    {
+        return true;
+    }
+    getMetaClass_args_t *args = arg;
+    STEP_MEM(uint32_t, mem, ptr, size, 3)
+    {
+        const adr_t     *adr = (const adr_t*    )(mem + 0);
+        const add_imm_t *add = (const add_imm_t*)(mem + 1);
+        const ret_t     *ret = (const ret_t*    )(mem + 2);
+        if
+        (
+            is_ret(ret) &&
+            (
+                (is_adr(adr) && is_nop(mem + 1) && adr->Rd == 0) ||
+                (is_adrp(adr) && is_add_imm(add) && adr->Rd == add->Rn && add->Rd == 0)
+            )
+        )
+        {
+            kptr_t refloc = (uintptr_t)mem - (uintptr_t)ptr + addr,
+                   ref    = refloc;
+            if(is_adrp(adr))
+            {
+                ref &= ~0xfff;
+                ref += get_add_sub_imm(add);
+            }
+            ref += get_adr_off(adr);
+            if(ref == args->OSMetaClassMetaClass)
+            {
+                if((uintptr_t)mem > (uintptr_t)ptr && is_bti((const bti_t*)(mem - 1)))
+                {
+                    refloc -= sizeof(uint32_t);
+                }
+                if(args->OSObjectGetMetaClass == -1)
+                {
+                    ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, refloc);
+                }
+                else if(args->OSObjectGetMetaClass != 0)
+                {
+                    ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, args->OSObjectGetMetaClass);
+                    ERR("More than one candidate for OSMetaClass::getMetaClass: " ADDR, refloc);
+                    args->OSObjectGetMetaClass = -1;
+                }
+                else
+                {
+                    DBG(1, "OSMetaClass::getMetaClass: " ADDR, refloc);
+                    args->OSObjectGetMetaClass = refloc;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+typedef struct
+{
+    macho_t *macho;
+    void *strref;
+    kptr_t *pure_virtual;
+} pure_virtual_args_t;
+
+static bool pure_virtual_cb(const void *ptr, kptr_t addr, size_t size, uint32_t prot, void *arg)
+{
+    if(!(prot & VM_PROT_EXECUTE))
+    {
+        return true;
+    }
+    pure_virtual_args_t *args = arg;
+    ARRCAST(kptr_t, strref, args->strref);
+
+    STEP_MEM(uint32_t, mem, ptr, size, 5) // TODO: 6
+    {
+#if 0
+        adr_t      *adr1 = (adr_t*     )(mem + 0);
+        add_imm_t  *add1 = (add_imm_t* )(mem + 1);
+        str_imm_t  *stri = (str_imm_t* )(mem + 2);
+        str_uoff_t *stru = (str_uoff_t*)(mem + 2);
+        adr_t      *adr2 = (adr_t*     )(mem + 3);
+        add_imm_t  *add2 = (add_imm_t* )(mem + 4);
+        bl_t       *bl   = (bl_t*      )(mem + 5);
+        if
+        (
+            is_bl(bl) &&
+            (
+                (is_adr(adr2)  && is_nop(mem + 4)  && adr2->Rd == 0) ||
+                (is_adrp(adr2) && is_add_imm(add2) && adr2->Rd == add2->Rn && add2->Rd == 0)
+            ) &&
+            (
+                (is_str_uoff(stru) && stru->Rn == 31 && get_str_uoff(stru) == 0) ||
+                (is_str_pre(stri)  && stri->Rn == 31)
+            ) &&
+            (
+                // stri and stru have Rt and Rn at same offsets
+                (is_adr(adr1)  && is_nop(mem + 1)  && adr1->Rd == stru->Rt) ||
+                (is_adrp(adr1) && is_add_imm(add1) && adr1->Rd == add1->Rn && add1->Rd == stru->Rt)
+            )
+        )
+#endif
+        adr_t      *adr1 = (adr_t*     )(mem + 0);
+        add_imm_t  *add1 = (add_imm_t* )(mem + 1);
+        adr_t      *adr2 = (adr_t*     )(mem + 3);
+        add_imm_t  *add2 = (add_imm_t* )(mem + 4);
+        if
+        (
+            (is_adr(adr1)  && is_nop((uint32_t*)add1)) ||
+            (is_adrp(adr1) && is_add_imm(add1) && adr1->Rd == add1->Rn)
+        )
+        {
+            kptr_t refloc = (uintptr_t)mem - (uintptr_t)ptr + addr,
+                   ref1   = refloc,
+                   ref2   = refloc + 3 * sizeof(uint32_t);
+            if(is_adrp(adr1))
+            {
+                ref1 &= ~0xfff;
+                ref1 += get_add_sub_imm(add1);
+            }
+            ref1 += get_adr_off(adr1);
+            for(size_t i = 0; i < strref->idx; ++i)
+            {
+                if(ref1 == strref->val[i])
+                {
+                    DBG(1, "Found ref to \"__cxa_pure_virtual\" at " ADDR, refloc);
+                    goto ref_matches;
+                }
+            }
+            continue;
+
+        ref_matches:;
+            for(size_t i = 0, bound = (const uint32_t*)((uintptr_t)ptr + size) - (const uint32_t*)adr2, max = bound > 5 ? 5 : bound; i < max; ++i)
+            {
+                if
+                (
+                    (is_adr(adr2)  && is_nop((uint32_t*)add2) && adr2->Rd == 0) ||
+                    (is_adrp(adr2) && is_add_imm(add2)        && adr2->Rd == add2->Rn && add2->Rd == 0)
+                )
+                {
+                    goto x0_matches;
+                }
+                ++adr2;
+                ++add2;
+            }
+            DBG(1, "__cxa_pure_virtual: failed to find adr(p) x0");
+            continue;
+
+        x0_matches:;
+            if(is_adrp(adr2))
+            {
+                ref2 &= ~0xfff;
+                ref2 += get_add_sub_imm(add2);
+            }
+            ref2 += get_adr_off(adr2);
+            const char *x0 = macho_vtop(args->macho, ref2, 0);
+            if(strcmp(x0, "\"%s\"") != 0 && strcmp(x0, "%s @%s:%d") != 0)
+            {
+                DBG(1, "__cxa_pure_virtual: x0 != \"%%s\" && x0 != %%s @%%s:%%d");
+                continue;
+            }
+
+            add_imm_t *add = (add_imm_t*)(mem - 1);
+            for(size_t i = 0, bound = (const uint32_t*)add - (const uint32_t*)ptr, max = bound > 5 ? 5 : bound; i < max; ++i)
+            {
+                if(is_add_imm(add) && add->Rd == 29 && add->Rn == 31) // ignore add amount
+                {
+                    goto x29_matches;
+                }
+                --add;
+            }
+            DBG(1, "__cxa_pure_virtual: add x29, sp, ...");
+            continue;
+
+        x29_matches:;
+            uint32_t *loc = (uint32_t*)add;
+            refloc -= (mem - loc) * sizeof(uint32_t);
+
+            stp_t *stp = (stp_t*)(loc - 1);
+            if(!((is_stp_uoff(stp) || is_stp_pre(stp)) && stp->Rt == 29 && stp->Rt2 == 30 && stp->Rn == 31))
+            {
+                DBG(1, "__cxa_pure_virtual: stp x29, x30, [sp, ...]");
+                continue;
+            }
+            loc--;
+            refloc -= sizeof(uint32_t);
+
+            if(is_stp_uoff(stp))
+            {
+                sub_imm_t *sub = (sub_imm_t*)(loc - 1);
+                if(!(is_sub_imm(sub) && sub->Rd == 31 && sub->Rn == 31))
+                {
+                    DBG(1, "__cxa_pure_virtual: sub sp, sp, ...");
+                    continue;
+                }
+                loc--;
+                refloc -= sizeof(uint32_t);
+            }
+            pacsys_t *pac = (pacsys_t*)(loc - 1);
+            if(is_pacsys(pac))
+            {
+                loc--;
+                refloc -= sizeof(uint32_t);
+            }
+            if(*args->pure_virtual == -1)
+            {
+                DBG(1, "__cxa_pure_virtual candidate: " ADDR, refloc);
+            }
+            else if(*args->pure_virtual != 0)
+            {
+                DBG(1, "__cxa_pure_virtual candidate: " ADDR, *args->pure_virtual);
+                DBG(1, "__cxa_pure_virtual candidate: " ADDR, refloc);
+                *args->pure_virtual = -1;
+            }
+            else
+            {
+                *args->pure_virtual = refloc;
+            }
+        }
+    }
+    return true;
+}
+
+typedef struct
+{
+    macho_t *macho;
+    //void *candidates;
+    size_t VtabGetMetaClassIdx;
+    metaclass_t *meta;
+    kptr_t func;
+} vtab_via_getMetaClass_ptr_args_t;
+
+static bool vtab_via_getMetaClass_ptr_cb(const kptr_t *ptr, void *arg)
+{
+    vtab_via_getMetaClass_ptr_args_t *args = arg;
+    //ARRCAST(kptr_t, candidates, args->candidates);
+    size_t VtabGetMetaClassIdx = args->VtabGetMetaClassIdx;
+    metaclass_t *meta = args->meta;
+
+    bool bind = false;
+    kptr_t addr = macho_fixup(args->macho, *ptr, &bind, NULL, NULL, NULL);
+    if(!bind && addr == args->func)
+    {
+        const void *segptr = NULL;
+        kptr_t segaddr = 0;
+        size_t segsize = 0;
+        if(!macho_segment_for_ptr(args->macho, ptr, &segptr, &segaddr, &segsize, NULL))
+        {
+            ERR("getMetaClass vtable ptr is not in any segment.");
+            return false;
+        }
+
+        if((uintptr_t)ptr - (uintptr_t)segptr < (VtabGetMetaClassIdx + 2) * sizeof(kptr_t))
+        {
+            WRN("getMetaClass vtable ptr too close to start of segment.");
+            return true;
+        }
+
+        if(ptr[-(VtabGetMetaClassIdx + 1)] != 0x0 || ptr[-(VtabGetMetaClassIdx + 2)] != 0x0)
+        {
+            WRN("getMetaClass vtable ptr vtable not deceded by zero ptrs.");
+            return true;
+        }
+
+        kptr_t ref = (uintptr_t)(ptr - VtabGetMetaClassIdx) - (uintptr_t)segptr + segaddr;
+        if(meta->vtab == 0)
+        {
+            meta->vtab = ref;
+        }
+        else
+        {
+            if(meta->vtab != -1)
+            {
+                DBG(1, "More than one vtab for %s: " ADDR, meta->name, meta->vtab);
+                //ARRPUSH(candidates, meta->vtab);
+                meta->vtab = -1;
+            }
+            DBG(1, "More than one vtab for %s: " ADDR, meta->name, ref);
+            //ARRPUSH(candidates, ref);
+        }
+    }
+    return true;
+}
+
+typedef struct
+{
+    macho_t *macho;
+    void *metas;
+    //void *candidates;
+    size_t VtabGetMetaClassIdx;
+    kptr_t OSMetaClassMetaClass;
+} vtab_via_getMetaClass_args_t;
+
+static bool vtab_via_getMetaClass_cb(const void *ptr, kptr_t addr, size_t size, uint32_t prot, void *arg)
+{
+    if(!(prot & VM_PROT_EXECUTE))
+    {
+        return true;
+    }
+    vtab_via_getMetaClass_args_t *args = arg;
+    ARRCAST(metaclass_t, metas, args->metas);
+    //ARRCAST(kptr_t, candidates, args->candidates);
+
+    STEP_MEM(uint32_t, mem, ptr, size, 2)
+    {
+        adr_t *adr = (adr_t*)mem;
+        add_imm_t *add = (add_imm_t*)(mem + 1);
+        add_imm_t *add2 = (add_imm_t*)(mem + 2);
+        nop_t *nop = (nop_t*)(mem + 1);
+        ret_t *ret1 = (ret_t*)(mem + 1);
+        ret_t *ret2 = (ret_t*)(mem + 2);
+        ret_t *ret3 = (ret_t*)(mem + 3);
+        bool iz_adrp = is_adrp(adr),
+             iz_add  = is_add_imm(add);
+        size_t nleft = (const uint32_t*)((uintptr_t)ptr + size) - mem;
+        if
+        (
+            (nleft >= 3 && iz_adrp && iz_add && is_ret(ret2) && adr->Rd == add->Rn && add->Rd == 0) ||
+            (is_adr(adr) && (is_ret(ret1) || (nleft >= 3 && is_nop(nop) && is_ret(ret2))) && adr->Rd == 0) ||
+            (nleft >= 4 && is_ret(ret3) && is_add_imm(add2) && iz_add && iz_adrp && add2->Rd == 0 && add2->Rn == add->Rd && adr->Rd == add->Rn) // iOS 9
+        )
+        {
+            kptr_t func = (uintptr_t)mem - (uintptr_t)ptr + addr,
+                   ref  = func;
+            if(iz_adrp)
+            {
+                ref &= ~0xfff;
+            }
+            ref += get_adr_off(adr);
+            if(iz_add)
+            {
+
+                ref += get_add_sub_imm(add);
+                if(is_add_imm(add2))
+                {
+                    ref += get_add_sub_imm(add2);
+                }
+            }
+            if(ref == args->OSMetaClassMetaClass)
+            {
+                continue;
+            }
+            for(size_t i = 0; i < metas->idx; ++i)
+            {
+                metaclass_t *meta = &metas->val[i];
+                if(meta->addr != ref)
+                {
+                    continue;
+                }
+                DBG(1, "Got func " ADDR " referencing MetaClass %s", func, meta->name);
+                //args->candidates.idx = 0;
+                if(!meta->vtab)
+                {
+                    vtab_via_getMetaClass_ptr_args_t ptr_args =
+                    {
+                        .macho = args->macho,
+                        //.candidates = candidates,
+                        .VtabGetMetaClassIdx = args->VtabGetMetaClassIdx,
+                        .meta = meta,
+                        .func = func,
+                    };
+                    if(!macho_foreach_ptr(args->macho, &vtab_via_getMetaClass_ptr_cb, &ptr_args))
+                    {
+                        return false;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    return true;
+}
 
 static void print_help(const char *self)
 {
@@ -462,7 +1154,7 @@ static void print_help(const char *self)
                     "    -p  Filter parents of ClassName (implies -C)\n"
                     "\n"
                     "Other options:\n"
-                    "    -d  Debug output\n"
+                    "    -d  Increase debug output level\n"
                     "    -G  Sort (group) by bundle identifier\n"
                     "    -n  Disable color output\n"
                     "    -S  Sort by class name\n"
@@ -511,7 +1203,7 @@ int main(int argc, const char **argv)
             {
                 case 'd':
                 {
-                    debug = true;
+                    ++debug;
                     break;
                 }
                 case 'a':
@@ -725,13 +1417,16 @@ int main(int argc, const char **argv)
     }
     bool want_vtabs = opt.vtab || opt.overrides || opt.ofilt;
 
-    void *kernel = NULL;
+    macho_t *macho = macho_open(argv[aoff++]);
+    if(!macho) return -1;
+
+    /*void *kernel = NULL;
     size_t kernelsize = 0;
     r = map_file(argv[aoff++], PROT_READ, &kernel, &kernelsize);
     if(r != 0) return r;
     mach_hdr_t *hdr = kernel;
     r = validate_macho(&kernel, &kernelsize, &hdr, NULL);
-    if(r != 0) return r;
+    if(r != 0) return r;*/
 
     symmap_t symmap = { 0, NULL };
     if(have_symmap)
@@ -747,6 +1442,7 @@ int main(int argc, const char **argv)
     ARRDEF(kptr_t, aliases, NUM_KEXTS_EXPECT);
     ARRDEF(kptr_t, altaliases, NUM_KEXTS_EXPECT);
 
+#if 0
     kptr_t OSMetaClassConstructor = 0,
            OSMetaClassAltConstructor = 0,
            OSMetaClassVtab = 0,
@@ -878,7 +1574,17 @@ int main(int argc, const char **argv)
             }
         }
     }
+#else
+    // TODO: generalise OSObjectVtab & OSObjectGetMetaClass names?
+    kptr_t OSMetaClassConstructor = 0,
+           OSMetaClassAltConstructor = 0,
+           OSMetaClassVtab = 0,
+           OSObjectVtab = 0,
+           OSObjectGetMetaClass = 0,
+           pure_virtual = 0;
+#endif
 
+#if 0
     DBG("Got %lu symbols", nsyms);
     if(nsyms > 0)
     {
@@ -927,7 +1633,48 @@ int main(int argc, const char **argv)
             DBG("OSMetaClassAltConstructor: " ADDR, OSMetaClassAltConstructor);
         }
     }
+#else
+    if(macho_have_symbols(macho))
+    {
+        if(macho_is_kext(macho))
+        {
+            OSMetaClassConstructor    = macho_symbol(macho, "__ZN11OSMetaClassC2EPKcPKS_j.stub");
+            OSMetaClassAltConstructor = macho_symbol(macho, "__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t.stub");
+        }
+        else
+        {
+            OSMetaClassConstructor    = macho_symbol(macho, "__ZN11OSMetaClassC2EPKcPKS_j");
+            OSMetaClassAltConstructor = macho_symbol(macho, "__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t");
+            OSMetaClassVtab           = macho_symbol(macho, "__ZTV11OSMetaClass");
+            OSObjectVtab              = macho_symbol(macho, "__ZTV8OSObject");
+            OSObjectGetMetaClass      = macho_symbol(macho, "__ZNK8OSObject12getMetaClassEv");
+            if(OSMetaClassVtab)
+            {
+                OSMetaClassVtab += 2 * sizeof(kptr_t);
+                DBG(1, "OSMetaClassVtab: " ADDR, OSMetaClassVtab);
+            }
+            if(OSObjectVtab)
+            {
+                OSObjectVtab += 2 * sizeof(kptr_t);
+                DBG(1, "OSObjectVtab: " ADDR, OSObjectVtab);
+            }
+            if(OSObjectGetMetaClass)
+            {
+                DBG(1, "OSObjectGetMetaClass: " ADDR, OSObjectGetMetaClass);
+            }
+        }
+        if(OSMetaClassConstructor)
+        {
+            DBG(1, "OSMetaClassConstructor: " ADDR, OSMetaClassConstructor);
+        }
+        if(OSMetaClassAltConstructor)
+        {
+            DBG(1, "OSMetaClassAltConstructor: " ADDR, OSMetaClassAltConstructor);
+        }
+    }
+#endif
 
+#if 0
     DBG("Got %lu exreloc entries", nexreloc);
     if(nexreloc > 0)
     {
@@ -941,24 +1688,28 @@ int main(int argc, const char **argv)
         qsort(exrelocA, nexreloc, sizeof(*exrelocA), &compare_sym_addrs);
         qsort(exrelocB, nexreloc, sizeof(*exrelocB), &compare_sym_names);
     }
+#endif
 
     if(!OSMetaClassConstructor)
     {
-        if(hdr->filetype == MH_KEXT_BUNDLE)
+        if(macho_is_kext(macho))
         {
-            DBG("Failed to find OSMetaClassConstructor symbol, trying relocation instead.");
-            OSMetaClassConstructor = find_stub_for_reloc(kernel, hdr, fixupKind, have_plk_text_exec, exrelocB, nexreloc, "__ZN11OSMetaClassC2EPKcPKS_j");
+            DBG(1, "Failed to find OSMetaClassConstructor symbol, trying relocation instead.");
+            OSMetaClassConstructor = find_stub_for_reloc(macho, "__ZN11OSMetaClassC2EPKcPKS_j");
         }
         else
         {
-            DBG("Failed to find OSMetaClassConstructor symbol, falling back to binary matching.");
-#define NSTRREF 3
-            const char *strs[NSTRREF] = { "IORegistryEntry", "IOService", "IOUserClient" };
+            DBG(1, "Failed to find OSMetaClassConstructor symbol, falling back to binary matching.");
+            const char *strs[] = { "IORegistryEntry", "IOService", "IOUserClient" };
+#define NSTRREF (sizeof(strs)/sizeof(strs[0]))
             ARRDECL(kptr_t, strrefs)[NSTRREF];
             for(size_t i = 0; i < NSTRREF; ++i)
             {
                 ARRINIT(strrefs[i], 4);
-                find_str(kernel, kernelsize, &strrefs[i], strs[i]);
+                if(!find_str(macho, &strrefs[i], strs[i]))
+                {
+                    return -1;
+                }
                 if(strrefs[i].idx == 0)
                 {
                     ERR("Failed to find string: %s", strs[i]);
@@ -975,6 +1726,7 @@ int main(int argc, const char **argv)
             {
                 ++constrIdx;
                 constrCandCurr.idx = 0;
+#if 0
                 FOREACH_CMD(hdr, cmd)
                 {
                     if(cmd->cmd == MACH_SEGMENT)
@@ -1080,6 +1832,21 @@ int main(int argc, const char **argv)
                         }
                     }
                 }
+#else
+                OSMetaClassConstructor_args_t args =
+                {
+                    .macho = macho,
+                    .prev = &constrCandPrev,
+                    .cur = &constrCandCurr,
+                    .strrefs = &strrefs[j],
+                    .str = strs[j],
+                    .first = j != 0,
+                };
+                if(!macho_foreach_map(macho, &OSMetaClassConstructor_cb, &args))
+                {
+                    return -1;
+                }
+#endif
             }
             if(constrCandCurr.idx > 1)
             {
@@ -1106,26 +1873,38 @@ int main(int argc, const char **argv)
             ERR("Failed to find OSMetaClassConstructor.");
             return -1;
         }
-        DBG("OSMetaClassConstructor: " ADDR, OSMetaClassConstructor);
+        DBG(1, "OSMetaClassConstructor: " ADDR, OSMetaClassConstructor);
     }
     ARRPUSH(aliases, OSMetaClassConstructor);
 
-    find_imports(kernel, kernelsize, hdr, kbase, fixupKind, have_plk_text_exec, &aliases, OSMetaClassConstructor);
+    if(!find_imports(macho, &aliases, OSMetaClassConstructor))
+    {
+        return -1;
+    }
 
     ARRDEF(metaclass_t, metas, NUM_METACLASSES_EXPECT);
     ARRDEF(metaclass_candidate_t, namelist, 2 * NUM_METACLASSES_EXPECT);
     metaclass_t *OSMetaClass = NULL;
 
-    find_meta_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &aliases, &metas, &namelist, bsyms, nsyms, &meta_constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor);
+    if(!find_meta_constructor_calls(macho, want_vtabs, &aliases, &metas, &namelist, &meta_constructor_cb, OSMetaClassAltConstructor ? NULL : &OSMetaClassAltConstructor))
+    {
+        return -1;
+    }
     if(OSMetaClassAltConstructor)
     {
         ARRPUSH(altaliases, OSMetaClassAltConstructor);
-        find_imports(kernel, kernelsize, hdr, kbase, fixupKind, have_plk_text_exec, &altaliases, OSMetaClassAltConstructor);
-        find_meta_constructor_calls(kernel, hdr, kbase, fixupKind, have_plk_text_exec, want_vtabs, &altaliases, &metas, &namelist, bsyms, nsyms, &meta_alt_constructor_cb, NULL);
+        if(!find_imports(macho, &altaliases, OSMetaClassAltConstructor))
+        {
+            return -1;
+        }
+        if(!find_meta_constructor_calls(macho, want_vtabs, &altaliases, &metas, &namelist, &meta_alt_constructor_cb, NULL))
+        {
+            return -1;
+        }
     }
 
-    // This is a safety check to make sure we're not missing anything.
-    DBG("Got %lu names (probably a ton of dupes)", namelist.idx);
+    // This is a safety check to try and detect metaclass names that we see, but don't end up finding constructors for
+    DBG(1, "Got %lu names (probably a ton of dupes)", namelist.idx);
     qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_meta_candidates);
     for(size_t i = 0; i < namelist.idx; ++i)
     {
@@ -1157,11 +1936,10 @@ int main(int argc, const char **argv)
                 return -1;
             }
             a64_state_t state;
-            bool success = multi_call_emulate(kernel, kbase, fixupKind, current->fncall, current->fncall, &state, sp, bitstr, 0xf, current->name);
+            bool success = multi_call_emulate(macho, current->fncall, current->fncall, &state, sp, bitstr, 0xf, current->name);
             if(success)
             {
-                mach_seg_t *seg = seg4ptr(kernel, current->fncall);
-                kptr_t bladdr = seg->vmaddr + ((uintptr_t)current->fncall - ((uintptr_t)kernel + seg->fileoff));
+                kptr_t bladdr = macho_ptov(macho, current->fncall);
                 if((state.wide & 0xf) != 0x7)
                 {
                     WRN("Skipping constructor call with unexpected registers width (%x) at " ADDR, state.wide, bladdr);
@@ -1169,8 +1947,8 @@ int main(int argc, const char **argv)
                 }
                 else
                 {
-                    DBG("Processing triaged constructor call at " ADDR " (%s)", bladdr, current->name);
-                    add_metaclass(kernel, kbase, fixupKind, &metas, &state, current->fncall, want_vtabs, bsyms, nsyms);
+                    DBG(1, "Processing triaged constructor call at " ADDR " (%s)", bladdr, current->name);
+                    add_metaclass(macho, &metas, &state, current->fncall, want_vtabs);
                     free(sp);
                     goto onward;
                 }
@@ -1193,7 +1971,7 @@ int main(int argc, const char **argv)
     }
     ARRFREE(namelist);
 
-    DBG("Got %lu metaclasses", metas.idx);
+    DBG(1, "Got %lu metaclasses", metas.idx);
     for(size_t i = 0; i < metas.idx; ++i)
     {
         metaclass_t *meta = &metas.val[i];
@@ -1233,9 +2011,9 @@ int main(int argc, const char **argv)
         }
     }
 
-    CFTypeRef prelink_info = NULL;
     if(want_vtabs)
     {
+#if 0
         ARRDEFEMPTY(relocrange_t, locreloc);
         if(fixupKind == DYLD_CHAINED_PTR_NONE)
         {
@@ -1258,8 +2036,7 @@ int main(int argc, const char **argv)
                     return -1;
                 }
 
-                if(!prelink_info) prelink_info = get_prelink_info(hdr);
-
+                CFTypeRef prelink_info = macho_prelink_info(macho);
                 if(prelink_info)
                 {
                     CFDataRef data = CFDictionaryGetValue(prelink_info, CFSTR("_PrelinkLinkKASLROffsets"));
@@ -1339,6 +2116,7 @@ int main(int argc, const char **argv)
             free(tmp);
             DBG("Got %lu locreloc ranges", locreloc.idx);
         }
+#endif
 
         metaclass_t *metaclassHandle = NULL;
         kptr_t OSMetaClassMetaClass = 0;
@@ -1356,41 +2134,43 @@ int main(int argc, const char **argv)
             }
         }
 
-        if(hdr->filetype == MH_KEXT_BUNDLE)
+        if(macho_is_kext(macho))
         {
-            for(size_t i = 0; i < nsyms; ++i)
+            size_t n = 0;
+            const sym_t *sym = macho_symbols_for_prefix(macho, "__ZTV", &n);
+            for(size_t i = 0; i < n; ++i)
             {
-                if(strncmp(bsyms[i].name, "__ZTV", 5) == 0)
+                // Despite all appearances, this is actually proper
+                char buf[512];
+                if(snprintf(buf, sizeof(buf), "__ZNK%s12getMetaClassEv", sym[i].name + 5) >= sizeof(buf))
                 {
-                    // Despite all appearances, this is actually proper
-                    char *str = NULL;
-                    asprintf(&str, "__ZNK%s12getMetaClassEv", bsyms[i].name + 5);
-                    if(!str)
+                    const char *s = sym[i].name + 5;
+                    while(*s >= '0' && *s <= '9')
                     {
-                        ERRNO("asprintf(ZNK)");
-                        return -1;
+                        ++s;
                     }
-                    kptr_t znk = find_sym_by_name(str, bsyms, nsyms);
-                    if(znk)
-                    {
-                        OSObjectVtab = bsyms[i].addr + 2 * sizeof(kptr_t);
-                        OSObjectGetMetaClass = znk;
-                        DBG("%s: " ADDR, bsyms[i].name, OSObjectVtab);
-                        DBG("%s: " ADDR, str, OSObjectGetMetaClass);
-                        free(str);
-                        goto after;
-                    }
-                    free(str);
+                    WRN("Class name too big for buffer: %s", s);
+                    continue;
                 }
+                kptr_t znk = macho_symbol(macho, buf);
+                if(!znk)
+                {
+                    continue;
+                }
+                OSObjectVtab = sym[i].addr + 2 * sizeof(kptr_t);
+                OSObjectGetMetaClass = znk;
+                DBG(1, "%s: " ADDR, sym[i].name, OSObjectVtab);
+                DBG(1, "%s: " ADDR, buf, OSObjectGetMetaClass);
+                break;
             }
-            after:;
         }
         else
         {
             if((metaclassHandle && !metaclassHandle->vtab) || !OSObjectVtab)
             {
-                DBG("Missing OSMetaClass vtab, falling back to binary matching.");
+                DBG(1, "Missing OSMetaClass vtab, falling back to binary matching.");
 
+#if 0
                 FOREACH_CMD(hdr, cmd)
                 {
                     if(cmd->cmd == MACH_SEGMENT)
@@ -1444,15 +2224,68 @@ int main(int argc, const char **argv)
                         }
                     }
                 }
+#else
+                const void *segptr = NULL;
+                kptr_t segaddr = 0;
+                size_t segsize = 0;
+                if(!macho_segment_for_addr(macho, OSMetaClassConstructor, &segptr, &segaddr, &segsize, NULL))
+                {
+                    ERR("Failed to find segment containing OSMetaClassConstructor");
+                    return -1;
+                }
+                kptr_t offset = OSMetaClassConstructor - segaddr;
+                const uint32_t *start = (const uint32_t*)((uintptr_t)segptr + offset);
+                STEP_MEM(uint32_t, mem, (uintptr_t)start, segsize - offset, 1)
+                {
+                    str_uoff_t *str = (str_uoff_t*)mem;
+                    if(is_str_uoff(str) && get_str_uoff(str) == 0)
+                    {
+                        a64_state_t state;
+                        for(size_t i = 0; i < 32; ++i)
+                        {
+                            state.x[i] = 0;
+                            state.q[i] = 0;
+                        }
+                        state.flags = 0;
+                        state.valid = 1;
+                        state.qvalid = 0;
+                        state.wide = 1;
+                        state.host = 0;
+                        if(a64_emulate(macho, &state, start, &a64cb_check_equal, (void*)mem, false, true, kEmuFnIgnore) == kEmuEnd)
+                        {
+                            if(!(state.valid & (1 << str->Rn)) || !(state.wide & (1 << str->Rn)) || !(state.valid & (1 << str->Rt)) || !(state.wide & (1 << str->Rt)))
+                            {
+                                DBG(1, "Bad valid/wide flags (%x/%x)", state.valid, state.wide);
+                            }
+                            else
+                            {
+                                OSMetaClassVtab = state.x[str->Rt];
+                                DBG(1, "OSMetaClassVtab " ADDR, OSMetaClassVtab);
+                                if(metaclassHandle && !metaclassHandle->vtab)
+                                {
+                                    metaclassHandle->vtab = OSMetaClassVtab;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    if(!is_linear_inst(mem))
+                    {
+                        DBG(1, "Bailing out due to non-linear instr at " ADDR, OSMetaClassConstructor + ((uintptr_t)mem - (uintptr_t)start));
+                        break;
+                    }
+                }
+#endif
             }
             if(!OSObjectVtab && !OSObjectGetMetaClass && OSMetaClassMetaClass) // Must happen together
             {
-                DBG("Missing OSObject vtab and OSObject::getMetaClass, falling back to binary matching.");
+                DBG(1, "Missing OSObject vtab and OSObject::getMetaClass, falling back to binary matching.");
 
                 // vtab
                 OSObjectVtab = OSMetaClassVtab;
 
                 // getMetaClass
+#if 0
                 FOREACH_CMD(hdr, cmd)
                 {
                     if(cmd->cmd == MACH_SEGMENT)
@@ -1474,7 +2307,7 @@ int main(int argc, const char **argv)
                                     )
                                 )
                                 {
-                                    kptr_t refloc = off2addr(kernel, (uintptr_t)adr - (uintptr_t)kernel),
+                                    kptr_t refloc = macho_ptov(macho, adr),
                                            ref    = refloc;
                                     if(is_adrp(adr))
                                     {
@@ -1505,6 +2338,18 @@ int main(int argc, const char **argv)
                         }
                     }
                 }
+#else
+                getMetaClass_args_t args =
+                {
+                    .OSMetaClassMetaClass = OSMetaClassMetaClass,
+                    .OSObjectGetMetaClass = OSObjectGetMetaClass,
+                };
+                if(!macho_foreach_map(macho, &getMetaClass_cb, &args))
+                {
+                    return -1;
+                }
+                OSObjectGetMetaClass = args.OSObjectGetMetaClass;
+#endif
                 if(OSObjectGetMetaClass == -1)
                 {
                     OSObjectGetMetaClass = 0;
@@ -1524,23 +2369,23 @@ int main(int argc, const char **argv)
                 ERR("Failed to find OSObjectGetMetaClass.");
                 return -1;
             }
-            kptr_t *ovtab = addr2ptr(kernel, OSObjectVtab);
+            const kptr_t *ovtab = macho_vtop(macho, OSObjectVtab, 0);
             if(!ovtab)
             {
-                ERR("OSObjectVtab lies outside all segments.");
+                ERR("OSObjectVtab is not in any segment.");
                 return -1;
             }
-            for(size_t i = 0; is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, ovtab, OSObjectVtab, i); ++i)
+            for(size_t i = 0; is_part_of_vtab(macho, ovtab, OSObjectVtab, i); ++i)
             {
                 bool bind = false;
-                if(kuntag(kbase, fixupKind, ovtab[i], &bind, NULL, NULL, NULL) == OSObjectGetMetaClass)
+                if(macho_fixup(macho, ovtab[i], &bind, NULL, NULL, NULL) == OSObjectGetMetaClass)
                 {
                     if(bind)
                     {
                         continue;
                     }
                     VtabGetMetaClassIdx = i;
-                    DBG("VtabGetMetaClassIdx: 0x%lx", VtabGetMetaClassIdx);
+                    DBG(1, "VtabGetMetaClassIdx: 0x%lx", VtabGetMetaClassIdx);
                     break;
                 }
             }
@@ -1552,25 +2397,35 @@ int main(int argc, const char **argv)
         }
 
         size_t VtabAllocIdx = 0;
-        if(hdr->filetype != MH_KEXT_BUNDLE)
+        if(!macho_is_kext(macho))
         {
-            do
+            pure_virtual = macho_symbol(macho, "___cxa_pure_virtual");
+            if(!pure_virtual)
             {
-                pure_virtual = find_sym_by_name("___cxa_pure_virtual", bsyms, nsyms);
-                if(pure_virtual)
-                {
-                    break;
-                }
-
                 ARRDEF(kptr_t, strref, 4);
-                find_str(kernel, kernelsize, &strref, "__cxa_pure_virtual");
+                if(!find_str(macho, &strref, "__cxa_pure_virtual"))
+                {
+                    return -1;
+                }
                 if(strref.idx == 0)
                 {
-                    DBG("Failed to find string: __cxa_pure_virtual");
-                    break;
+                    DBG(1, "Failed to find string: __cxa_pure_virtual");
                 }
-                DBG("Found \"__cxa_pure_virtual\" %lu times", strref.idx);
-
+                else
+                {
+                    DBG(1, "Found \"__cxa_pure_virtual\" %lu times", strref.idx);
+                    pure_virtual_args_t args =
+                    {
+                        .macho = macho,
+                        .strref = &strref,
+                        .pure_virtual = &pure_virtual,
+                    };
+                    if(!macho_foreach_map(macho, &pure_virtual_cb, &args))
+                    {
+                        return -1;
+                    }
+                }
+#if 0
                 FOREACH_CMD(hdr, cmd)
                 {
                     if(cmd->cmd == MACH_SEGMENT)
@@ -1617,7 +2472,7 @@ int main(int argc, const char **argv)
                                     (is_adrp(adr1) && is_add_imm(add1) && adr1->Rd == add1->Rn)
                                 )
                                 {
-                                    kptr_t refloc = off2addr(kernel, (uintptr_t)adr1 - (uintptr_t)kernel),
+                                    kptr_t refloc = macho_ptov(macho, adr1),
                                            ref1   = refloc,
                                            ref2   = refloc + 3 * sizeof(uint32_t);
                                     if(is_adrp(adr1))
@@ -1660,7 +2515,7 @@ int main(int argc, const char **argv)
                                         ref2 += get_add_sub_imm(add2);
                                     }
                                     ref2 += get_adr_off(adr2);
-                                    const char *x0 = addr2ptr(kernel, ref2);
+                                    const char *x0 = macho_vtop(macho, ref2, 0);
                                     if(strcmp(x0, "\"%s\"") != 0 && strcmp(x0, "%s @%s:%d"))
                                     {
                                         DBG("__cxa_pure_virtual: x0 != \"%%s\" && x0 != %%s @%%s:%%d");
@@ -1728,7 +2583,8 @@ int main(int argc, const char **argv)
                         }
                     }
                 }
-            } while(0);
+#endif
+            }
             if(pure_virtual == -1)
             {
                 WRN("Multiple __cxa_pure_virtual candidates!");
@@ -1736,7 +2592,7 @@ int main(int argc, const char **argv)
             }
             else if(pure_virtual)
             {
-                DBG("__cxa_pure_virtual: " ADDR, pure_virtual);
+                DBG(1, "__cxa_pure_virtual: " ADDR, pure_virtual);
             }
             else
             {
@@ -1745,18 +2601,18 @@ int main(int argc, const char **argv)
 
             if(pure_virtual && OSMetaClassVtab)
             {
-                kptr_t *ovtab = addr2ptr(kernel, OSMetaClassVtab);
+                const kptr_t *ovtab = macho_vtop(macho, OSMetaClassVtab, 0);
                 if(!ovtab)
                 {
-                    ERR("OSMetaClassVtab lies outside all segments.");
+                    ERR("OSMetaClassVtab is not in any segment.");
                     return -1;
                 }
-                for(size_t i = 0; is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, ovtab, OSObjectVtab, i); ++i)
+                for(size_t i = 0; is_part_of_vtab(macho, ovtab, OSObjectVtab, i); ++i)
                 {
-                    if(kuntag(kbase, fixupKind, ovtab[i], NULL, NULL, NULL, NULL) == pure_virtual)
+                    if(macho_fixup(macho, ovtab[i], NULL, NULL, NULL, NULL) == pure_virtual)
                     {
                         VtabAllocIdx = i;
-                        DBG("VtabAllocIdx: 0x%lx", VtabAllocIdx);
+                        DBG(1, "VtabAllocIdx: 0x%lx", VtabAllocIdx);
                         break;
                     }
                 }
@@ -1768,6 +2624,7 @@ int main(int argc, const char **argv)
             }
         }
 
+#if 0
         //ARRDEF(kptr_t, candidates, 0x100);
         FOREACH_CMD(hdr, cmd)
         {
@@ -1849,13 +2706,13 @@ int main(int argc, const char **argv)
                                                                             {
                                                                                 break;
                                                                             }
-                                                                            kptr_t *mem2 = addr2ptr(kernel, kbase + *start);
+                                                                            const kptr_t *mem2 = macho_vtop(macho, kbase + *start, 0);
                                                                             size_t skip = 0;
                                                                             do
                                                                             {
-                                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, NULL, &skip) == func)
+                                                                                if(macho_fixup(macho, *mem2, NULL, NULL, NULL, &skip) == func)
                                                                                 {
-                                                                                    kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
+                                                                                    kptr_t ref = macho_ptov(macho, mem2 - VtabGetMetaClassIdx);
                                                                                     if(meta->vtab == 0)
                                                                                     {
                                                                                         meta->vtab = ref;
@@ -1908,13 +2765,13 @@ int main(int argc, const char **argv)
                                                                     continue;
                                                                 }
                                                                 size_t off = (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx;
-                                                                kptr_t *mem2 = fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL ? addr2ptr(kernel, kbase + off) : (kptr_t*)((uintptr_t)kernel + off);
+                                                                const kptr_t *mem2 = fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL ? macho_vtop(macho, kbase + off, 0) : (kptr_t*)((uintptr_t)kernel + off);
                                                                 size_t skip = 0;
                                                                 do
                                                                 {
-                                                                    if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, NULL, &skip) == func)
+                                                                    if(macho_fixup(macho, *mem2, NULL, NULL, NULL, &skip) == func)
                                                                     {
-                                                                        kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
+                                                                        kptr_t ref = macho_ptov(macho, mem2 - VtabGetMetaClassIdx);
                                                                         if(meta->vtab == 0)
                                                                         {
                                                                             meta->vtab = ref;
@@ -1954,9 +2811,9 @@ int main(int argc, const char **argv)
                                                         {
                                                             STEP_MEM(kptr_t, mem2, (kptr_t*)((uintptr_t)kernel + seg2->fileoff) + VtabGetMetaClassIdx + 2, seg2->filesize - (VtabGetMetaClassIdx + 2) * sizeof(kptr_t), 1)
                                                             {
-                                                                if(kuntag(kbase, fixupKind, *mem2, NULL, NULL, NULL, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
+                                                                if(macho_fixup(macho, *mem2, NULL, NULL, NULL, NULL) == func && *(mem2 - VtabGetMetaClassIdx - 1) == 0 && *(mem2 - VtabGetMetaClassIdx - 2) == 0)
                                                                 {
-                                                                    kptr_t ref = off2addr(kernel, (uintptr_t)(mem2 - VtabGetMetaClassIdx) - (uintptr_t)kernel);
+                                                                    kptr_t ref = macho_ptov(macho, mem2 - VtabGetMetaClassIdx);
                                                                     if(meta->vtab == 0)
                                                                     {
                                                                         meta->vtab = ref;
@@ -1989,162 +2846,227 @@ int main(int argc, const char **argv)
             }
         }
         //ARRFREE(candidates);
-
-        for(size_t i = 0; i < metas.idx; ++i)
+#else
+        //ARRDEF(kptr_t, candidates, 0x100);
+        vtab_via_getMetaClass_args_t args =
         {
-            metaclass_t *meta = &metas.val[i];
-            if((meta->vtab == 0 || meta->vtab == -1) && meta->metavtab && VtabAllocIdx)
+            .macho = macho,
+            .metas = &metas,
+            //.candidates = candidates,
+            .VtabGetMetaClassIdx = VtabGetMetaClassIdx,
+            .OSMetaClassMetaClass = OSMetaClassMetaClass,
+        };
+        if(!macho_foreach_map(macho, &vtab_via_getMetaClass_cb, &args))
+        {
+            return -1;
+        }
+        //ARRFREE(candidates);
+#endif
+
+        if(VtabAllocIdx)
+        {
+            for(size_t i = 0; i < metas.idx; ++i)
             {
-                DBG("Attempting to get vtab via %s::MetaClass::alloc", meta->name);
-                kptr_t *ovtab = addr2ptr(kernel, meta->metavtab);
+                metaclass_t *meta = &metas.val[i];
+                if((meta->vtab != 0 && meta->vtab != 1) || !meta->metavtab)
+                {
+                    continue;
+                }
+
+                DBG(1, "Attempting to get vtab via %s::MetaClass::alloc", meta->name);
+                const kptr_t *ovtab = macho_vtop(macho, meta->metavtab, 0);
                 if(!ovtab)
                 {
-                    ERR("Metavtab of %s lies outside all segments.", meta->name);
+                    ERR("Metavtab of %s is not in any segment.", meta->name);
                     return -1;
                 }
-                kptr_t fnaddr = kuntag(kbase, fixupKind, ovtab[VtabAllocIdx], NULL, NULL, NULL, NULL);
-                if(fnaddr != pure_virtual)
+                kptr_t func = macho_fixup(macho, ovtab[VtabAllocIdx], NULL, NULL, NULL, NULL);
+                if(func == pure_virtual)
                 {
-                    DBG("Got %s::MetaClass::alloc at " ADDR, meta->name, fnaddr);
-                    FOREACH_CMD(hdr, cmd)
-                    {
-                        if(cmd->cmd == MACH_SEGMENT)
+                    continue;
+                }
+                DBG(1, "Got %s::MetaClass::alloc at " ADDR, meta->name, func);
+                const void *segptr = NULL;
+                kptr_t segaddr = 0;
+                size_t segsize = 0;
+                if(!macho_segment_for_addr(macho, func, &segptr, &segaddr, &segsize, NULL))
+                {
+                    ERR("%s::MetaClass::alloc is not in any segment.", meta->name);
+                    return -1;
+                }
+
+                const uint32_t *end     = (const uint32_t*)((uintptr_t)segptr + segsize),
+                               *fnstart = (const uint32_t*)((uintptr_t)segptr + (func - segaddr));
+                void *sp      = malloc(A64_EMU_SPSIZE),
+                     *bitstr  = malloc((A64_EMU_SPSIZE + 31) / 32),
+                     *obj     = NULL,
+                     *obitstr = NULL;
+                if(!sp || !bitstr)
+                {
+                    ERR("malloc(sp) || malloc(bitstr)");
+                    return -1;
+                }
+                bzero(sp, A64_EMU_SPSIZE);
+                bzero(bitstr, (A64_EMU_SPSIZE + 31) / 32);
+                uint32_t *m = NULL;
+                a64_state_t state;
+                for(size_t i = 0; i < 32; ++i)
+                {
+                    state.x[i] = 0;
+                    state.q[i] = 0;
+                }
+                // "fakemeta", fake "this" ptr
+                #define FAKEMETAPTR 0x6174656d656b6166
+                state.x[ 0]  = FAKEMETAPTR;
+                state.x[31]  = (uintptr_t)sp + A64_EMU_SPSIZE;
+                state.flags  = 0;
+                state.valid  = 0xfff80001;
+                state.qvalid = 0x0000ff00;
+                state.wide   = 0xfff80001;
+                state.host   = 0;
+                HOST_SET(&state, 31, 1);
+                state.hostmem[0].min = (uintptr_t)sp;
+                state.hostmem[0].max = (uintptr_t)sp + A64_EMU_SPSIZE;
+                state.hostmem[0].bitstring = bitstr;
+                emu_ret_t emuret = a64_emulate(macho, &state, fnstart, &a64cb_check_bl, &m, false, true, kEmuFnIgnore);
+            reswitch:;
+                switch(emuret)
+                {
+                    case kEmuRet:
+                        if((state.valid & 0x1) == 0x1 && (state.wide & 0x1) == 0x1 && state.x[0] == 0x0)
                         {
-                            mach_seg_t *seg = (mach_seg_t*)cmd;
-                            if(seg->vmaddr <= fnaddr && seg->vmaddr + seg->filesize > fnaddr)
+                            DBG(1, "Ignoring %s::MetaClass::alloc that returns NULL", meta->name);
+                        }
+                        else
+                        {
+                            WRN("Unexpected ret in %s::MetaClass::alloc", meta->name);
+                        }
+                        break;
+
+                    case kEmuEnd:
+                        {
+                            if((state.valid & 0xff) == 0x1 && (state.wide & 0x1) == 0x1 && HOST_GET(&state, 0) == 0 && state.x[0] == FAKEMETAPTR) // OSValueObject indirection
                             {
-                                uint32_t *end     = (uint32_t*)((uintptr_t)kernel + seg->fileoff + seg->filesize),
-                                         *fnstart = (uint32_t*)((uintptr_t)kernel + seg->fileoff + (fnaddr - seg->vmaddr));
-                                void *sp      = malloc(A64_EMU_SPSIZE),
-                                     *bitstr  = malloc((A64_EMU_SPSIZE + 31) / 32),
-                                     *obj     = NULL,
-                                     *obitstr = NULL;
-                                if(!sp || !bitstr)
+                                DBG(1, "Hit OSValueObject, stepping into bl");
+                                emuret = a64_emulate(macho, &state, m, &a64cb_check_equal, m + 1, false, true, kEmuFnEnter);
+                                if(emuret == kEmuEnd)
                                 {
-                                    ERR("malloc(sp) || malloc(bitstr)");
-                                    return -1;
+                                    emuret = a64_emulate(macho, &state, m + 1, &a64cb_check_bl, &m, false, true, kEmuFnIgnore);
                                 }
-                                bzero(sp, A64_EMU_SPSIZE);
-                                bzero(bitstr, (A64_EMU_SPSIZE + 31) / 32);
-                                uint32_t *m = NULL;
-                                a64_state_t state;
-                                for(size_t i = 0; i < 32; ++i)
+                                if(emuret != kEmuEnd)
                                 {
-                                    state.x[i] = 0;
-                                    state.q[i] = 0;
+                                    goto reswitch;
                                 }
-                                state.x[ 0]  = 0x6174656d656b6166; // "fakemeta", fake "this" ptr
-                                state.x[31]  = (uintptr_t)sp + A64_EMU_SPSIZE;
-                                state.flags  = 0;
-                                state.valid  = 0xfff80001;
-                                state.qvalid = 0x0000ff00;
-                                state.wide   = 0xfff80001;
-                                state.host   = 0;
-                                HOST_SET(&state, 31, 1);
-                                state.hostmem[0].min = (uintptr_t)sp;
-                                state.hostmem[0].max = (uintptr_t)sp + A64_EMU_SPSIZE;
-                                state.hostmem[0].bitstring = bitstr;
-                                switch(a64_emulate(kernel, kbase, fixupKind, &state, fnstart, &a64cb_check_bl, &m, false, true, kEmuFnIgnore))
+                            }
+                            kptr_t allocsz;
+                            if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && HOST_GET(&state, 0) == 1) // kalloc
+                            {
+                                allocsz = *(kptr_t*)state.x[0];
+                            }
+                            else if((state.valid & 0xff) == 0x1 && HOST_GET(&state, 0) == 0) // new
+                            {
+                                allocsz = state.x[0];
+                            }
+                            else if((state.valid & 0xff) == 0x3 && (state.wide & 0x3) == 0x1 && HOST_GET(&state, 0) == 0) // typed new
+                            {
+                                allocsz = state.x[1];
+                                // TODO: check if x0 in __DATA_CONST.__kalloc_type
+                                if(allocsz == 0x4) // kalloc type impl
                                 {
-                                    case kEmuRet:
-                                        if((state.valid & 0x1) == 0x1 && (state.wide & 0x1) == 0x1 && state.x[0] == 0x0)
-                                        {
-                                            DBG("Ignoring %s::MetaClass::alloc that returns NULL", meta->name);
-                                        }
-                                        else
-                                        {
-                                            WRN("Unexpected ret in %s::MetaClass::alloc", meta->name);
-                                        }
+                                    const struct
+                                    {
+                                        kptr_t zv_zone;
+                                        kptr_t zv_stats;
+                                        kptr_t zv_name;
+                                        kptr_t zv_next;
+                                        kptr_t kt_signature;
+                                        uint32_t kt_flags;
+                                        uint32_t kt_size;
+                                        kptr_t unused1;
+                                        kptr_t unused2;
+                                    } *kt = macho_vtop(macho, state.x[0], sizeof(*kt));
+                                    if(!kt)
+                                    {
+                                        WRN("kalloc type struct not in any segment in %s::MetaClass::alloc (" ADDR ")", meta->name, state.x[0]);
                                         break;
-                                    case kEmuEnd:
-                                        {
-                                            kptr_t allocsz;
-                                            if((state.valid & 0xff) == 0x7 && (state.wide & 0x7) == 0x5 && HOST_GET(&state, 0) == 1) // kalloc
-                                            {
-                                                allocsz = *(kptr_t*)state.x[0];
-                                            }
-                                            else if((state.valid & 0xff) == 0x1) // new
-                                            {
-                                                allocsz = state.x[0];
-                                            }
-                                            else if((state.valid & 0xff) == 0xf && (state.wide & 0xf) == 0x9) // hell do I know
-                                            {
-                                                allocsz = state.x[1];
-                                            }
-                                            else
-                                            {
-                                                //if(meta->vtab == -1)
-                                                {
-                                                    WRN("Bad pre-bl state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
-                                                }
-                                                break;
-                                            }
-                                            if(allocsz != meta->objsize)
-                                            {
-                                                //if(meta->vtab == -1)
-                                                {
-                                                    WRN("Alloc has wrong size in %s::MetaClass::alloc (0x%llx vs 0x%x)", meta->name, allocsz, meta->objsize);
-                                                }
-                                                break;
-                                            }
-                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m, &a64cb_check_equal, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
-                                            {
-                                                break;
-                                            }
-                                            obj = malloc(allocsz);
-                                            obitstr = malloc((allocsz + 31) / 32);
-                                            if(!obj || !obitstr)
-                                            {
-                                                ERR("malloc(obj) || malloc(obitstr)");
-                                                return -1;
-                                            }
-                                            bzero(obj, allocsz);
-                                            bzero(obitstr, (allocsz + 31) / 32);
-                                            state.x[0] = (uintptr_t)obj;
-                                            state.valid |= 0x1;
-                                            state.wide  |= 0x1;
-                                            HOST_SET(&state, 0, 2);
-                                            state.hostmem[1].min = (uintptr_t)obj;
-                                            state.hostmem[1].max = (uintptr_t)obj + allocsz;
-                                            state.hostmem[1].bitstring = obitstr;
-                                            uint32_t *e = m + 1;
-                                            for(; e < end; ++e)
-                                            {
-                                                if(is_ret(e))
-                                                {
-                                                    break;
-                                                }
-                                            }
-                                            if(a64_emulate(kernel, kbase, fixupKind, &state, m + 1, &a64cb_check_equal, e, false, true, kEmuFnEnter) != kEmuEnd)
-                                            {
-                                                break;
-                                            }
-                                            if(!(state.valid & 0x1) || !(state.wide & 0x1) || !HOST_GET(&state, 0))
-                                            {
-                                                WRN("Bad end state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
-                                                break;
-                                            }
-                                            kptr_t vt = *(kptr_t*)state.x[0];
-                                            if(!vt)
-                                            {
-                                                WRN("Failed to capture vtab via %s::MetaClass::alloc", meta->name);
-                                                break;
-                                            }
-                                            meta->vtab = vt;
-                                        }
-                                        break;
-                                    default:
-                                        break;
+                                    }
+                                    allocsz = kt->kt_size;
                                 }
-                                if(obj) free(obj);
-                                if(obitstr) free(obitstr);
-                                free(sp);
-                                free(bitstr);
+                            }
+                            else if((state.valid & 0xff) == 0xf && (state.wide & 0xf) == 0x9 && HOST_GET(&state, 0) == 0) // hell do I know
+                            {
+                                allocsz = state.x[1];
+                            }
+                            else
+                            {
+                                //if(meta->vtab == -1)
+                                {
+                                    WRN("Bad pre-bl state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
+                                }
                                 break;
                             }
+                            if(allocsz != meta->objsize)
+                            {
+                                //if(meta->vtab == -1)
+                                {
+                                    WRN("Alloc has wrong size in %s::MetaClass::alloc (0x%llx vs 0x%x)", meta->name, allocsz, meta->objsize);
+                                }
+                                break;
+                            }
+                            if(a64_emulate(macho, &state, m, &a64cb_check_equal, m + 1, false, true, kEmuFnIgnore) != kEmuEnd)
+                            {
+                                break;
+                            }
+                            obj = malloc(allocsz);
+                            obitstr = malloc((allocsz + 31) / 32);
+                            if(!obj || !obitstr)
+                            {
+                                ERR("malloc(obj) || malloc(obitstr)");
+                                return -1;
+                            }
+                            bzero(obj, allocsz);
+                            bzero(obitstr, (allocsz + 31) / 32);
+                            state.x[0] = (uintptr_t)obj;
+                            state.valid |= 0x1;
+                            state.wide  |= 0x1;
+                            HOST_SET(&state, 0, 2);
+                            state.hostmem[1].min = (uintptr_t)obj;
+                            state.hostmem[1].max = (uintptr_t)obj + allocsz;
+                            state.hostmem[1].bitstring = obitstr;
+                            uint32_t *e = m + 1;
+                            for(; e < end; ++e)
+                            {
+                                if(is_ret(e))
+                                {
+                                    break;
+                                }
+                            }
+                            if(a64_emulate(macho, &state, m + 1, &a64cb_check_equal, e, false, true, kEmuFnEnter) != kEmuEnd)
+                            {
+                                break;
+                            }
+                            if(!(state.valid & 0x1) || !(state.wide & 0x1) || !HOST_GET(&state, 0))
+                            {
+                                WRN("Bad end state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
+                                break;
+                            }
+                            kptr_t vt = *(kptr_t*)state.x[0];
+                            if(!vt)
+                            {
+                                WRN("Failed to capture vtab via %s::MetaClass::alloc", meta->name);
+                                break;
+                            }
+                            meta->vtab = vt;
                         }
-                    }
+                        break;
+
+                    default:
+                        break;
                 }
+                if(obj) free(obj);
+                if(obitstr) free(obitstr);
+                free(sp);
+                free(bitstr);
             }
         }
         for(size_t i = 0; i < metas.idx; ++i)
@@ -2159,7 +3081,7 @@ int main(int argc, const char **argv)
         {
             for(size_t i = 0; i < metas.idx; ++i)
             {
-                again:;
+            again:;
                 bool do_again = false;
                 metaclass_t *meta = &metas.val[i],
                             *parent = meta->parentP;
@@ -2201,7 +3123,7 @@ int main(int argc, const char **argv)
                         }
                         if(symcls->metaclass)
                         {
-                            DBG("Symmap entry for %s has metaclass set already (%s).", meta->name, symcls->metaclass->name);
+                            DBG(1, "Symmap entry for %s has metaclass set already (%s).", meta->name, symcls->metaclass->name);
                         }
                         else
                         {
@@ -2230,15 +3152,15 @@ int main(int argc, const char **argv)
                     goto done;
                 }
                 // Parent is guaranteed to either be NULL or have a valid vtab here
-                kptr_t *mvtab = addr2ptr(kernel, meta->vtab);
+                const kptr_t *mvtab = macho_vtop(macho, meta->vtab, 0);
                 if(!mvtab)
                 {
-                    WRN("%s vtab lies outside all segments.", meta->name);
+                    WRN("%s vtab is not in any segment.", meta->name);
                     meta->methods_err = 1;
                     goto done;
                 }
                 size_t nmeth = 0;
-                while(is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, mvtab, meta->vtab, nmeth))
+                while(is_part_of_vtab(macho, mvtab, meta->vtab, nmeth))
                 {
                     ++nmeth;
                 }
@@ -2260,7 +3182,7 @@ int main(int argc, const char **argv)
                 if(meta->symclass)
                 {
                     symmap_class_t *symcls = meta->symclass;
-                    if(hdr->filetype == MH_KEXT_BUNDLE)
+                    if(macho_is_kext(macho))
                     {
                         if(symcls->num > nmeth)
                         {
@@ -2285,6 +3207,8 @@ int main(int argc, const char **argv)
                                  *chain = NULL;
                     kptr_t func  = 0;
                     uint16_t pac = 0;
+                    size_t nsyms = 0;
+                    const sym_t *syms = NULL;
                     const char *cxx_sym = NULL,
                                *class   = NULL,
                                *method  = NULL;
@@ -2294,18 +3218,19 @@ int main(int argc, const char **argv)
                          auth          = false,
                          is_in_exreloc = false;
 
-                    kptr_t koff = meta->vtab + sizeof(kptr_t) * idx;
+                    kptr_t loc = meta->vtab + sizeof(kptr_t) * idx;
                     // TODO: handle multiple symbols for same addr
-                    cxx_sym = find_sym_by_addr(koff, exrelocA, nexreloc);
+                    cxx_sym = macho_reloc_for_addr(macho, loc);
                     if(cxx_sym)
                     {
                         is_in_exreloc = true;
-                        if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
+                        // TODO: why was this if'ed?
+                        //if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
                         {
                             bool bind = false;
                             bool a = false;
                             uint16_t p = false;
-                            kuntag(kbase, fixupKind, mvtab[idx], &bind, &a, &p, NULL);
+                            macho_fixup(macho, mvtab[idx], &bind, &a, &p, NULL);
                             if(bind)
                             {
                                 auth = a;
@@ -2315,8 +3240,13 @@ int main(int argc, const char **argv)
                     }
                     else
                     {
-                        func = kuntag(kbase, fixupKind, mvtab[idx], NULL, &auth, &pac, NULL);
-                        cxx_sym = find_sym_by_addr(func, asyms, nsyms);
+                        func = macho_fixup(macho, mvtab[idx], NULL, &auth, &pac, NULL);
+                        syms = macho_symbols_for_addr(macho, func, &nsyms);
+                        if(syms)
+                        {
+                            // TODO
+                            cxx_sym = syms[0].name;
+                        }
                         overrides = !pent || func != pent->addr;
                     }
                     if((cxx_sym && strcmp(cxx_sym, "___cxa_pure_virtual") == 0) || (pure_virtual && func == pure_virtual))
@@ -2325,7 +3255,7 @@ int main(int argc, const char **argv)
                     }
                     else if(cxx_sym)
                     {
-                        DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
+                        DBG(1, "Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
                         if(cxx_demangle(cxx_sym, &class, &method, &structor))
                         {
                             authoritative = true;
@@ -2369,7 +3299,7 @@ int main(int argc, const char **argv)
                     // parent class declared the method, in which case the entry we found will have the
                     // wrong diversifier. And this really occurs in practice, for example in the
                     // N104AP kernel for 18A5373a (iPhone 11, iOS 14.0 beta 8).
-                    if((hdr->cpusubtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E && !is_in_exreloc && pent && func != -1)
+                    if(macho_has_pac(macho) && !is_in_exreloc && pent && func != -1)
                     {
                         metaclass_t  *bcls = parent;
                         vtab_entry_t *bent = pent;
@@ -2472,7 +3402,7 @@ int main(int argc, const char **argv)
                     // In order to avoid duplicate work, we wanna skip this if we already did for the parent, but determining if we did that is a bit of a pain.
                     // We also need to outright skip kexts, because there will always be classes whose superclass isn't in the kext,
                     // so we have absolutely no way of determining where any given method of such classes was declared. :|
-                    if(auth && (hdr->cpusubtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E && hdr->filetype != MH_KEXT_BUNDLE && !is_in_exreloc && authoritative && (!pent || !pent->authoritative))
+                    if(auth && macho_has_pac(macho) && !macho_is_kext(macho) && !is_in_exreloc && authoritative && (!pent || !pent->authoritative))
                     {
                         // The PAC diversifier is a hash of the mangled symbol of the method in the first class that declares it. Since the symbol contains
                         // the class name, we have to traverse the hierarchy here. In theory we'd just seek down to the first class with a large enough vtable
@@ -2486,11 +3416,11 @@ int main(int argc, const char **argv)
 
                         if(cxx_sym)
                         {
-                            DBG("Checking diversifier of %s::%s (class: %s, sym: %s)", class, method, meta->name, cxx_sym);
+                            DBG(1, "Checking diversifier of %s::%s (class: %s, sym: %s)", class, method, meta->name, cxx_sym);
                         }
                         else
                         {
-                            DBG("Checking diversifier of %s::%s (class: %s)", class, method, meta->name);
+                            DBG(1, "Checking diversifier of %s::%s (class: %s)", class, method, meta->name);
                         }
 
                         // If we have no parent method entry, we can skip seeking here
@@ -2560,7 +3490,7 @@ int main(int argc, const char **argv)
                                 ERR("Failed to compute PAC diversifier. This means something is very broken.");
                                 return -1;
                             }
-                            DBG("Computed PAC 0x%04hx for symbol %s", div, sym);
+                            DBG(1, "Computed PAC 0x%04hx for symbol %s", div, sym);
 
                             // Optimisation: if we computed the symbol for the current class and don't have one yet,
                             // we may as well keep it. Otherwise this may be done later, but no need to duplicate work.
@@ -2630,7 +3560,7 @@ int main(int argc, const char **argv)
                     }
                 }
                 meta->methods_done = 1;
-                done:;
+            done:;
                 if(do_again)
                 {
                     goto again;
@@ -2639,10 +3569,10 @@ int main(int argc, const char **argv)
 
             if(opt.metaclass)
             {
-                DBG("Populating MetaClass vtabs...");
+                DBG(1, "Populating MetaClass vtabs...");
                 symmap_class_t *symcls = NULL;
                 size_t nmetameth = -1;
-                if(hdr->filetype != MH_KEXT_BUNDLE)
+                if(!macho_is_kext(macho))
                 {
                     for(size_t i = 0; i < metas.idx; ++i)
                     {
@@ -2677,15 +3607,15 @@ int main(int argc, const char **argv)
                 for(size_t i = 0; i < metas.idx; ++i)
                 {
                     metaclass_t *meta = &metas.val[i];
-                    DBG("Populating vtab for %s::MetaClass", meta->name);
-                    kptr_t *mvtab = addr2ptr(kernel, meta->metavtab);
+                    DBG(1, "Populating vtab for %s::MetaClass", meta->name);
+                    const kptr_t *mvtab = macho_vtop(macho, meta->metavtab, 0);
                     if(!mvtab)
                     {
-                        ERR("Vtab of %s::MetaClass lies outside all segments.", meta->name);
+                        ERR("Vtab of %s::MetaClass is not in any segment.", meta->name);
                         return -1;
                     }
                     size_t nmeth = 0;
-                    while(is_part_of_vtab(kernel, kbase, fixupKind, locreloc.val, locreloc.idx, exrelocA, nexreloc, mvtab, meta->metavtab, nmeth))
+                    while(is_part_of_vtab(macho, mvtab, meta->metavtab, nmeth))
                     {
                         ++nmeth;
                     }
@@ -2715,6 +3645,8 @@ int main(int argc, const char **argv)
                                      *pent = (OSMetaClass && idx < OSMetaClass->nmethods) ? &OSMetaClass->methods[idx] : NULL;
                         kptr_t func  = 0;
                         uint16_t pac = 0;
+                        size_t nsyms = 0;
+                        const sym_t *syms = NULL;
                         const char *cxx_sym = NULL,
                                    *class   = NULL,
                                    *method  = NULL;
@@ -2724,17 +3656,18 @@ int main(int argc, const char **argv)
                              auth          = false,
                              is_in_exreloc = false;
 
-                        kptr_t koff = meta->metavtab + sizeof(kptr_t) * idx;
-                        cxx_sym = find_sym_by_addr(koff, exrelocA, nexreloc);
+                        kptr_t loc = meta->metavtab + sizeof(kptr_t) * idx;
+                        cxx_sym = macho_reloc_for_addr(macho, loc);
                         if(cxx_sym)
                         {
                             is_in_exreloc = true;
-                            if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
+                            // TODO
+                            //if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
                             {
                                 bool bind = false;
                                 bool a = false;
                                 uint16_t p = false;
-                                kuntag(kbase, fixupKind, mvtab[idx], &bind, &a, &p, NULL);
+                                macho_fixup(macho, mvtab[idx], &bind, &a, &p, NULL);
                                 if(bind)
                                 {
                                     auth = a;
@@ -2744,8 +3677,13 @@ int main(int argc, const char **argv)
                         }
                         else
                         {
-                            func = kuntag(kbase, fixupKind, mvtab[idx], NULL, &auth, &pac, NULL);
-                            cxx_sym = find_sym_by_addr(func, asyms, nsyms);
+                            func = macho_fixup(macho, mvtab[idx], NULL, &auth, &pac, NULL);
+                            syms = macho_symbols_for_addr(macho, func, &nsyms);
+                            if(syms)
+                            {
+                                // TODO
+                                cxx_sym = syms[0].name;
+                            }
                             overrides = !pent || func != pent->addr;
                         }
                         if((cxx_sym && strcmp(cxx_sym, "___cxa_pure_virtual") == 0) || (pure_virtual && func == pure_virtual))
@@ -2754,7 +3692,7 @@ int main(int argc, const char **argv)
                         }
                         else if(cxx_sym)
                         {
-                            DBG("Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
+                            DBG(1, "Got symbol for virtual function " ADDR ": %s", func, cxx_sym);
                             if(cxx_demangle(cxx_sym, &class, &method, &structor))
                             {
                                 authoritative = true;
@@ -2966,17 +3904,28 @@ int main(int argc, const char **argv)
 
     if(opt.bundle || opt.bfilt)
     {
+        // XXX TMP TODO
+        extern const mach_hdr_t* __tmp_macho_get_hdr(macho_t *macho);
+        const mach_hdr_t *hdr = __tmp_macho_get_hdr(macho);
+        #define FOREACH_CMD(_hdr, _cmd) \
+        for( \
+            mach_lc_t *_cmd = (mach_lc_t*)(_hdr + 1), *_end = (mach_lc_t*)((uintptr_t)_cmd + _hdr->sizeofcmds - sizeof(mach_lc_t)); \
+            _cmd <= _end; \
+            _cmd = (mach_lc_t*)((uintptr_t)_cmd + _cmd->cmdsize) \
+        )
+        // XXX TMP TODO
+
         bool haveBundles = false;
         const char **bundleList = NULL;
         size_t bundleIdx = 0;
-        if(hdr->filetype == MH_KEXT_BUNDLE)
+        if(macho_is_kext(macho))
         {
-            kmod_info_t *kmod = NULL;
-            kptr_t kmod_addr = find_sym_by_name("_kmod_info", bsyms, nsyms);
+            const kmod_info_t *kmod = NULL;
+            kptr_t kmod_addr = macho_symbol(macho, "_kmod_info");
             if(kmod_addr)
             {
-                DBG("kmod: " ADDR, kmod_addr);
-                kmod = addr2ptr(kernel, kmod_addr);
+                DBG(1, "kmod: " ADDR, kmod_addr);
+                kmod = macho_vtop(macho, kmod_addr, 0);
             }
             if(!kmod)
             {
@@ -2985,10 +3934,18 @@ int main(int argc, const char **argv)
             }
             __kernel__ = kmod->name;
         }
-        else if(hdr->filetype == MH_FILESET)
+        else if(hdr->filetype == MH_FILESET && macho_have_symbols(macho))
         {
             if(filt_bundle && !bundleList)
             {
+                size_t nsetentries = 0;
+                FOREACH_CMD(hdr, cmd)
+                {
+                    if(cmd->cmd == LC_FILESET_ENTRY)
+                    {
+                        ++nsetentries;
+                    }
+                }
                 bundleList = malloc(nsetentries * sizeof(*bundleList));
                 if(!bundleList)
                 {
@@ -3001,7 +3958,7 @@ int main(int argc, const char **argv)
                 if(cmd->cmd == LC_FILESET_ENTRY)
                 {
                     mach_fileent_t *ent = (mach_fileent_t*)cmd;
-                    mach_hdr_t *mh = (void*)((uintptr_t)kernel + ent->fileoff);
+                    mach_hdr_t *mh = (void*)((uintptr_t)hdr + ent->fileoff);
                     const char *name = (const char*)((uintptr_t)ent + ent->nameoff);
                     kptr_t iaddr = 0;
                     FOREACH_CMD(mh, lc)
@@ -3009,8 +3966,8 @@ int main(int argc, const char **argv)
                         if(lc->cmd == LC_SYMTAB)
                         {
                             mach_stab_t *stab = (mach_stab_t*)lc;
-                            mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)kernel + stab->symoff);
-                            char *strtab = (char*)((uintptr_t)kernel + stab->stroff);
+                            mach_nlist_t *symtab = (mach_nlist_t*)((uintptr_t)hdr + stab->symoff);
+                            char *strtab = (char*)((uintptr_t)hdr + stab->stroff);
                             for(size_t i = 0; i < stab->nsyms; ++i)
                             {
                                 if((symtab[i].n_type & N_TYPE) != N_SECT || ((symtab[i].n_type & N_STAB) && !(symtab[i].n_type & N_EXT)))
@@ -3031,7 +3988,7 @@ int main(int argc, const char **argv)
                         WRN("No kmod_info for %s", name);
                         continue;
                     }
-                    kmod_info_t *kmod = addr2ptr(kernel, iaddr);
+                    const kmod_info_t *kmod = macho_vtop(macho, iaddr, 0);
                     if(!kmod)
                     {
                         WRN("Failed to translate kext kmod address " ADDR, iaddr);
@@ -3048,13 +4005,13 @@ int main(int argc, const char **argv)
                     }
                     FOREACH_CMD(mh, lc)
                     {
-                        if(lc->cmd == MACH_SEGMENT)
+                        if(lc->cmd == LC_SEGMENT_64)
                         {
                             mach_seg_t *kseg = (mach_seg_t*)lc;
                             if(strcmp("__TEXT_EXEC", kseg->segname) == 0)
                             {
                                 kptr_t vmaddr = kseg->vmaddr;
-                                DBG("%s __TEXT_EXEC at " ADDR, str, vmaddr);
+                                DBG(1, "%s __TEXT_EXEC at " ADDR, str, vmaddr);
                                 for(size_t j = 0; j < metas.idx; ++j)
                                 {
                                     metaclass_t *meta = &metas.val[j];
@@ -3081,12 +4038,12 @@ int main(int argc, const char **argv)
         }
         else if(hdr->filetype == MH_EXECUTE)
         {
-            DBG("Looking for kmod info...");
+            DBG(1, "Looking for kmod info...");
             mach_sec_t *kmod_info  = NULL,
                        *kmod_start = NULL;
             FOREACH_CMD(hdr, cmd)
             {
-                if(cmd->cmd == MACH_SEGMENT)
+                if(cmd->cmd == LC_SEGMENT_64)
                 {
                     mach_seg_t *seg = (mach_seg_t*)cmd;
                     if(strcmp("__PRELINK_INFO", seg->segname) == 0)
@@ -3110,8 +4067,8 @@ int main(int argc, const char **argv)
                     }
                 }
             }
-            DBG("kmod_info:  %s", kmod_info  ? "yes" : "no");
-            DBG("kmod_start: %s", kmod_start ? "yes" : "no");
+            DBG(1, "kmod_info:  %s", kmod_info  ? "yes" : "no");
+            DBG(1, "kmod_start: %s", kmod_start ? "yes" : "no");
             if(kmod_info && kmod_start)
             {
                 if(kmod_info->size % sizeof(kptr_t) != 0 || kmod_start->size % sizeof(kptr_t) != 0)
@@ -3120,13 +4077,13 @@ int main(int argc, const char **argv)
                     return -1;
                 }
                 size_t kmod_num = kmod_info->size / sizeof(kptr_t);
-                kptr_t *info_ptr  = (kptr_t*)((uintptr_t)kernel + kmod_info->offset),
-                       *start_ptr = (kptr_t*)((uintptr_t)kernel + kmod_start->offset);
+                kptr_t *info_ptr  = (kptr_t*)((uintptr_t)hdr + kmod_info->offset),
+                       *start_ptr = (kptr_t*)((uintptr_t)hdr + kmod_start->offset);
                 if(kmod_info->size != kmod_start->size)
                 {
                     if(kmod_start->size == kmod_info->size + sizeof(kptr_t))
                     {
-                        mach_hdr_t *exhdr = addr2ptr(kernel, kuntag(kbase, fixupKind, start_ptr[kmod_num], NULL, NULL, NULL, NULL));
+                        const mach_hdr_t *exhdr = macho_vtop(macho, macho_fixup(macho, start_ptr[kmod_num], NULL, NULL, NULL, NULL), 0);
                         if(exhdr && exhdr->ncmds == 2)
                         {
                             mach_seg_t *exseg = (mach_seg_t*)(exhdr + 1);
@@ -3134,7 +4091,7 @@ int main(int argc, const char **argv)
                             struct uuid_command *exuuid = (struct uuid_command*)((uintptr_t)exseg + exseg->cmdsize);
                             if
                             (
-                                exseg->cmd == MACH_SEGMENT && exuuid->cmd == LC_UUID &&
+                                exseg->cmd == LC_SEGMENT_64 && exuuid->cmd == LC_UUID &&
                                 strcmp("__TEXT_EXEC", exseg->segname) == 0 && exseg->nsects == 1 && strcmp("__text", exsec->sectname) == 0 &&
                                 exuuid->uuid[0x0] == 0 && exuuid->uuid[0x1] == 0 && exuuid->uuid[0x2] == 0 && exuuid->uuid[0x3] == 0 &&
                                 exuuid->uuid[0x4] == 0 && exuuid->uuid[0x5] == 0 && exuuid->uuid[0x6] == 0 && exuuid->uuid[0x7] == 0 &&
@@ -3142,7 +4099,7 @@ int main(int argc, const char **argv)
                                 exuuid->uuid[0xc] == 0 && exuuid->uuid[0xd] == 0 && exuuid->uuid[0xe] == 0 && exuuid->uuid[0xf] == 0
                             )
                             {
-                                DBG("Found kmod_start for initcode, ignoring...");
+                                DBG(1, "Found kmod_start for initcode, ignoring...");
                                 goto false_alarm;
                             }
                             ERR("moop");
@@ -3151,7 +4108,7 @@ int main(int argc, const char **argv)
                     ERR("Size mismatch on kmod_{info|start}.");
                     return -1;
 
-                    false_alarm:;
+                false_alarm:;
                 }
                 if(filt_bundle && !bundleList)
                 {
@@ -3164,16 +4121,16 @@ int main(int argc, const char **argv)
                 }
                 for(size_t i = 0; i < kmod_num; ++i)
                 {
-                    kptr_t iaddr = kuntag(kbase, fixupKind, info_ptr[i],  NULL, NULL, NULL, NULL);
-                    kptr_t haddr = kuntag(kbase, fixupKind, start_ptr[i], NULL, NULL, NULL, NULL);
-                    kmod_info_t *kmod = addr2ptr(kernel, iaddr);
-                    mach_hdr_t  *khdr = addr2ptr(kernel, haddr);
+                    kptr_t iaddr = macho_fixup(macho, info_ptr[i],  NULL, NULL, NULL, NULL);
+                    kptr_t haddr = macho_fixup(macho, start_ptr[i], NULL, NULL, NULL, NULL);
+                    const kmod_info_t *kmod = macho_vtop(macho, iaddr, 0);
+                    const mach_hdr_t  *khdr = macho_vtop(macho, haddr, 0);
                     if(!kmod)
                     {
                         WRN("Failed to translate kext kmod address " ADDR, iaddr);
                         continue;
                     }
-                    DBG("Kext %s at " ADDR, kmod->name, haddr);
+                    DBG(1, "Kext %s at " ADDR, kmod->name, haddr);
                     if(bundleList)
                     {
                         bundleList[bundleIdx++] = kmod->name;
@@ -3185,13 +4142,13 @@ int main(int argc, const char **argv)
                     }
                     FOREACH_CMD(khdr, kcmd)
                     {
-                        if(kcmd->cmd == MACH_SEGMENT)
+                        if(kcmd->cmd == LC_SEGMENT_64)
                         {
                             mach_seg_t *kseg = (mach_seg_t*)kcmd;
                             if(strcmp("__TEXT_EXEC", kseg->segname) == 0)
                             {
-                                kptr_t vmaddr = kuntag(kbase, fixupKind, kseg->vmaddr, NULL, NULL, NULL, NULL);
-                                DBG("%s __TEXT_EXEC at " ADDR, kmod->name, vmaddr);
+                                kptr_t vmaddr = macho_fixup(macho, kseg->vmaddr, NULL, NULL, NULL, NULL);
+                                DBG(1, "%s __TEXT_EXEC at " ADDR, kmod->name, vmaddr);
                                 for(size_t j = 0; j < metas.idx; ++j)
                                 {
                                     metaclass_t *meta = &metas.val[j];
@@ -3224,7 +4181,7 @@ int main(int argc, const char **argv)
         {
             FOREACH_CMD(hdr, cmd)
             {
-                if(cmd->cmd == MACH_SEGMENT)
+                if(cmd->cmd == LC_SEGMENT_64)
                 {
                     mach_seg_t *seg = (mach_seg_t*)cmd;
                     if(strcmp("__DATA", seg->segname) == 0)
@@ -3243,8 +4200,7 @@ int main(int argc, const char **argv)
             }
             if(hdr->filetype == MH_EXECUTE)
             {
-                if(!prelink_info) prelink_info = get_prelink_info(hdr);
-
+                CFTypeRef prelink_info = macho_prelink_info(macho);
                 if(!prelink_info)
                 {
                     if(filt_bundle)
@@ -3287,7 +4243,7 @@ int main(int argc, const char **argv)
                         if(!cfstr || CFGetTypeID(cfstr) != CFStringGetTypeID())
                         {
                             WRN("CFBundleIdentifier missing or wrong type at entry %lu.", i);
-                            if(debug)
+                            if(debug >= 2)
                             {
                                 CFShow(dict);
                             }
@@ -3297,7 +4253,7 @@ int main(int argc, const char **argv)
                         if(!str)
                         {
                             WRN("Failed to get CFString contents at entry %lu.", i);
-                            if(debug)
+                            if(debug >= 2)
                             {
                                 CFShow(cfstr);
                             }
@@ -3310,13 +4266,13 @@ int main(int argc, const char **argv)
                         CFNumberRef cfnum = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
                         if(!cfnum)
                         {
-                            DBG("Kext %s has no PrelinkExecutableLoadAddr, skipping...", str);
+                            DBG(1, "Kext %s has no PrelinkExecutableLoadAddr, skipping...", str);
                             continue;
                         }
                         if(CFGetTypeID(cfnum) != CFNumberGetTypeID())
                         {
                             WRN("PrelinkExecutableLoadAddr missing or wrong type for kext %s", str);
-                            if(debug)
+                            if(debug >= 2)
                             {
                                 CFShow(cfnum);
                             }
@@ -3328,8 +4284,8 @@ int main(int argc, const char **argv)
                             WRN("Failed to get CFNumber contents for kext %s", str);
                             continue;
                         }
-                        DBG("Kext %s at " ADDR, str, kext_base);
-                        mach_hdr_t *hdr2 = addr2ptr(kernel, kext_base);
+                        DBG(1, "Kext %s at " ADDR, str, kext_base);
+                        const mach_hdr_t *hdr2 = macho_vtop(macho, kext_base, 0);
                         if(!hdr2)
                         {
                             WRN("Failed to translate kext header address " ADDR, kext_base);
@@ -3337,12 +4293,12 @@ int main(int argc, const char **argv)
                         }
                         FOREACH_CMD(hdr2, cmd2)
                         {
-                            if(cmd2->cmd == MACH_SEGMENT)
+                            if(cmd2->cmd == LC_SEGMENT_64)
                             {
                                 mach_seg_t *seg2 = (mach_seg_t*)cmd2;
                                 if(strcmp("__DATA", seg2->segname) == 0)
                                 {
-                                    DBG("%s __DATA at " ADDR, str, seg2->vmaddr);
+                                    DBG(1, "%s __DATA at " ADDR, str, seg2->vmaddr);
                                     for(size_t j = 0; j < metas.idx; ++j)
                                     {
                                         metaclass_t *meta = &metas.val[j];
@@ -3432,6 +4388,8 @@ int main(int argc, const char **argv)
     {
         return -1;
     }
+
+    macho_close(macho);
 
     return 0;
 }

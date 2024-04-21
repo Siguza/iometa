@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2022 Siguza
+/* Copyright (c) 2018-2024 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -19,7 +19,7 @@
 #include <stdlib.h>             // malloc, realloc, free
 #include <string.h>             // strerror
 
-extern bool debug;
+extern uint8_t debug;
 extern const char *colorGray,
                   *colorRed,
                   *colorYellow,
@@ -29,7 +29,7 @@ extern const char *colorGray,
                   *colorReset;
 
 #define LOG(str, args...)   do { fprintf(stderr, str "\n", ##args); } while(0)
-#define DBG(str, args...)   do { if(debug) LOG("%s[DBG] " str "%s", colorPink, ##args, colorReset); } while(0)
+#define DBG(lvl, str, args...)   do { if(debug >= lvl) LOG("%s[DBG] " str "%s", colorPink, ##args, colorReset); } while(0)
 #define WRN(str, args...)   LOG("%s[WRN] " str "%s", colorYellow, ##args, colorReset)
 #define ERR(str, args...)   LOG("%s[ERR] " str "%s", colorRed, ##args, colorReset)
 #define ERRNO(str, args...) ERR(str ": %s", ##args, strerror(errno))
@@ -40,7 +40,7 @@ extern const char *colorGray,
 #define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
 
 #define STEP_MEM(_type, _var, _base, _size, _min) \
-for(_type *_var = (_type*)(_base), *_end = (_type*)((uintptr_t)(_var) + (_size)) - (_min); _var <= _end; ++_var)
+for(const _type *_var = (const _type*)(_base), *_end = (const _type*)((uintptr_t)(_var) + (_size)) - (_min); _var <= _end; ++_var)
 
 #define ARRDECL(type, name) \
 struct \
@@ -93,7 +93,7 @@ do \
         (name).val = realloc((name).val, (name).size * sizeof(*(name).val)); \
         if(!(name).val) \
         { \
-            ERRNO("realloc(0x%lx)", (name).size); \
+            ERRNO("realloc(0x%zx)", (name).size); \
             exit(-1); \
         } \
     } \
