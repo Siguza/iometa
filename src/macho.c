@@ -1152,6 +1152,7 @@ macho_t* macho_open(const char *file)
     qsort(sectionsByName, nsecs, sizeof(macho_section_t), &macho_cmp_sec_name);
     qsort(sectionsByAddr, nsecs, sizeof(macho_section_t), &macho_cmp_sec_addr);
 
+    bool cursor = false;
     size_t nmapV = 0;
     for(size_t i = 1; i < nmaps; ++i)
     {
@@ -1163,12 +1164,19 @@ macho_t* macho_open(const char *file)
         if(mapV[nmapV].addr + mapV[nmapV].size == mapV[i].addr && mapV[nmapV].mem + mapV[nmapV].size == mapV[i].mem && mapV[nmapV].prot == mapV[i].prot)
         {
             mapV[nmapV].size += mapV[i].size;
+            cursor = true;
         }
         else if(++nmapV != i)
         {
             memcpy(&mapV[nmapV], &mapV[i], sizeof(macho_map_t));
+            cursor = true;
         }
     }
+    if(cursor) // Account for "current" map
+    {
+        ++nmapV;
+    }
+    cursor = false;
     size_t nmapP = 0;
     for(size_t i = 1; i < nmaps; ++i)
     {
@@ -1180,11 +1188,17 @@ macho_t* macho_open(const char *file)
         if(mapP[nmapP].addr + mapP[nmapP].size == mapP[i].addr && mapP[nmapP].mem + mapP[nmapP].size == mapP[i].mem && mapP[nmapP].prot == mapP[i].prot)
         {
             mapP[nmapP].size += mapP[i].size;
+            cursor = true;
         }
         else if(++nmapP != i)
         {
             memcpy(&mapP[nmapP], &mapP[i], sizeof(macho_map_t));
+            cursor = true;
         }
+    }
+    if(cursor) // Account for "current" map
+    {
+        ++nmapP;
     }
     for(size_t i = 0; i < nmapV; ++i)
     {
