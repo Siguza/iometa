@@ -111,7 +111,7 @@ struct _macho
     uint32_t filetype;
     uint32_t subtype;
     fixup_kind_t fixupKind;
-    union
+    union fixup_data
     {
         const fixup_seg_t *chain;
         const mach_sec_t *thread;
@@ -144,9 +144,11 @@ struct _macho
 
 // High-level funcs needed during initialisation
 static kptr_t macho_fixup_internal(fixup_kind_t fixupKind, kptr_t base, kptr_t ptr, bool *bind, bool *auth, uint16_t *pac, size_t *skip);
-static const void* macho_vtop_internal(macho_map_t *mapV, size_t nmapV, kptr_t addr, size_t size);
-static bool macho_section_for_addr_internal(macho_section_t *sectionsByAddr, size_t nsecs, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
-static CFTypeRef macho_prelink_info_internal(macho_section_t *sectionsByName, size_t nsecs);
+static kptr_t macho_ptov_internal(const macho_map_t *mapP, size_t nmapP, const void *ptr);
+static const void* macho_vtop_internal(const macho_map_t *mapV, size_t nmapV, kptr_t addr, size_t size);
+static bool macho_section_for_addr_internal(const macho_section_t *sectionsByAddr, size_t nsecs, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
+static bool macho_foreach_ptr_internal(uintptr_t hdr, fixup_kind_t fixupKind, union fixup_data fixup, kptr_t base, macho_map_t *mapV, size_t nmapV, bool (*cb)(const kptr_t *ptr, void *arg), void *arg);
+static CFTypeRef macho_prelink_info_internal(const macho_section_t *sectionsByName, size_t nsecs);
 
 #define MACHO_BITMAP_PAGESIZE 0x4000
 #define MACHO_BITMAP_PAGE(off) ((off) / MACHO_BITMAP_PAGESIZE)
@@ -240,7 +242,7 @@ static bool macho_bitmap_set(uint8_t **ptrBitmap, size_t off)
     return true;
 }
 
-static bool macho_validate_fixup_chain(const mach_hdr_t *hdr, kptr_t base, fixup_kind_t fixupKind, const kptr_t *ptr, const kptr_t *end, uint8_t **ptrBitmap, size_t *nreloc, uint32_t imports_count)
+static bool macho_validate_fixup_chain(const mach_hdr_t *hdr, kptr_t base, fixup_kind_t fixupKind, const kptr_t *ptr, uintptr_t end, uint8_t **ptrBitmap, size_t *nreloc, uint32_t imports_count)
 {
     size_t skip = 0;
     while(1)
@@ -273,13 +275,42 @@ static bool macho_validate_fixup_chain(const mach_hdr_t *hdr, kptr_t base, fixup
             return false;
         }
         ptr = (const kptr_t*)((uintptr_t)ptr + skip);
-        // TODO: Can't do -sizeof(kptr_t) here because there can be ptrs at +0x3ffc,
-        //       but I still wanna make sure we don't run off the end of a segment.
-        if((uintptr_t)ptr >= (uintptr_t)end)
+        if((uintptr_t)ptr > end - sizeof(kptr_t))
         {
             ERR("Mach-O chained fixup at " ADDR " skips past the end of its segment/page.", addr);
             return false;
         }
+    }
+    return true;
+}
+
+typedef struct
+{
+    const fixup_kind_t fixupKind;
+    const kptr_t base;
+    const macho_map_t * const mapP;
+    const size_t nmapP;
+    const fixup_import_t * const import;
+    const char * const syms;
+    sym_t * const relocByName;
+    size_t relocidx;
+} chained_imports_cb_t;
+
+static bool macho_chained_imports_cb(const kptr_t *ptr, void *arg)
+{
+    chained_imports_cb_t *args = arg;
+    bool bind = false;
+    kptr_t idx = macho_fixup_internal(args->fixupKind, args->base, *ptr, &bind, NULL, NULL, NULL);
+    if(bind)
+    {
+        // At this point, chained fixups were traversed before already, so we don't
+        // need to do any validation, and ptrBitmap has been populated too already.
+        kptr_t addr = macho_ptov_internal(args->mapP, args->nmapP, ptr);
+        const char *name = &args->syms[args->import[idx].name_offset];
+        DBG(3, "Chained import " ADDR ": %s", addr, name);
+        sym_t *sym = &args->relocByName[args->relocidx++];
+        sym->addr = addr;
+        sym->name = name;
     }
     return true;
 }
@@ -640,6 +671,8 @@ macho_t* macho_open(const char *file)
                     }
                     break;
 
+                // TODO: LC_SEGMENT_SPLIT_INFO?
+
                 case LC_DYLD_CHAINED_FIXUPS:
                     if(fixupKind != DYLD_CHAINED_PTR_NONE)
                     {
@@ -691,7 +724,6 @@ macho_t* macho_open(const char *file)
                             goto out;
                         }
                         const fixup_import_t *import = (const fixup_import_t*)((uintptr_t)fixup + fixup->imports_offset);
-                        const char *syms = (const char*)((uintptr_t)fixup + fixup->symbols_offset);
                         uint32_t max_name_offset = data->datasize - fixup->symbols_offset;
                         for(uint32_t j = 0; j < fixup->imports_count; ++j)
                         {
@@ -706,7 +738,6 @@ macho_t* macho_open(const char *file)
                                 ERR("Mach-O chained import out of bounds: 0x%x (import %u)", imp->name_offset, j);
                                 goto out;
                             }
-                            // TODO
                         }
                     }
                     uint32_t max_seg_off;
@@ -775,97 +806,6 @@ macho_t* macho_open(const char *file)
                         }
                     }
                     chained_fixups = fixup;
-
-#if 0
-                    // XXX
-
-                    for(uint32_t i = 0; i < segs->seg_count; ++i)
-                    {
-
-
-                        if(fixupKind == DYLD_CHAINED_PTR_ARM64E_KERNEL)
-                        {
-                            // REVIEW: I guess it's fine for this to overflow?
-                            kptr_t start = kbase + starts->segment_offset;
-                            if(start >= kmax || start < kmin || starts->page_count > (kmax - start) / starts->page_size)
-                            {
-                                ERR("Mach-O chained fixup starts describes a region out of bounds (%u).", i);
-                                return -1;
-                            }
-                        }
-                        else
-                        {
-                            if(starts->segment_offset > machosize || starts->page_count > (machosize - starts->segment_offset) / starts->page_size)
-                            {
-                                ERR("Mach-O chained fixup starts describes a region out of bounds (%u).", i);
-                                return -1;
-                            }
-                        }
-                        for(uint16_t j = 0; j < starts->page_count; ++j)
-                        {
-                            uint16_t idx = starts->page_start[j];
-                            if(idx == 0xffff)
-                            {
-                                continue;
-                            }
-                            if(idx % sizeof(uint32_t) != 0)
-                            {
-                                ERR("Mach-O fixup chain misaligned: 0x%x (%u, %u)", idx, i, j);
-                                return -1;
-                            }
-                            if(idx >= starts->page_size)
-                            {
-                                ERR("Mach-O fixup chain out of bounds: 0x%x (%u, %u)", idx, i, j);
-                                return -1;
-                            }
-                        }
-                    }
-                    // XXX
-
-                    // XXX
-                    fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
-                    for(uint32_t i = 0; i < segs->seg_count; ++i)
-                    {
-                        if(segs->seg_info_offset[i] == 0)
-                        {
-                            continue;
-                        }
-                        fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
-                        uint64_t off = (uintptr_t)ptr - (uintptr_t)macho;
-                        if(starts->pointer_format == DYLD_CHAINED_PTR_ARM64E_KERNEL)
-                        {
-                            off = off2addr(macho, off) - base;
-                        }
-                        if(off < starts->segment_offset || (off - starts->segment_offset) / starts->page_size >= starts->page_count)
-                        {
-                            continue;
-                        }
-                        uint16_t j = (off - starts->segment_offset) / starts->page_size;
-                        uint16_t idx = starts->page_start[j];
-                        if(idx == 0xffff)
-                        {
-                            continue;
-                        }
-                        size_t where = (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx;
-                        kptr_t *mem = starts->pointer_format == DYLD_CHAINED_PTR_ARM64E_KERNEL ? addr2ptr(macho, base + where) : (kptr_t*)((uintptr_t)macho + where);
-                        size_t skip = 0;
-                        do
-                        {
-                            if((uintptr_t)mem == (uintptr_t)ptr)
-                            {
-                                return true;
-                            }
-                            if((uintptr_t)mem > (uintptr_t)ptr)
-                            {
-                                return false;
-                            }
-                            kuntag(base, starts->pointer_format, *mem, &bind, NULL, NULL, &skip);
-                            mem = (kptr_t*)((uintptr_t)mem + skip);
-                        } while(skip > 0);
-                    }
-                    // XXX
-#endif
-
                     break;
 
                 case LC_FILESET_ENTRY:
@@ -1223,7 +1163,6 @@ macho_t* macho_open(const char *file)
         }
 
         size_t symidx = 0;
-        size_t relocidx = 0;
         if(filetype == MH_FILESET)
         {
             const mach_lc_t *cmd = firstcmd;
@@ -1313,11 +1252,12 @@ macho_t* macho_open(const char *file)
                     goto out;
                 }
                 size_t segsize = (size_t)starts->page_count * (size_t)starts->page_size;
-                if(segsize != seg->size)
+                if(segsize > seg->size)
                 {
                     ERR("Mach-O chained fixup segment size doesn't match actual segment size (" ADDR ", 0x%zx vs 0x%zx).", segbase, segsize, seg->size);
                     goto out;
                 }
+                uintptr_t segend = (uintptr_t)seg->mem + seg->size;
                 for(uint16_t j = 0, m = starts->page_count; j < m; ++j)
                 {
                     uint16_t idx = starts->page_start[j];
@@ -1337,120 +1277,19 @@ macho_t* macho_open(const char *file)
                         goto out;
                     }
                     const kptr_t *ptr = (const kptr_t*)(seg->mem + off);
-                    const kptr_t *end = (const kptr_t*)(seg->mem + ((size_t)j + 1) * (size_t)starts->page_size);
+                    uintptr_t end = seg->mem + ((size_t)j + 1) * (size_t)starts->page_size;
+                    // macho_validate_fixup_chain() checks that pointers stay fully within the bounds of `end`,
+                    // but pointers can start at page offset 0x3ffc and run onto the next page. So as long as
+                    // that doesn't happen at the end of a segment, add 4 bytes
+                    if(end < segend)
+                    {
+                        end += sizeof(uint32_t);
+                    }
                     if(!macho_validate_fixup_chain(hdr, base, fixupKind, ptr, end, ptrBitmap, &nreloc, chained_fixups->imports_count))
                     {
                         goto out;
                     }
                 }
-
-                /*if(!seg)
-                {
-                    return false;
-                }
-                if(ptr)  *ptr  = (const void*)seg->mem;
-                if(addr) *addr = seg->addr;
-                if(size) *size = seg->size;
-                if(prot) *prot = seg->prot;
-                return true;*/
-
-#if 0
-                {
-                    fixup_hdr_t *fixup = (fixup_hdr_t*)((uintptr_t)macho + cmd->dataoff);
-                    if(fixup->imports_count)
-                    {
-                        fixup_import_t *import = (fixup_import_t*)((uintptr_t)fixup + fixup->imports_offset);
-                        const char *syms = (const char*)((uintptr_t)fixup + fixup->symbols_offset);
-                        fixup_seg_t *segs = (fixup_seg_t*)((uintptr_t)fixup + fixup->starts_offset);
-                        size_t nimport = 0;
-                        for(uint32_t i = 0; i < segs->seg_count; ++i)
-                        {
-                            if(segs->seg_info_offset[i] == 0)
-                            {
-                                continue;
-                            }
-                            fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
-                            if(starts->pointer_format != DYLD_CHAINED_PTR_ARM64E_KERNEL)
-                            {
-                                ERR("Cannot resolve chained imports for format: 0x%x", starts->pointer_format);
-                                return false;
-                            }
-                            for(uint16_t j = 0; j < starts->page_count; ++j)
-                            {
-                                uint16_t idx = starts->page_start[j];
-                                if(idx == 0xffff)
-                                {
-                                    continue;
-                                }
-                                kptr_t *mem = addr2ptr(macho, base + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx);
-                                size_t skip = 0;
-                                do
-                                {
-                                    pacptr_t pp;
-                                    pp.ptr = *mem;
-                                    if(pp.pac.bind)
-                                    {
-                                        if(pp.pac.off > fixup->imports_count) // validate_macho() checks that <= 0xffff
-                                        {
-                                            ERR("Chained import number out of bounds: 0x%x", pp.pac.off);
-                                            return false;
-                                        }
-                                        ++nimport;
-                                    }
-                                    skip = pp.pac.next * sizeof(uint32_t);
-                                    mem = (kptr_t*)((uintptr_t)mem + skip);
-                                } while(skip > 0);
-                            }
-                        }
-                        sym_t *exreloc = *exrelocp;
-                        size_t nexreloc = *nexrelocp;
-                        exreloc = realloc(exreloc, (nexreloc + nimport) * sizeof(sym_t));
-                        if(!exreloc)
-                        {
-                            ERRNO("malloc(exreloc)");
-                            return false;
-                        }
-                        for(uint32_t i = 0; i < segs->seg_count; ++i)
-                        {
-                            if(segs->seg_info_offset[i] == 0)
-                            {
-                                continue;
-                            }
-                            fixup_starts_t *starts = (fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[i]);
-                            for(uint16_t j = 0; j < starts->page_count; ++j)
-                            {
-                                uint16_t idx = starts->page_start[j];
-                                if(idx == 0xffff)
-                                {
-                                    continue;
-                                }
-                                kptr_t addr = base + (size_t)starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx;
-                                kptr_t *mem = addr2ptr(macho, addr);
-                                size_t skip = 0;
-                                do
-                                {
-                                    pacptr_t pp;
-                                    pp.ptr = *mem;
-                                    if(pp.pac.bind)
-                                    {
-                                        const char *name = &syms[import[pp.pac.off].name_offset];
-                                        DBG("Chained import " ADDR ": %s", addr, name);
-                                        exreloc[nexreloc].addr = addr;
-                                        exreloc[nexreloc].name = name;
-                                        ++nexreloc;
-                                    }
-                                    skip = pp.pac.next * sizeof(uint32_t);
-                                    mem  = (kptr_t*)((uintptr_t)mem + skip);
-                                    addr += skip;
-                                } while(skip > 0);
-                            }
-                        }
-                        *exrelocp = exreloc;
-                        *nexrelocp = nexreloc;
-                    }
-                    return true;
-                }
-#endif
             }
             break;
         }
@@ -1465,10 +1304,26 @@ macho_t* macho_open(const char *file)
                 {
                     continue;
                 }
-                /*if(!macho_foreach_ptr_walk_chain(macho, off, cb, arg))
+                if(off & 0x3)
                 {
-                    return false;
-                }*/
+                    ERR("Mach-O chained fixup start at 0x%x is not aligned to 4 bytes.", off);
+                    goto out;
+                }
+                kptr_t addr = base + off;
+                const void *secbase = NULL;
+                kptr_t secaddr = 0;
+                size_t secsize = 0;
+                if(!macho_section_for_addr_internal(sectionsByAddr, nsecs, addr, &secbase, &secaddr, &secsize, NULL))
+                {
+                    ERR("Mach-O chained fixup start doesn't maps to any segment (" ADDR ").", addr);
+                    goto out;
+                }
+                const kptr_t *ptr = (const kptr_t*)(addr - secaddr + (uintptr_t)secbase);
+                uintptr_t end = (uintptr_t)secbase + secsize;
+                if(!macho_validate_fixup_chain(hdr, base, fixupKind, ptr, end, ptrBitmap, &nreloc, chained_fixups->imports_count))
+                {
+                    goto out;
+                }
             }
             break;
         }
@@ -1608,15 +1463,6 @@ macho_t* macho_open(const char *file)
             __builtin_trap();
     }
 
-    //if(dstab)
-    //{
-    //    if(!stab)
-    //    {
-    //        ERR("Mach-O has dsymtab but not symtab.");
-    //        goto out;
-    //    }
-    //}
-
     if(nreloc)
     {
         relocByName = malloc(sizeof(sym_t) * nreloc);
@@ -1631,7 +1477,88 @@ macho_t* macho_open(const char *file)
             ERRNO("malloc(relocByAddr)");
             goto out;
         }
-        // TODO
+
+        size_t relocidx = 0;
+        if(dstab)
+        {
+            if(!stab)
+            {
+                ERR("Mach-O has dsymtab but not symtab.");
+                goto out;
+            }
+            mach_reloc_t *reloc = (mach_reloc_t*)((uintptr_t)hdr + dstab->extreloff);
+            const mach_nlist_t *symtab = (const mach_nlist_t*)((uintptr_t)hdr + stab->symoff);
+            const char *strtab = (const char*)((uintptr_t)hdr + stab->stroff);
+            for(size_t i = 0; i < dstab->nextrel; ++i)
+            {
+                int32_t off = reloc[i].r_address;
+                if(!reloc[i].r_extern)
+                {
+                    ERR("External relocation entry %zu at 0x%x has external bit set.", i, off);
+                    goto out;
+                }
+                if(reloc[i].r_length != 0x3)
+                {
+                    ERR("External relocation entry %zu at 0x%x is not 8 bytes.", i, off);
+                    goto out;
+                }
+                if(off & 0x3)
+                {
+                    ERR("External relocation entry %zu at 0x%x is not aligned to 4 bytes.", i, off);
+                    goto out;
+                }
+                uint32_t symnum = reloc[i].r_symbolnum;
+                if(symnum >= stab->nsyms)
+                {
+                    ERR("External relocation entry %zu is out of bounds of symtab.", i);
+                    goto out;
+                }
+                kptr_t addr = base + off;
+                const char *name = &strtab[symtab[symnum].n_strx];
+                DBG(3, "Exreloc: " ADDR " %s", addr, name);
+                const void *ptr = macho_vtop_internal(mapV, nmapV, addr, sizeof(kptr_t));
+                if(!ptr || (uintptr_t)ptr < (uintptr_t)hdr || (uintptr_t)ptr >= (uintptr_t)hdr + size)
+                {
+                    ERR("External relocation entry %zu is outside of all mapped segments: " ADDR, i, addr);
+                    goto out;
+                }
+                size_t diff = (uintptr_t)ptr - (uintptr_t)hdr;
+                if(diff > UINT32_MAX)
+                {
+                    ERR("External relocation entry %zu is too far: " ADDR, i, addr);
+                    goto out;
+                }
+                if(!macho_bitmap_set(ptrBitmap, diff))
+                {
+                    goto out;
+                }
+                sym_t *sym = &relocByName[relocidx++];
+                sym->addr = addr;
+                sym->name = name;
+            }
+        }
+        if(chained_fixups && chained_fixups->imports_count)
+        {
+            chained_imports_cb_t arg =
+            {
+                .fixupKind = fixupKind,
+                .base = base,
+                .mapP = mapP,
+                .nmapP = nmapP,
+                .import = (const fixup_import_t*)((uintptr_t)chained_fixups + chained_fixups->imports_offset),
+                .syms = (const char*)((uintptr_t)chained_fixups + chained_fixups->symbols_offset),
+                .relocByName = relocByName,
+                .relocidx = relocidx,
+            };
+            if(!macho_foreach_ptr_internal((uintptr_t)hdr, fixupKind, (union fixup_data){ .chain = (const fixup_seg_t*)((uintptr_t)chained_fixups + chained_fixups->starts_offset) }, base, mapV, nmapV, &macho_chained_imports_cb, &arg))
+            {
+                goto out;
+            }
+        }
+
+        memcpy(relocByAddr, relocByName, sizeof(sym_t) * nreloc);
+        qsort(relocByName, nreloc, sizeof(sym_t), &macho_cmp_sym_name);
+        qsort(relocByAddr, nreloc, sizeof(sym_t), &macho_cmp_sym_addr);
     }
 
     macho = malloc(sizeof(macho_t));
@@ -1879,10 +1806,15 @@ static int macho_ptov_cb(const void *key, const void *value)
     return 0;
 }
 
+static kptr_t macho_ptov_internal(const macho_map_t *mapP, size_t nmapP, const void *ptr)
+{
+    const macho_map_t *map = bsearch(ptr, mapP, nmapP, sizeof(macho_map_t), &macho_ptov_cb);
+    return !map ? 0 : (uintptr_t)ptr - map->mem + map->addr;
+}
+
 kptr_t macho_ptov(macho_t *macho, const void *ptr)
 {
-    const macho_map_t *map = bsearch(ptr, macho->mapP, macho->nmapP, sizeof(macho_map_t), &macho_ptov_cb);
-    return !map ? 0 : (uintptr_t)ptr - map->mem + map->addr;
+    return macho_ptov_internal(macho->mapP, macho->nmapP, ptr);
 }
 
 static int macho_vtop_cb(const void *key, const void *value)
@@ -1900,7 +1832,7 @@ static int macho_vtop_cb(const void *key, const void *value)
     return 0;
 }
 
-static const void* macho_vtop_internal(macho_map_t *mapV, size_t nmapV, kptr_t addr, size_t size)
+static const void* macho_vtop_internal(const macho_map_t *mapV, size_t nmapV, kptr_t addr, size_t size)
 {
     const macho_map_t *map = bsearch((const void*)addr, mapV, nmapV, sizeof(macho_map_t), &macho_vtop_cb);
     if(!map)
@@ -1963,7 +1895,7 @@ static int macho_section_cb(const void *key, const void *value)
     return strcmp(arg->section, sec->secname);
 }
 
-static bool macho_section_internal(macho_section_t *sectionsByName, size_t nsecs, const char *segment, const char *section, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot)
+static bool macho_section_internal(const macho_section_t *sectionsByName, size_t nsecs, const char *segment, const char *section, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot)
 {
     macho_section_cb_t arg =
     {
@@ -2029,7 +1961,7 @@ static int macho_section_for_addr_cb(const void *key, const void *value)
     return 0;
 }
 
-static bool macho_section_for_addr_internal(macho_section_t *sectionsByAddr, size_t nsecs, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot)
+static bool macho_section_for_addr_internal(const macho_section_t *sectionsByAddr, size_t nsecs, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot)
 {
     macho_section_t *sec = bsearch((const void*)target, sectionsByAddr, nsecs, sizeof(macho_section_t), &macho_section_for_addr_cb);
     if(!sec)
@@ -2097,9 +2029,9 @@ bool macho_foreach_section(macho_t *macho, bool (*cb)(const void *ptr, kptr_t ad
     return true;
 }
 
-static bool macho_foreach_ptr_walk_chain(macho_t *macho, size_t off, bool (*cb)(const kptr_t *ptr, void *arg), void *arg)
+static bool macho_foreach_ptr_walk_chain(fixup_kind_t fixupKind, kptr_t base, macho_map_t *mapV, size_t nmapV, size_t off, bool (*cb)(const kptr_t *ptr, void *arg), void *arg)
 {
-    const kptr_t *ptr = macho_vtop(macho, macho->base + off, 0); // TODO: non-zero size here?
+    const kptr_t *ptr = macho_vtop_internal(mapV, nmapV, base + off, 0); // TODO: non-zero size here?
     if(!ptr)
     {
         ERR("Failed to find start of chained fixup, this should not be possible!");
@@ -2113,21 +2045,21 @@ static bool macho_foreach_ptr_walk_chain(macho_t *macho, size_t off, bool (*cb)(
         {
             return false;
         }
-        macho_fixup(macho, *ptr, NULL, NULL, NULL, &skip);
+        bool bind = false;
+        macho_fixup_internal(fixupKind, base, *ptr, &bind, NULL, NULL, &skip);
         ptr = (const kptr_t*)((uintptr_t)ptr + skip);
     } while(skip > 0);
     return true;
 }
 
-bool macho_foreach_ptr(macho_t *macho, bool (*cb)(const kptr_t *ptr, void *arg), void *arg)
+static bool macho_foreach_ptr_internal(uintptr_t hdr, fixup_kind_t fixupKind, union fixup_data fixup, kptr_t base, macho_map_t *mapV, size_t nmapV, bool (*cb)(const kptr_t *ptr, void *arg), void *arg)
 {
-    uintptr_t hdr = (uintptr_t)macho->hdr;
-    switch(macho->fixupKind)
+    switch(fixupKind)
     {
         case DYLD_CHAINED_PTR_ARM64E_KERNEL:
         case DYLD_CHAINED_PTR_64_KERNEL_CACHE:
         {
-            const fixup_seg_t *segs = macho->fixup.chain;
+            const fixup_seg_t *segs = fixup.chain;
             for(uint32_t i = 0, max = segs->seg_count; i < max; ++i)
             {
                 if(segs->seg_info_offset[i] == 0)
@@ -2142,7 +2074,7 @@ bool macho_foreach_ptr(macho_t *macho, bool (*cb)(const kptr_t *ptr, void *arg),
                     {
                         continue;
                     }
-                    if(!macho_foreach_ptr_walk_chain(macho, starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx, cb, arg))
+                    if(!macho_foreach_ptr_walk_chain(fixupKind, base, mapV, nmapV, starts->segment_offset + (size_t)j * (size_t)starts->page_size + (size_t)idx, cb, arg))
                     {
                         return false;
                     }
@@ -2153,15 +2085,15 @@ bool macho_foreach_ptr(macho_t *macho, bool (*cb)(const kptr_t *ptr, void *arg),
 
         case DYLD_CHAINED_PTR_ARM64E_FIRMWARE:
         {
-            const thread_starts_t *starts = (const thread_starts_t*)(hdr + macho->fixup.thread->offset);
-            for(size_t i = 0, max = macho->fixup.thread->size / sizeof(uint32_t) - 1; i < max; ++i)
+            const thread_starts_t *starts = (const thread_starts_t*)(hdr + fixup.thread->offset);
+            for(size_t i = 0, max = fixup.thread->size / sizeof(uint32_t) - 1; i < max; ++i)
             {
                 uint32_t off = starts->starts[i];
                 if(off == 0xffffffff)
                 {
                     continue;
                 }
-                if(!macho_foreach_ptr_walk_chain(macho, off, cb, arg))
+                if(!macho_foreach_ptr_walk_chain(fixupKind, base, mapV, nmapV, off, cb, arg))
                 {
                     return false;
                 }
@@ -2171,7 +2103,7 @@ bool macho_foreach_ptr(macho_t *macho, bool (*cb)(const kptr_t *ptr, void *arg),
 
         case DYLD_CHAINED_PTR_NONE:
         {
-            kaslrPackedOffsets_t *kxld = macho->fixup.kxld;
+            kaslrPackedOffsets_t *kxld = fixup.kxld;
             for(uint32_t i = 0, max = kxld->count; i < max; ++i)
             {
                 if(!cb((const kptr_t*)(hdr + kxld->offsetsArray[i]), arg))
@@ -2183,6 +2115,11 @@ bool macho_foreach_ptr(macho_t *macho, bool (*cb)(const kptr_t *ptr, void *arg),
         }
     }
     __builtin_trap();
+}
+
+bool macho_foreach_ptr(macho_t *macho, bool (*cb)(const kptr_t *ptr, void *arg), void *arg)
+{
+    return macho_foreach_ptr_internal((uintptr_t)macho->hdr, macho->fixupKind, macho->fixup, macho->base, macho->mapV, macho->nmapV, cb, arg);
 }
 
 bool macho_find_bytes(macho_t *macho, const void *bytes, size_t size, size_t alignment, bool (*cb)(kptr_t addr, void *arg), void *arg)
@@ -2373,11 +2310,11 @@ static int macho_reloc_cb(const void *key, const void *value)
 
 const char* macho_reloc_for_addr(macho_t *macho, kptr_t loc)
 {
-    const sym_t *s = bsearch((void*)loc, macho->symsByAddr, macho->nreloc, sizeof(sym_t), &macho_reloc_cb);
+    const sym_t *s = bsearch((void*)loc, macho->relocByAddr, macho->nreloc, sizeof(sym_t), &macho_reloc_cb);
     return s ? s->name : NULL;
 }
 
-static CFTypeRef macho_prelink_info_internal(macho_section_t *sectionsByName, size_t nsecs)
+static CFTypeRef macho_prelink_info_internal(const macho_section_t *sectionsByName, size_t nsecs)
 {
     const void *xml = NULL;
     if(!macho_section_internal(sectionsByName, nsecs, "__PRELINK_INFO", "__info", &xml, NULL, NULL, NULL))
