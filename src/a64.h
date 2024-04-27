@@ -239,6 +239,17 @@ typedef struct
              sf     :  1;
 } tbz_t;
 
+typedef struct
+{
+    uint32_t Rd   :  5,
+             Rn   :  5,
+             op2  :  2,
+             cond :  4,
+             Rm   :  5,
+             op1  : 10,
+             sf   :  1;
+} csel_t, csinc_t;
+
 /*typedef struct
 {
     uint32_t Rd     :  5,
@@ -279,7 +290,7 @@ typedef struct
              N      : 1,
              op     : 8,
              sf     : 1;
-} and_t, ands_t, orr_t, eor_t;
+} and_t, ands_t, orr_t, eor_t, bfm_t, sbfm_t, ubfm_t;
 
 typedef struct
 {
@@ -775,6 +786,16 @@ static inline int64_t get_tbz_off(const tbz_t *tbz)
     return mov->op1 == 0x150 && mov->op2 == 0x1f;
 }*/
 
+static inline bool is_csel(const csel_t *csel)
+{
+    return csel->op1 == 0b0011010100 && csel->op2 == 0b00;
+}
+
+static inline bool is_csinc(const csinc_t *csinc)
+{
+    return csinc->op1 == 0b0011010100 && csinc->op2 == 0b01;
+}
+
 static inline bool is_movz(const movz_t *movz)
 {
     return movz->op == 0xa5;
@@ -913,11 +934,32 @@ static inline bool is_eor(const eor_t *eor)
     return eor->op == 0b10100100;
 }
 
+static inline bool is_bfm(const bfm_t *bfm)
+{
+    return bfm->op == 0b01100110;
+}
+
+static inline bool is_sbfm(const sbfm_t *sbfm)
+{
+    return sbfm->op == 0b00100110;
+}
+
+static inline bool is_ubfm(const ubfm_t *ubfm)
+{
+    return ubfm->op == 0b10100110;
+}
+
 // and/orr/eor - holy clusterfuck
 
-extern uint64_t DecodeBitMasks(uint8_t N, uint8_t imms, uint8_t immr, uint8_t bits);
+typedef struct
+{
+    uint64_t wmask;
+    uint64_t tmask;
+} a64_bitmasks_t;
 
-static inline uint64_t get_orr_imm(const orr_t *orr)
+extern a64_bitmasks_t DecodeBitMasks(uint8_t N, uint8_t imms, uint8_t immr, uint8_t bits);
+
+static inline a64_bitmasks_t get_bitmasks(const orr_t *orr)
 {
     return DecodeBitMasks(orr->N, orr->imms, orr->immr, 32 << orr->sf);
 }

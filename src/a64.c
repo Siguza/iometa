@@ -16,22 +16,32 @@ static inline uint64_t Ones(uint8_t len)
     return (1ULL << len) - 1;
 }
 
-uint64_t DecodeBitMasks(uint8_t N, uint8_t imms, uint8_t immr, uint8_t bits)
+static inline uint64_t RotateRight(uint64_t value, uint8_t shift, uint8_t bits)
+{
+    if(shift == 0) return value;
+    return (value >> shift) | ((value & Ones(shift)) << (bits - shift));
+}
+
+a64_bitmasks_t DecodeBitMasks(uint8_t N, uint8_t imms, uint8_t immr, uint8_t bits)
 {
     uint8_t len = (N << 6) | (~imms & 0x3f);
     len = len == 0 ? -1 : 31 - __builtin_clz(len);
-    uint64_t levels = Ones(len);
-    uint64_t S = imms & levels;
-    uint64_t R = immr & levels;
+    uint8_t levels = Ones(len);
+    uint8_t S = imms & levels;
+    uint8_t R = immr & levels;
+    uint8_t D = (S - R) & levels;
     uint8_t esize = 1 << len;
     uint64_t welem = Ones(S + 1);
-    uint64_t wmask = (welem >> R) | ((welem & Ones(R % esize)) << (esize - (R % esize)));
+    uint64_t telem = Ones(D + 1);
+    uint64_t wmask = RotateRight(welem, R, esize);
+    uint64_t tmask = telem;
     while(esize < bits)
     {
         wmask |= wmask << esize;
+        tmask |= tmask << esize;
         esize <<= 1;
     }
-    return wmask;
+    return (a64_bitmasks_t){ .wmask = wmask, .tmask = tmask };
 }
 
 static inline uint64_t Replicate(uint64_t val, uint8_t times, uint64_t width)

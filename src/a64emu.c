@@ -46,6 +46,8 @@ bool is_linear_inst(const void *ptr)
            is_ldp_fp_post(ptr) ||
            is_ldp_fp_uoff(ptr) ||
            is_bl(ptr)          ||
+           is_csel(ptr)        ||
+           is_csinc(ptr)       ||
            is_movz(ptr)        ||
            is_movk(ptr)        ||
            is_movn(ptr)        ||
@@ -54,6 +56,9 @@ bool is_linear_inst(const void *ptr)
            is_ands(ptr)        ||
            is_orr(ptr)         ||
            is_eor(ptr)         ||
+           is_bfm(ptr)         ||
+           is_sbfm(ptr)        ||
+           is_ubfm(ptr)        ||
            is_and_reg(ptr)     ||
            is_ands_reg(ptr)    ||
            is_orr_reg(ptr)     ||
@@ -208,7 +213,7 @@ static inline void host_idx_set(a64_state_t *state, uint8_t idx, uint64_t addr, 
     }
 }
 
-static inline void update_nzcv(a64_state_t *state, uint64_t Rd, uint64_t Rn, uint64_t Rm, bool wide)
+static inline void update_nzcv_arithmetic(a64_state_t *state, uint64_t Rd, uint64_t Rn, uint64_t Rm, bool wide)
 {
     uint32_t topN = (Rn >> (wide ? 63 : 31)) & 0x1;
     uint32_t topM = (Rm >> (wide ? 63 : 31)) & 0x1;
@@ -218,6 +223,55 @@ static inline void update_nzcv(a64_state_t *state, uint64_t Rd, uint64_t Rn, uin
     state->c = Rd < (wide ? Rn : (Rn & 0xffffffffULL));
     state->v = (topN^topM^1) & (topN^topD);
     state->nzcv_valid = 1;
+}
+
+static inline void update_nzcv_bitwise(a64_state_t *state, uint64_t Rd, bool wide)
+{
+    uint32_t topD = (Rd >> (wide ? 63 : 31)) & 0x1;
+    state->n = topD;
+    state->z = Rd == 0;
+    state->c = 0;
+    state->v = 0;
+    state->nzcv_valid = 1;
+}
+
+static inline bool evaluate_cond(a64_state_t *state, uint32_t cond)
+{
+    switch(cond)
+    {
+        case 0x0: // eq
+            return state->z == 1;
+        case 0x1: // ne
+            return state->z == 0;
+        case 0x2: // hs
+            return state->c == 1;
+        case 0x3: // lo
+            return state->c == 0;
+        case 0x4: // mi
+            return state->n == 1;
+        case 0x5: // pl
+            return state->n == 0;
+        case 0x6: // vs
+            return state->v == 1;
+        case 0x7: // vc
+            return state->v == 0;
+        case 0x8: // hi
+            return state->c == 1 && state->z == 0;
+        case 0x9: // ls
+            return !(state->c == 1 && state->z == 0);
+        case 0xa: // ge
+            return state->n == state->v;
+        case 0xb: // lt
+            return state->n != state->v;
+        case 0xc: // gt
+            return state->z == 0 && state->n == state->v;
+        case 0xd: // le
+            return !(state->z == 0 && state->n == state->v);
+        case 0xe: // al
+        case 0xf: // nv
+            return true;
+    }
+    __builtin_trap();
 }
 
 #define HOST_IN_RANGE(state, idx, addr, size) ((uint64_t)(addr) >= (state)->hostmem[(idx)].min && (uint64_t)(addr) <= (state)->hostmem[(idx)].max - (size))
@@ -534,7 +588,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 Rd = add->sf ? Rd : (Rd & 0xffffffffULL);
                 if(want_nzcv)
                 {
-                    update_nzcv(state, Rd, Rn, Rm, !!add->sf);
+                    update_nzcv_arithmetic(state, Rd, Rn, Rm, !!add->sf);
                 }
                 if(!want_nzcv || add->Rd != 31)
                 {
@@ -587,7 +641,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 Rd = add->sf ? Rd : (Rd & 0xffffffffULL);
                 if(want_nzcv)
                 {
-                    update_nzcv(state, Rd, Rn, Rm, !!add->sf);
+                    update_nzcv_arithmetic(state, Rd, Rn, Rm, !!add->sf);
                 }
                 if(add->Rd != 31)
                 {
@@ -1323,6 +1377,27 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 }
             }
         }
+        else if(is_csel(ptr) || is_csinc(ptr))
+        {
+            const csel_t *csel = ptr;
+            if((csel->Rn != 31 && !(state->valid & (1 << csel->Rn))) || (csel->Rm != 31 && !(state->valid & (1 << csel->Rm))) || !state->nzcv_valid) // Unset validity
+            {
+                state->valid &= ~(1 << csel->Rd);
+            }
+            else
+            {
+                uint64_t Rn = csel->Rn == 31 ? 0 : state->x[csel->Rn];
+                uint64_t Rm = csel->Rm == 31 ? 0 : state->x[csel->Rm];
+                Rm += is_csinc(ptr) ? 1 : 0;
+                bool cond = evaluate_cond(state, csel->cond);
+                uint64_t Rd = cond ? Rn : Rm;
+                Rd = csel->sf ? Rd : (Rd & 0xffffffffULL);
+                state->x[csel->Rd] = Rd;
+                state->valid |= 1 << csel->Rd;
+                state->wide = (state->wide & ~(1 << csel->Rd)) | (csel->sf << csel->Rd);
+                HOST_SET(state, csel->Rd, csel->sf ? HOST_GET(state, cond ? csel->Rn : csel->Rm) : 0);
+            }
+        }
         else if(is_movz(ptr))
         {
             const movz_t *movz = ptr;
@@ -1365,15 +1440,28 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
             state->q[movi->Rd] = get_movi_imm(movi);
             state->qvalid |= 1 << movi->Rd;
         }
-        else if(is_and(ptr) || is_ands(ptr) || is_orr(ptr) || is_eor(ptr))
+        else if(is_and(ptr) || is_ands(ptr) || is_orr(ptr) || is_eor(ptr) || is_bfm(ptr) || is_sbfm(ptr) || is_ubfm(ptr))
         {
             bool want_nzcv = is_ands(ptr);
+            bool can_target_sp = is_and(ptr) || is_orr(ptr) || is_eor(ptr);
             const orr_t *orr = ptr;
-            if(orr->Rn == 31 || (state->valid & (1 << orr->Rn)))
+            if((orr->Rn != 31 && !(state->valid & (1 << orr->Rn))) || (is_bfm(ptr) && orr->Rd != 31 && !(state->valid & (1 << orr->Rd))))
             {
+                if(can_target_sp || orr->Rd != 31)
+                {
+                    state->valid &= ~(1 << orr->Rd);
+                }
+                if(want_nzcv)
+                {
+                    state->nzcv_valid = 0;
+                }
+            }
+            else
+            {
+                a64_bitmasks_t imm = get_bitmasks(orr);
                 uint64_t Rd,
                          Rn = (orr->Rn == 31 ? 0 : state->x[orr->Rn]),
-                         Rm = get_orr_imm(orr);
+                         Rm = imm.wmask;
                 uint8_t idx = 0;
                 if(is_and(orr) || is_ands(orr))
                 {
@@ -1391,32 +1479,35 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 {
                     Rd = Rn ^ Rm;
                 }
+                else if(is_bfm(ptr))
+                {
+                    Rd = state->x[orr->Rd];
+                    Rd = (Rd & ~imm.tmask) | (((Rd & ~imm.wmask) | ((orr->sf ? __builtin_rotateright64(Rn, orr->immr) : __builtin_rotateright32(Rn, orr->immr)) & imm.wmask)) & imm.tmask);
+                }
+                else if(is_sbfm(ptr))
+                {
+                    Rd = ((0ULL - ((Rn >> orr->imms) & 0x1ULL)) & ~imm.tmask) | ((orr->sf ? __builtin_rotateright64(Rn, orr->immr) : __builtin_rotateright32(Rn, orr->immr)) & imm.wmask & imm.tmask);
+                }
+                else if(is_ubfm(orr))
+                {
+                    Rd = (orr->sf ? __builtin_rotateright64(Rn, orr->immr) : __builtin_rotateright32(Rn, orr->immr)) & imm.wmask & imm.tmask;
+                }
                 else
                 {
                     ERR("Bug in a64_emulate (case and/orr/eor) at " ADDR, addr);
                     __builtin_trap();
                 }
+                Rd = orr->sf ? Rd : (Rd & 0xffffffffULL);
                 if(want_nzcv)
                 {
-                    update_nzcv(state, Rd, Rn, Rm, !!orr->sf);
+                    update_nzcv_bitwise(state, Rd, !!orr->sf);
                 }
-                if(!want_nzcv || orr->Rd != 31)
+                if(can_target_sp || orr->Rd != 31)
                 {
                     state->x[orr->Rd] = Rd;
                     state->valid |= 1 << orr->Rd;
                     state->wide = (state->wide & ~(1 << orr->Rd)) | (orr->sf << orr->Rd);
                     HOST_SET(state, orr->Rd, idx);
-                }
-            }
-            else
-            {
-                if(!want_nzcv || orr->Rd != 31)
-                {
-                    state->valid &= ~(1 << orr->Rd);
-                }
-                if(want_nzcv)
-                {
-                    state->nzcv_valid = 0;
                 }
             }
         }
@@ -1455,9 +1546,10 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                     ERR("Bug in a64_emulate (case and_reg/orr_reg/eor_reg) at " ADDR, addr);
                     __builtin_trap();
                 }
+                Rd = orr->sf ? Rd : (Rd & 0xffffffffULL);
                 if(want_nzcv)
                 {
-                    update_nzcv(state, Rd, Rn, Rm, !!orr->sf);
+                    update_nzcv_bitwise(state, Rd, !!orr->sf);
                 }
                 if(orr->Rd != 31)
                 {
@@ -1583,57 +1675,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 else         DBG(1, "Cannot do conditional branch with invalid flags at " ADDR, addr);
                 return kEmuUnknown;
             }
-            bool match;
-            switch(b->cond)
-            {
-                case 0x0: // eq
-                    match = state->z == 1;
-                    break;
-                case 0x1: // ne
-                    match = state->z == 0;
-                    break;
-                case 0x2: // hs
-                    match = state->c == 1;
-                    break;
-                case 0x3: // lo
-                    match = state->c == 0;
-                    break;
-                case 0x4: // mi
-                    match = state->n == 1;
-                    break;
-                case 0x5: // pl
-                    match = state->n == 0;
-                    break;
-                case 0x6: // vs
-                    match = state->v == 1;
-                    break;
-                case 0x7: // vc
-                    match = state->v == 0;
-                    break;
-                case 0x8: // hi
-                    match = state->c == 1 && state->z == 0;
-                    break;
-                case 0x9: // ls
-                    match = !(state->c == 1 && state->z == 0);
-                    break;
-                case 0xa: // ge
-                    match = state->n == state->v;
-                    break;
-                case 0xb: // lt
-                    match = state->n != state->v;
-                    break;
-                case 0xc: // gt
-                    match = state->z == 0 && state->n == state->v;
-                    break;
-                case 0xd: // le
-                    match = !(state->z == 0 && state->n == state->v);
-                    break;
-                case 0xe: // al
-                case 0xf: // nv
-                    match = true;
-                    break;
-            }
-            if(match)
+            if(evaluate_cond(state, b->cond))
             {
                 from = (uint32_t*)((uintptr_t)from + get_b_cond_off(b));
                 --from;
