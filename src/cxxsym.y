@@ -993,6 +993,18 @@ static bool cxx_mangle_compress(char *buf, size_t sz, int *i, void *arr, char *s
     return true;
 }
 
+static bool cxx_mangle_group(char *buf, size_t sz, int *i, int pos)
+{
+    if((size_t)*i + 1 >= sz) return false;
+    for(int j = *i; j > pos; --j)
+    {
+        buf[j] = buf[j-1];
+    }
+    ++*i;
+    buf[pos] = 'N';
+    return true;
+}
+
 static bool cxx_mangle_type(char *buf, size_t sz, int *i, void *arr, type_t *type)
 {
 #define P(fmt, ...) \
@@ -1034,20 +1046,14 @@ do \
                         return false;
                     }
                     // This is a bit weird, but we need to slip into the previous N..E group
-                    if(buf[*i - 1] == 'E')
+                    if(buf[pos] == 'N' && buf[*i - 1] == 'E')
                     {
                         --*i;
                     }
                     // ...or create one, if none exists yet.
-                    else
+                    else if(!cxx_mangle_group(buf, sz, i, pos))
                     {
-                        if((size_t)*i + 1 >= sz) return false;
-                        for(int j = *i; j > pos; --j)
-                        {
-                            buf[j] = buf[j-1];
-                        }
-                        ++*i;
-                        buf[pos] = 'N';
+                        return false;
                     }
                     // Now append our own name to the group and close it
                     P("%u%.*sE", t->val.name.str.len, t->val.name.str.len, t->val.name.str.ptr);
@@ -1083,11 +1089,19 @@ do \
                 {
                     return false;
                 }
-                // Same deal as for kName
-                bool inGroup = buf[*i - 1] == 'E';
-                if(inGroup)
+                // Same deal as for kName, but it's possible that compression got rid of a previous group
+                bool needGroup = !!t->val.tpl.name->val.name.next;
+                if(needGroup)
                 {
-                    --*i;
+                    bool haveGroup = buf[pos] == 'N' && buf[*i - 1] == 'E';
+                    if(haveGroup)
+                    {
+                        --*i;
+                    }
+                    else if(!cxx_mangle_group(buf, sz, i, pos))
+                    {
+                        return false;
+                    }
                 }
                 // Now emit the type list
                 P("I");
@@ -1095,9 +1109,9 @@ do \
                 {
                     return false;
                 }
-                // And both the type list and the group
-                if(inGroup) P("EE");
-                else        P("E");
+                // End both the type list and the group
+                if(needGroup) P("EE");
+                else          P("E");
                 break;
             }
             case kFunc:
