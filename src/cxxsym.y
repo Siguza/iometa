@@ -44,8 +44,9 @@ enum
     kArray,
     kPtr,
     kRef,
-    kVolatile,
+    kAtomic,
     kConst,
+    kVolatile,
     kBlock,
     kMember,
 };
@@ -93,7 +94,7 @@ typedef struct type
             struct type *class;
             struct type *inner;
         } mem;
-        struct type *inner; // kPtr, kRef, kVolatile, kConst, kBlock
+        struct type *inner; // kPtr, kRef, kAtomic, kConst, kVolatile, kBlock
     } val;
 } type_t;
 
@@ -116,7 +117,7 @@ typedef struct
 
 %token NAME_LITERAL
 %token UNTYPED_INT_LITERAL TYPED_INT_LITERAL
-%token CONST VOLATILE
+%token ATOMIC CONST VOLATILE
 %token SIGNED UNSIGNED BOOL CHAR SHORT INT LONG FLOAT DOUBLE
 %token TRUE_LITERAL FALSE_LITERAL
 %token VARARGS DELIM VOID BLOCK
@@ -139,7 +140,7 @@ typedef struct
 
 %type <str> NAME_LITERAL UNTYPED_INT_LITERAL
 %type <num> TYPED_INT_LITERAL typednumber
-%type <val> const.opt volatile.opt
+%type <val> atomic.opt const.opt volatile.opt
 %type <type> arglist typelist type complex array qual.opt qual flat ptr.opt ref.opt member.opt basic template.opt template_args data name literal number primitive integer varargs void block
 
 %{
@@ -264,7 +265,7 @@ qual.opt: /* empty */ { $$ = NULL; }
         ;
 
 qual: '&' { $$ = alloctype(kRef); if(!$$) YYERROR; $$->val.inner = NULL; }
-    | member.opt '*' const.opt volatile.opt ptr.opt ref.opt {
+    | member.opt '*' atomic.opt const.opt volatile.opt ptr.opt ref.opt {
         if($1)
         {
             $$ = $1;
@@ -277,30 +278,37 @@ qual: '&' { $$ = alloctype(kRef); if(!$$) YYERROR; $$->val.inner = NULL; }
         }
         if($3)
         {
-            type_t *tmp = alloctype(kConst);
+            type_t *tmp = alloctype(kAtomic);
             if(!tmp) YYERROR;
             tmp->val.inner = $$;
             $$ = tmp;
         }
         if($4)
         {
-            type_t *tmp = alloctype(kVolatile);
+            type_t *tmp = alloctype(kConst);
             if(!tmp) YYERROR;
             tmp->val.inner = $$;
             $$ = tmp;
         }
         if($5)
         {
-            inner_set_base($5, $$);
-            $$ = $5;
+            type_t *tmp = alloctype(kVolatile);
+            if(!tmp) YYERROR;
+            tmp->val.inner = $$;
+            $$ = tmp;
         }
         if($6)
         {
-            $6->val.inner = $$;
+            inner_set_base($6, $$);
             $$ = $6;
+        }
+        if($7)
+        {
+            $7->val.inner = $$;
+            $$ = $7;
         }
     }
-    | member.opt '*' const.opt volatile.opt ptr.opt complex {
+    | member.opt '*' atomic.opt const.opt volatile.opt ptr.opt complex {
         if($1)
         {
             $$ = $1;
@@ -313,27 +321,34 @@ qual: '&' { $$ = alloctype(kRef); if(!$$) YYERROR; $$->val.inner = NULL; }
         }
         if($3)
         {
-            type_t *tmp = alloctype(kConst);
+            type_t *tmp = alloctype(kAtomic);
             if(!tmp) YYERROR;
             tmp->val.inner = $$;
             $$ = tmp;
         }
         if($4)
         {
-            type_t *tmp = alloctype(kVolatile);
+            type_t *tmp = alloctype(kConst);
             if(!tmp) YYERROR;
             tmp->val.inner = $$;
             $$ = tmp;
         }
         if($5)
         {
-            inner_set_base($5, $$);
-            $$ = $5;
+            type_t *tmp = alloctype(kVolatile);
+            if(!tmp) YYERROR;
+            tmp->val.inner = $$;
+            $$ = tmp;
         }
         if($6)
         {
-            complex_set_base($6, $$);
+            inner_set_base($6, $$);
             $$ = $6;
+        }
+        if($7)
+        {
+            complex_set_base($7, $$);
+            $$ = $7;
         }
     }
     ;
@@ -346,59 +361,80 @@ flat: basic ptr.opt {
             $$ = $2;
         }
     }
-    | void const.opt volatile.opt '*' const.opt volatile.opt ptr.opt {
+    | void atomic.opt const.opt volatile.opt '*' atomic.opt const.opt volatile.opt ptr.opt {
         $$ = alloctype(kPtr);
         if(!$$) YYERROR;
         $$->val.inner = $1;
         if($2)
         {
-            type_t *tmp = alloctype(kConst);
-            if(!tmp) YYERROR;
-            tmp->val.inner = $$->val.inner;
-            $$->val.inner = tmp;
-        }
-        if($3)
-        {
-            type_t *tmp = alloctype(kVolatile);
-            if(!tmp) YYERROR;
-            tmp->val.inner = $$->val.inner;
-            $$->val.inner = tmp;
-        }
-        if($5)
-        {
-            type_t *tmp = alloctype(kConst);
+            type_t *tmp = alloctype(kAtomic);
             if(!tmp) YYERROR;
             tmp->val.inner = $$;
             $$ = tmp;
         }
-        if($6)
+        if($3)
+        {
+            type_t *tmp = alloctype(kConst);
+            if(!tmp) YYERROR;
+            tmp->val.inner = $$->val.inner;
+            $$->val.inner = tmp;
+        }
+        if($4)
         {
             type_t *tmp = alloctype(kVolatile);
+            if(!tmp) YYERROR;
+            tmp->val.inner = $$->val.inner;
+            $$->val.inner = tmp;
+        }
+        if($6)
+        {
+            type_t *tmp = alloctype(kAtomic);
             if(!tmp) YYERROR;
             tmp->val.inner = $$;
             $$ = tmp;
         }
         if($7)
         {
-            inner_set_base($7, $$);
-            $$ = $7;
+            type_t *tmp = alloctype(kConst);
+            if(!tmp) YYERROR;
+            tmp->val.inner = $$;
+            $$ = tmp;
+        }
+        if($8)
+        {
+            type_t *tmp = alloctype(kVolatile);
+            if(!tmp) YYERROR;
+            tmp->val.inner = $$;
+            $$ = tmp;
+        }
+        if($9)
+        {
+            inner_set_base($9, $$);
+            $$ = $9;
         }
     }
     ;
 
 ptr.opt: /* empty */                        { $$ = NULL; }
-       | ptr.opt '*' const.opt volatile.opt {
+       | ptr.opt '*' atomic.opt const.opt volatile.opt {
            $$ = alloctype(kPtr);
            if(!$$) YYERROR;
            $$->val.inner = $1;
            if($3)
+           {
+               type_t *tmp = alloctype(kAtomic);
+               if(!tmp) YYERROR;
+               tmp->val.inner = $$;
+               $$ = tmp;
+           }
+           if($4)
            {
                type_t *tmp = alloctype(kConst);
                if(!tmp) YYERROR;
                tmp->val.inner = $$;
                $$ = tmp;
            }
-           if($4)
+           if($5)
            {
                type_t *tmp = alloctype(kVolatile);
                if(!tmp) YYERROR;
@@ -416,16 +452,23 @@ member.opt: /* empty */ { $$ = NULL; }
           | name DELIM  { $$ = alloctype(kMember); if(!$$) YYERROR; $$->val.mem.class = $1; $$->val.mem.inner = NULL; }
           ;
 
-basic: data const.opt volatile.opt {
+basic: data atomic.opt const.opt volatile.opt {
         $$ = $1;
         if($2)
+        {
+            type_t *tmp = alloctype(kAtomic);
+            if(!tmp) YYERROR;
+            tmp->val.inner = $$;
+            $$ = tmp;
+        }
+        if($3)
         {
             type_t *tmp = alloctype(kConst);
             if(!tmp) YYERROR;
             tmp->val.inner = $$;
             $$ = tmp;
         }
-        if($3)
+        if($4)
         {
             type_t *tmp = alloctype(kVolatile);
             if(!tmp) YYERROR;
@@ -434,6 +477,10 @@ basic: data const.opt volatile.opt {
         }
      }
      ;
+
+atomic.opt: /* empty */ { $$ = 0; }
+          | ATOMIC      { $$ = 1; }
+          ;
 
 const.opt: /* empty */ { $$ = 0; }
          | CONST       { $$ = 1; }
@@ -554,8 +601,9 @@ static void freetype(type_t *t)
     {
         case kPtr:
         case kRef:
-        case kVolatile:
+        case kAtomic:
         case kConst:
+        case kVolatile:
         case kBlock:
             if(t->val.inner) freetype(t->val.inner);
             break;
@@ -639,8 +687,9 @@ static void complex_set_base(type_t *t, type_t *base)
         switch(t->kind)
         {
             case kPtr:
-            case kVolatile:
+            case kAtomic:
             case kConst:
+            case kVolatile:
             case kBlock:
                 if(!t->val.inner)
                 {
@@ -832,6 +881,9 @@ static int yylex(YYSTYPE *lvalp, state_t *state)
                 if(strncmp(ptr, "signed", 6) == 0) return SIGNED;
                 if(strncmp(ptr, "double", 6) == 0) return DOUBLE;
                 break;
+            case 7:
+                if(strncmp(ptr, "_Atomic", 7) == 0) return ATOMIC;
+                break;
             case 8:
                 if(strncmp(ptr, "unsigned", 8) == 0) return UNSIGNED;
                 if(strncmp(ptr, "volatile", 8) == 0) return VOLATILE;
@@ -855,8 +907,9 @@ bool compare_types(type_t *a, type_t *b)
     {
         case kPtr:
         case kRef:
-        case kVolatile:
+        case kAtomic:
         case kConst:
+        case kVolatile:
         case kBlock:
             return compare_types(a->val.inner, b->val.inner);
         case kMember:
@@ -1089,9 +1142,9 @@ do \
                     return false;
                 }
                 break;
-            case kVolatile:
+            case kAtomic:
                 compress = true;
-                P("V");
+                P("U7_Atomic");
                 if(!cxx_mangle_type(buf, sz, i, arr, t->val.inner))
                 {
                     return false;
@@ -1100,6 +1153,14 @@ do \
             case kConst:
                 compress = true;
                 P("K");
+                if(!cxx_mangle_type(buf, sz, i, arr, t->val.inner))
+                {
+                    return false;
+                }
+                break;
+            case kVolatile:
+                compress = true;
+                P("V");
                 if(!cxx_mangle_type(buf, sz, i, arr, t->val.inner))
                 {
                     return false;
