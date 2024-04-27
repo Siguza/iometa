@@ -448,7 +448,7 @@ static bool find_imports_alias_cb(const void *ptr, kptr_t addr, size_t size, uin
             {
                 DBG(1, "alias: " ADDR, alias);
                 ARRPUSH(*aliases, alias);
-                return false; // stop searching
+                break;
             }
         }
     }
