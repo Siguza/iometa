@@ -37,8 +37,11 @@ bool is_linear_inst(const void *ptr)
            is_ldp_pre(ptr)     ||
            is_ldp_post(ptr)    ||
            is_ldp_uoff(ptr)    ||
+           is_ldnp(ptr)        ||
            is_ldxr(ptr)        ||
            is_ldadd(ptr)       ||
+           is_ldurb(ptr)       ||
+           is_ldurh(ptr)       ||
            is_ldur(ptr)        ||
            is_ldr_fp_uoff(ptr) ||
            is_ldur_fp(ptr)     ||
@@ -69,7 +72,10 @@ bool is_linear_inst(const void *ptr)
            is_stp_pre(ptr)     ||
            is_stp_post(ptr)    ||
            is_stp_uoff(ptr)    ||
+           is_stnp(ptr)        ||
            is_stxr(ptr)        ||
+           is_sturb(ptr)       ||
+           is_sturh(ptr)       ||
            is_stur(ptr)        ||
            is_str_fp_uoff(ptr) ||
            is_stur_fp(ptr)     ||
@@ -384,7 +390,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 }
             }
         }
-        else if(is_str_uoff(ptr) || is_stur(ptr) || is_strb_uoff(ptr) || is_strh_uoff(ptr))
+        else if(is_str_uoff(ptr) || is_sturb(ptr) || is_sturh(ptr) || is_stur(ptr) || is_strb_uoff(ptr) || is_strh_uoff(ptr))
         {
             uint32_t Rt, Rn, size;
             int64_t off;
@@ -396,12 +402,12 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 size = 4 << str->sf;
                 off = get_str_uoff(str);
             }
-            else if(is_stur(ptr))
+            else if(is_sturb(ptr) || is_sturh(ptr) || is_stur(ptr))
             {
                 const stur_t *stur = ptr;
                 Rt = stur->Rt;
                 Rn = stur->Rn;
-                size = 4 << stur->sf;
+                size = 1 << stur->size;
                 off = get_stur_off(stur);
             }
             else if(is_strb_uoff(ptr))
@@ -453,7 +459,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 }
             }
         }
-        else if(is_stp_pre(ptr) || is_stp_post(ptr) || is_stp_uoff(ptr))
+        else if(is_stp_pre(ptr) || is_stp_post(ptr) || is_stp_uoff(ptr) || is_stnp(ptr))
         {
             const stp_t *stp = ptr;
             if(state->valid & (1 << stp->Rn)) // Only if valid
@@ -481,7 +487,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                     --idx;
                     uint64_t val  = stp->Rt  == 31 ? 0 : state->x[stp->Rt];
                     uint64_t val2 = stp->Rt2 == 31 ? 0 : state->x[stp->Rt2];
-                    if(stp->sf)
+                    if(stp->opc >> 1)
                     {
                         uint64_t *p = (uint64_t*)staddr;
                         if(HOST_IN_RANGE(state, idx, staddr, 8))
@@ -692,7 +698,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 }
             }
         }
-        else if(is_ldr_uoff(ptr) || is_ldur(ptr) || is_ldrb_uoff(ptr) || is_ldrh_uoff(ptr) || is_ldrsb_uoff(ptr) || is_ldrsh_uoff(ptr) || is_ldrsw_uoff(ptr) || is_ldr_pre(ptr) || is_ldr_post(ptr))
+        else if(is_ldr_uoff(ptr) || is_ldurb(ptr) || is_ldurh(ptr) || is_ldur(ptr) || is_ldrb_uoff(ptr) || is_ldrh_uoff(ptr) || is_ldrsb_uoff(ptr) || is_ldrsh_uoff(ptr) || is_ldrsw_uoff(ptr) || is_ldr_pre(ptr) || is_ldr_post(ptr))
         {
             bool sign = false;
             uint32_t Rt, Rn, sf, size;
@@ -707,13 +713,13 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 size = 4 << ldr->sf;
                 off = get_ldr_uoff(ldr);
             }
-            else if(is_ldur(ptr))
+            else if(is_ldurb(ptr) || is_ldurh(ptr) || is_ldur(ptr))
             {
                 const ldur_t *ldur = ptr;
                 Rt = ldur->Rt;
                 Rn = ldur->Rn;
-                sf = ldur->sf;
-                size = 4 << ldur->sf;
+                sf = ldur->size == 3;
+                size = 1 << ldur->size;
                 off = get_ldur_off(ldur);
             }
             else if(is_ldrb_uoff(ptr))
@@ -900,7 +906,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 HOST_SET(state, ldr->Rt, 0);
             }
         }
-        else if(is_ldp_pre(ptr) || is_ldp_post(ptr) || is_ldp_uoff(ptr))
+        else if(is_ldp_pre(ptr) || is_ldp_post(ptr) || is_ldp_uoff(ptr) || is_ldnp(ptr))
         {
             const ldp_t *ldp = ptr;
             if(!(state->valid & (1 << ldp->Rn))) // Unset validity
@@ -921,7 +927,8 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                     laddr = tmp;
                 }
                 uint8_t idx = HOST_GET(state, ldp->Rn);
-                size_t size = ldp->sf ? 16 : 8;
+                uint32_t sf = ldp->opc >> 1;
+                size_t size = sf ? 16 : 8;
                 const void *ldr_addr = idx ? (HOST_IN_RANGE(state, idx-1, laddr, size) ? (const void*)laddr : NULL) : macho_vtop(macho, laddr, size);
                 if(!ldr_addr)
                 {
@@ -935,7 +942,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                     }
                     return kEmuErr;
                 }
-                if(ldp->sf)
+                if(sf)
                 {
                     const uint64_t *p = ldr_addr;
                     uint64_t v1 = p[0];
