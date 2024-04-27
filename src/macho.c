@@ -1188,8 +1188,8 @@ macho_t* macho_open(const char *file)
                                     continue;
                                 }
                                 sym_t *sym = &symsByName[symidx++];
-                                sym->addr = symtab[i].n_value;
-                                sym->name = &strtab[symtab[i].n_strx];
+                                sym->addr = symtab[k].n_value;
+                                sym->name = &strtab[symtab[k].n_strx];
                                 DBG(2, "Symbol: " ADDR " %s", sym->addr, sym->name);
                             }
                             break;
