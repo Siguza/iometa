@@ -1750,49 +1750,72 @@ bool multi_call_emulate(macho_t *macho, const uint32_t *fncall, const uint32_t *
     kptr_t fnaddr = (uintptr_t)fnstart - (uintptr_t)segptr + segaddr;
     DBG(1, "Function with call " ADDR " starts at " ADDR, fncalladdr, fnaddr);
 
-    bzero(sp, A64_EMU_SPSIZE);
-    bzero(bitstr, (A64_EMU_SPSIZE + 31) / 32);
-    for(size_t i = 0; i < 31; ++i)
+    bool deep = false;
+    while(1)
     {
-        state->x[i] = 0;
-        state->q[i] = 0;
-    }
-    state->q[31]  = 0;
-    state->x[31]  = (uintptr_t)sp + A64_EMU_SPSIZE;
-    state->flags  = 0;
-    state->valid  = 0xfff80000;
-    state->qvalid = 0x0000ff00;
-    state->wide   = 0xfff80000;
-    state->host   = 0;
-    HOST_SET(state, 31, 1);
-    state->hostmem[0].min = (uintptr_t)sp;
-    state->hostmem[0].max = (uintptr_t)sp + A64_EMU_SPSIZE;
-    state->hostmem[0].bitstring = bitstr;
-    emu_ret_t ret = a64_emulate(macho, state, fnstart, &a64cb_check_equal, (void*)end, false, false, kEmuFnEnter);
-    switch(ret)
-    {
-        default:
-        case kEmuRet:
-            // This should be impossible
-            ERR("Bug in a64_emulate: got %u for kEmuFnEnter.", ret);
-            __builtin_trap();
-
-        case kEmuErr:
-            // This is a fatal error, so no point in trying further.
-            return false;
-
-        case kEmuEnd:
-            // This is the only possibly successful case. Just need to make sure we got everything we need.
-            if((state->valid & wantvalid) == wantvalid)
+        bzero(sp, A64_EMU_SPSIZE);
+        bzero(bitstr, (A64_EMU_SPSIZE + 31) / 32);
+        for(size_t i = 0; i < 31; ++i)
+        {
+            state->x[i] = 0;
+            state->q[i] = 0;
+        }
+        state->q[31]  = 0;
+        state->x[31]  = (uintptr_t)sp + A64_EMU_SPSIZE;
+        state->flags  = 0;
+        state->valid  = 0xfff80000;
+        state->qvalid = 0x0000ff00;
+        state->wide   = 0xfff80000;
+        state->host   = 0;
+        HOST_SET(state, 31, 1);
+        state->hostmem[0].min = (uintptr_t)sp;
+        state->hostmem[0].max = (uintptr_t)sp + A64_EMU_SPSIZE;
+        state->hostmem[0].bitstring = bitstr;
+        emu_ret_t ret;
+        if(deep)
+        {
+            // Second iteration: we only get here if the first iteration didn't work, so now we descend into functions
+            ret = a64_emulate(macho, state, fnstart, &a64cb_check_equal, (void*)end, false, false, kEmuFnEnter);
+        }
+        else
+        {
+            // First iteration: skip all function calls except the target one, hope that the missing values are function-local immediates
+            ret = a64_emulate(macho, state, fnstart, &a64cb_check_equal, (void*)fncall, false, false, kEmuFnIgnore);
+            if(ret == kEmuEnd)
             {
-                DBG(1, "Got a satisfying function call stack at " ADDR, fnaddr);
-                return true;
+                ret = a64_emulate(macho, state, fncall, &a64cb_check_equal, (void*)end, false, false, kEmuFnEnter);
             }
-            // Otherwise fall through
+        }
+        switch(ret)
+        {
+            default:
+            case kEmuRet:
+                // This should be impossible
+                ERR("Bug in a64_emulate: got %u for kEmuFnEnter.", ret);
+                __builtin_trap();
 
-        case kEmuUnknown:
-            // This means we don't have enough info yet, so break into the code below and do another call level.
+            case kEmuErr:
+                // This is a fatal error, so no point in trying further.
+                return false;
+
+            case kEmuEnd:
+                // This is the only possibly successful case. Just need to make sure we got everything we need.
+                if((state->valid & wantvalid) == wantvalid)
+                {
+                    DBG(1, "Got a satisfying function call stack at " ADDR, fnaddr);
+                    return true;
+                }
+                // Otherwise fall through
+
+            case kEmuUnknown:
+                // This means we don't have enough info yet, so break into the code below and do another call level.
+                break;
+        }
+        if(deep)
+        {
             break;
+        }
+        deep = true;
     }
 
     DBG(1, "Searching for function calls to " ADDR, fnaddr);
