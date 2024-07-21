@@ -573,6 +573,10 @@ macho_t* macho_open(const char *file)
                         goto out;
                     }
                     const mach_seg_t *seg = (const mach_seg_t*)cmd;
+                    if(!seg->vmsize) // Skip segments that aren't mapped
+                    {
+                        break;
+                    }
                     if(seg->fileoff > size)
                     {
                         ERR("LC_SEGMENT_64 (%u) starts out of bounds.", i);
@@ -581,6 +585,11 @@ macho_t* macho_open(const char *file)
                     if(seg->filesize > size - seg->fileoff)
                     {
                         ERR("LC_SEGMENT_64 (%u) ends out of bounds.", i);
+                        goto out;
+                    }
+                    if(seg->vmsize < seg->filesize)
+                    {
+                        ERR("LC_SEGMENT_64 (%u) maps less than filesize.", i);
                         goto out;
                     }
                     if(seg->initprot & ~VM_PROT_ALL)
@@ -1028,53 +1037,56 @@ macho_t* macho_open(const char *file)
             if(cmd->cmd == LC_SEGMENT_64)
             {
                 const mach_seg_t *seg = (const mach_seg_t*)cmd;
-                const mach_sec_t *sec = (const mach_sec_t*)(seg + 1);
-                for(uint32_t j = 0; j < seg->nsects; ++j)
+                if(seg->vmsize) // Only mapped segments
                 {
-                    // Skip zerofill
-                    if((sec[j].flags & SECTION_TYPE) == S_ZEROFILL)
+                    const mach_sec_t *sec = (const mach_sec_t*)(seg + 1);
+                    for(uint32_t j = 0; j < seg->nsects; ++j)
                     {
-                        continue;
+                        // Skip zerofill
+                        if((sec[j].flags & SECTION_TYPE) == S_ZEROFILL)
+                        {
+                            continue;
+                        }
+                        sectionsByName[secidx].addr = sec[j].addr;
+                        sectionsByName[secidx].size = sec[j].size;
+                        sectionsByName[secidx].mem  = (uintptr_t)hdr + sec[j].offset;
+                        sectionsByName[secidx].prot = seg->initprot;
+                        memcpy(sectionsByName[secidx].segname, sec[j].segname, 16);
+                        memcpy(sectionsByName[secidx].secname, sec[j].sectname, 16);
+                        sectionsByName[secidx].segname[16] = '\0';
+                        sectionsByName[secidx].secname[16] = '\0';
+                        ++secidx;
                     }
-                    sectionsByName[secidx].addr = sec[j].addr;
-                    sectionsByName[secidx].size = sec[j].size;
-                    sectionsByName[secidx].mem  = (uintptr_t)hdr + sec[j].offset;
-                    sectionsByName[secidx].prot = seg->initprot;
-                    memcpy(sectionsByName[secidx].segname, sec[j].segname, 16);
-                    memcpy(sectionsByName[secidx].secname, sec[j].sectname, 16);
-                    sectionsByName[secidx].segname[16] = '\0';
-                    sectionsByName[secidx].secname[16] = '\0';
-                    ++secidx;
-                }
-                if(seg->filesize > 0)
-                {
-                    segmentsByName[segidx].addr = seg->vmaddr;
-                    segmentsByName[segidx].size = seg->filesize;
-                    segmentsByName[segidx].mem  = (uintptr_t)hdr + seg->fileoff;
-                    segmentsByName[segidx].prot = seg->initprot;
-                    memcpy(segmentsByName[segidx].segname, seg->segname, 16);
-                    segmentsByName[segidx].segname[16] = '\0';
-                    ++segidx;
-                    mapV[mapidx].addr = seg->vmaddr;
-                    mapV[mapidx].size = seg->filesize;
-                    mapV[mapidx].mem  = (uintptr_t)hdr + seg->fileoff;
-                    mapV[mapidx].prot = seg->initprot;
-                    ++mapidx;
-                }
-                if(seg->vmsize > seg->filesize)
-                {
-                    size_t mapsize = seg->vmsize - seg->filesize;
-                    void *mapmem = mmap(NULL, mapsize, PROT_READ, MAP_ANON | MAP_PRIVATE, -1, 0); // TODO: PROT_WRITE ?
-                    if(mapmem == MAP_FAILED)
+                    if(seg->filesize > 0)
                     {
-                        ERRNO("mmap(mapmem)");
-                        goto out;
+                        segmentsByName[segidx].addr = seg->vmaddr;
+                        segmentsByName[segidx].size = seg->filesize;
+                        segmentsByName[segidx].mem  = (uintptr_t)hdr + seg->fileoff;
+                        segmentsByName[segidx].prot = seg->initprot;
+                        memcpy(segmentsByName[segidx].segname, seg->segname, 16);
+                        segmentsByName[segidx].segname[16] = '\0';
+                        ++segidx;
+                        mapV[mapidx].addr = seg->vmaddr;
+                        mapV[mapidx].size = seg->filesize;
+                        mapV[mapidx].mem  = (uintptr_t)hdr + seg->fileoff;
+                        mapV[mapidx].prot = seg->initprot;
+                        ++mapidx;
                     }
-                    mapV[mapidx].addr = seg->vmaddr + seg->filesize;
-                    mapV[mapidx].size = mapsize;
-                    mapV[mapidx].mem  = (uintptr_t)mapmem;
-                    mapV[mapidx].prot = seg->initprot;
-                    ++mapidx;
+                    if(seg->vmsize > seg->filesize)
+                    {
+                        size_t mapsize = seg->vmsize - seg->filesize;
+                        void *mapmem = mmap(NULL, mapsize, PROT_READ, MAP_ANON | MAP_PRIVATE, -1, 0); // TODO: PROT_WRITE ?
+                        if(mapmem == MAP_FAILED)
+                        {
+                            ERRNO("mmap(mapmem)");
+                            goto out;
+                        }
+                        mapV[mapidx].addr = seg->vmaddr + seg->filesize;
+                        mapV[mapidx].size = mapsize;
+                        mapV[mapidx].mem  = (uintptr_t)mapmem;
+                        mapV[mapidx].prot = seg->initprot;
+                        ++mapidx;
+                    }
                 }
             }
             cmd = (const mach_lc_t*)((uintptr_t)cmd + cmd->cmdsize);
