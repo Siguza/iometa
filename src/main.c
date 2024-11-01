@@ -891,6 +891,7 @@ static bool pure_virtual_cb(const void *ptr, kptr_t addr, size_t size, uint32_t 
                 }
                 ++adr2;
                 ++add2;
+                ref2 += sizeof(uint32_t);
             }
             DBG(1, "__cxa_pure_virtual: failed to find adr(p) x0");
             continue;
