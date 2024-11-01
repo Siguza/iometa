@@ -1071,6 +1071,10 @@ static bool vtab_via_getMetaClass_cb(const void *ptr, kptr_t addr, size_t size, 
         {
             kptr_t func = (uintptr_t)mem - (uintptr_t)ptr + addr,
                    ref  = func;
+            if((uintptr_t)mem > (uintptr_t)ptr && is_bti((const bti_t*)&mem[-1]))
+            {
+                func -= sizeof(uint32_t);
+            }
             if(iz_adrp)
             {
                 ref &= ~0xfff;
