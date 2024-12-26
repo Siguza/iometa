@@ -2146,15 +2146,22 @@ int main(int argc, const char **argv)
             for(size_t i = 0; i < n; ++i)
             {
                 // Despite all appearances, this is actually proper
-                char buf[512];
-                if(snprintf(buf, sizeof(buf), "__ZNK%s12getMetaClassEv", sym[i].name + 5) >= sizeof(buf))
+                const char *ztv = sym[i].name + 5;
+                size_t zlen = strlen(ztv);
+                if(ztv[0] == 'N')
                 {
-                    const char *s = sym[i].name + 5;
-                    while(*s >= '0' && *s <= '9')
+                    if(zlen < 6 || ztv[zlen - 1] != 'E')
                     {
-                        ++s;
+                        WRN("Bad vtab symbol name: %s", sym[i].name);
+                        continue;
                     }
-                    WRN("Class name too big for buffer: %s", s);
+                    ++ztv;
+                    zlen -= 2;
+                }
+                char buf[512];
+                if(snprintf(buf, sizeof(buf), "__ZNK%.*s12getMetaClassEv", (int)zlen, ztv) >= sizeof(buf))
+                {
+                    WRN("Class name too big for buffer: %s", sym[i].name);
                     continue;
                 }
                 kptr_t znk = macho_symbol(macho, buf);
