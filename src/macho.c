@@ -737,7 +737,11 @@ macho_t* macho_open(const char *file)
                         for(uint32_t j = 0; j < fixup->imports_count; ++j)
                         {
                             const fixup_import_t *imp = import + j;
-                            if(imp->lib_ordinal != 0xfe)
+                            if(imp->lib_ordinal == 0xfd) // weak lookup
+                            {
+                                continue;
+                            }
+                            if(imp->lib_ordinal != 0xfe) // flat namespace import
                             {
                                 ERR("Unsupported chained import ordinal: 0x%x (import %u)", imp->lib_ordinal, j);
                                 goto out;
