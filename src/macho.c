@@ -1336,7 +1336,7 @@ macho_t* macho_open(const char *file)
                 }
                 const kptr_t *ptr = (const kptr_t*)(addr - secaddr + (uintptr_t)secbase);
                 uintptr_t end = (uintptr_t)secbase + secsize;
-                if(!macho_validate_fixup_chain(hdr, base, fixupKind, ptr, end, ptrBitmap, &nreloc, chained_fixups->imports_count))
+                if(!macho_validate_fixup_chain(hdr, base, fixupKind, ptr, end, ptrBitmap, &nreloc, 0))
                 {
                     goto out;
                 }
