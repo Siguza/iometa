@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2024 Siguza
+/* Copyright (c) 2018-2025 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -519,9 +519,16 @@ static bool is_part_of_vtab(void *kernel, kptr_t kbase, fixup_kind_t fixupKind, 
     }
 }
 #else
-static bool is_part_of_vtab(macho_t *macho, const kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+typedef enum
 {
-    // TODO: hoist this to the callsites?
+    kVtabFunc,
+    kVtabChunk,
+    kVtabEnd,
+} vtab_check_t;
+
+static vtab_check_t check_vtab_elem(macho_t *macho, uint32_t objsize, const kptr_t *vtab, kptr_t vtabaddr, size_t idx)
+{
+    // TODO: hoist this lookup to the callsites?
     const void *segptr = NULL;
     size_t segsize = 0;
     if(!macho_segment_for_ptr(macho, vtab, &segptr, NULL, &segsize, NULL))
@@ -529,11 +536,45 @@ static bool is_part_of_vtab(macho_t *macho, const kptr_t *vtab, kptr_t vtabaddr,
         ERR("vtable ptr (" ADDR ") is not in any segment.", vtabaddr);
         exit(-1);
     }
-    if((segsize - ((uintptr_t)vtab - (uintptr_t)segptr)) / sizeof(kptr_t) <= idx)
+
+    // TODO: refactor exit() calls into a return value here?
+    if(idx >= (segsize - ((uintptr_t)vtab - (uintptr_t)segptr)) / sizeof(kptr_t))
     {
-        return false;
+        ERR("vtable (" ADDR ") runs off the end of its segment.", vtabaddr);
+        exit(-1);
     }
-    return macho_is_ptr(macho, &vtab[idx]);
+    if(macho_is_ptr(macho, &vtab[idx]))
+    {
+        return kVtabFunc;
+    }
+    kptr_t val = vtab[idx];
+    if(val == 0x0)
+    {
+        return kVtabEnd;
+    }
+    if((int64_t)val >= 0)
+    {
+        ERR("vtable (" ADDR ") has non-negative offset-to-top (idx 0x%zx)", vtabaddr, idx);
+        exit(-1);
+    }
+    if((0ULL - val) >= objsize)
+    {
+        ERR("vtable (" ADDR ") offset-to-top exceeds object size (idx 0x%zx, size 0x%x)", vtabaddr, idx, objsize);
+        exit(-1);
+    }
+    ++idx;
+    if(idx >= (segsize - ((uintptr_t)vtab - (uintptr_t)segptr)) / sizeof(kptr_t))
+    {
+        ERR("vtable (" ADDR ") runs off the end of its segment.", vtabaddr);
+        exit(-1);
+    }
+    val = vtab[idx];
+    if(val != 0x0)
+    {
+        ERR("vtable (" ADDR ") has non-zero rtti (idx 0x%zx)", vtabaddr, idx);
+        exit(-1);
+    }
+    return kVtabChunk;
 }
 #endif
 
@@ -1002,14 +1043,14 @@ static bool vtab_via_getMetaClass_ptr_cb(const kptr_t *ptr, void *arg)
 
         if((uintptr_t)ptr - (uintptr_t)segptr < (VtabGetMetaClassIdx + 2) * sizeof(kptr_t))
         {
-            WRN("getMetaClass vtable ptr too close to start of segment.");
-            return true;
+            ERR("getMetaClass vtable ptr too close to start of segment.");
+            return false;
         }
 
         if(ptr[-(VtabGetMetaClassIdx + 1)] != 0x0 || ptr[-(VtabGetMetaClassIdx + 2)] != 0x0)
         {
-            WRN("getMetaClass vtable ptr vtable not deceded by zero ptrs.");
-            return true;
+            ERR("getMetaClass vtable ptr vtable not preceded by zero ptrs.");
+            return false;
         }
 
         kptr_t ref = (uintptr_t)(ptr - VtabGetMetaClassIdx) - (uintptr_t)segptr + segaddr;
@@ -2387,7 +2428,7 @@ int main(int argc, const char **argv)
                 ERR("OSObjectVtab is not in any segment.");
                 return -1;
             }
-            for(size_t i = 0; is_part_of_vtab(macho, ovtab, OSObjectVtab, i); ++i)
+            for(size_t i = 0; check_vtab_elem(macho, 0, ovtab, OSObjectVtab, i) == kVtabFunc; ++i)
             {
                 bool bind = false;
                 if(macho_fixup(macho, ovtab[i], &bind, NULL, NULL, NULL) == OSObjectGetMetaClass)
@@ -2619,7 +2660,7 @@ int main(int argc, const char **argv)
                     ERR("OSMetaClassVtab is not in any segment.");
                     return -1;
                 }
-                for(size_t i = 0; is_part_of_vtab(macho, ovtab, OSObjectVtab, i); ++i)
+                for(size_t i = 0; check_vtab_elem(macho, 0, ovtab, OSObjectVtab, i) == kVtabFunc; ++i)
                 {
                     if(macho_fixup(macho, ovtab[i], NULL, NULL, NULL, NULL) == pure_virtual)
                     {
@@ -3164,17 +3205,40 @@ int main(int argc, const char **argv)
                     goto done;
                 }
                 // Parent is guaranteed to either be NULL or have a valid vtab here
-                const kptr_t *mvtab = macho_vtop(macho, meta->vtab, 0);
-                if(!mvtab)
+                const void *segptr = NULL;
+                kptr_t segaddr = 0;
+                size_t segsize = 0;
+                if(!macho_segment_for_addr(macho, meta->vtab, &segptr, &segaddr, &segsize, NULL))
                 {
-                    WRN("%s vtab is not in any segment.", meta->name);
-                    meta->methods_err = 1;
-                    goto done;
+                    ERR("%s vtab is not in any segment.", meta->name);
+                    return -1;
+                }
+                const kptr_t *mvtab = (const kptr_t*)((uintptr_t)segptr + (meta->vtab - segaddr));
+                if((meta->vtab - segaddr) < sizeof(kptr_t) * 2 || mvtab[-1] != 0x0 || mvtab[-2] != 0x0) // offset-to-top and rtti, should always be zero for OSMetaClassBase-derived objects
+                {
+                    ERR("%s vtab not preceded by zero ptrs.", meta->name);
+                    return -1;
                 }
                 size_t nmeth = 0;
-                while(is_part_of_vtab(macho, mvtab, meta->vtab, nmeth))
+                while(1)
                 {
-                    ++nmeth;
+                    vtab_check_t status = check_vtab_elem(macho, meta->objsize, mvtab, meta->vtab, nmeth);
+                    if(status == kVtabEnd)
+                    {
+                        break;
+                    }
+                    if(status == kVtabFunc)
+                    {
+                        ++nmeth;
+                        continue;
+                    }
+                    // TODO: handle multiple inheritance
+                    if(status == kVtabChunk)
+                    {
+                        break;
+                    }
+                    ERR("check_vtab_elem returned bad value. This should be impossible.");
+                    return -1;
                 }
                 size_t pnmeth = parent ? parent->nmethods : 0;
                 if(nmeth < pnmeth)
@@ -3620,16 +3684,35 @@ int main(int argc, const char **argv)
                 {
                     metaclass_t *meta = &metas.val[i];
                     DBG(1, "Populating vtab for %s::MetaClass", meta->name);
-                    const kptr_t *mvtab = macho_vtop(macho, meta->metavtab, 0);
-                    if(!mvtab)
+                    const void *segptr = NULL;
+                    kptr_t segaddr = 0;
+                    size_t segsize = 0;
+                    if(!macho_segment_for_addr(macho, meta->metavtab, &segptr, &segaddr, &segsize, NULL))
                     {
                         ERR("Vtab of %s::MetaClass is not in any segment.", meta->name);
                         return -1;
                     }
-                    size_t nmeth = 0;
-                    while(is_part_of_vtab(macho, mvtab, meta->metavtab, nmeth))
+                    const kptr_t *mvtab = (const kptr_t*)((uintptr_t)segptr + (meta->metavtab - segaddr));
+                    if((meta->metavtab - segaddr) < sizeof(kptr_t) * 2 || mvtab[-1] != 0x0 || mvtab[-2] != 0x0)
                     {
-                        ++nmeth;
+                        ERR("Vtab of %s::MetaClass not preceded by zero ptrs.", meta->name);
+                        return -1;
+                    }
+                    size_t nmeth = 0;
+                    while(1)
+                    {
+                        vtab_check_t status = check_vtab_elem(macho, 0, mvtab, meta->metavtab, nmeth);
+                        if(status == kVtabEnd)
+                        {
+                            break;
+                        }
+                        if(status == kVtabFunc)
+                        {
+                            ++nmeth;
+                            continue;
+                        }
+                        ERR("check_vtab_elem(meta) returned bad value. This should be impossible.");
+                        return -1;
                     }
                     if(nmetameth != -1 && nmeth != nmetameth)
                     {
