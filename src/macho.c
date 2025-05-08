@@ -1282,7 +1282,7 @@ macho_t* macho_open(const char *file)
                         continue;
                     }
                     size_t off = (size_t)j * (size_t)starts->page_size + (size_t)idx;
-                    if(idx > starts->page_size - sizeof(kptr_t))
+                    if(idx > starts->page_size) // don't subtract sizeof(kptr_t) here - see note below
                     {
                         ERR("Mach-O chained fixup start at 0x%zx overflows pagesize (0x%hx).", off, idx);
                         goto out;
