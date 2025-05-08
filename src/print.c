@@ -524,7 +524,7 @@ bool print_all(void *classes, opt_t opt, metaclass_t *OSMetaClass, const char *f
         goto out;
     }
     bool ok = true;
-    if(print->print_symbol)
+    if(print->print_symbol && !filt_class && !filt_override && !filter) // Only print global symbols if we're not filtering
     {
         if(pure_virtual)
         {

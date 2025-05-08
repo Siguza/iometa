@@ -4394,6 +4394,13 @@ int main(int argc, const char **argv)
         }
     }
 
+    // If this is a kext, then all of these are fake, so remove them before printing.
+    if(macho_is_kext(macho))
+    {
+        pure_virtual = 0;
+        OSMetaClassConstructor = 0;
+        OSMetaClassAltConstructor = 0;
+    }
     // Symmap will always need special handling due to maxmap
     bool ok = opt.symmap ? print_symmap(&metas, &symmap, opt) : print_all(&metas, opt, OSMetaClass, filt_class, filt_override, filter, pure_virtual, OSMetaClassConstructor, OSMetaClassAltConstructor, print);
     if(!ok)
