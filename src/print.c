@@ -63,7 +63,11 @@ static bool iometa_print_class(metaclass_t *meta, opt_t opt, metaclass_t *OSMeta
     }
     if(opt.meta)
     {
-        printf("meta=" ADDR " parent=" ADDR " metavtab=" ADDR " ", meta->addr, meta->parent, meta->metavtab);
+        printf("meta=" ADDR " parent=" ADDR " ", meta->addr, meta->parent);
+        if(opt.vtab)
+        {
+            printf("metavtab=" ADDR " ", meta->metavtab);
+        }
     }
     printf("%s%-*s%s", colorCyan, namelen, meta->name, colorReset);
     if(opt.bundle)
@@ -119,7 +123,11 @@ static bool iometa_print_class(metaclass_t *meta, opt_t opt, metaclass_t *OSMeta
         }
         if(opt.meta)
         {
-            printf("meta=------------------ parent=------------------ metavtab=------------------ ");
+            printf("meta=------------------ parent=------------------ ");
+            if(opt.vtab)
+            {
+                printf("metavtab=------------------ ");
+            }
         }
         printf("%s%s%-*s%s", colorCyan, meta->name, namelen ? namelen - (int)strlen(meta->name) : 0, "::MetaClass", colorReset);
         if(opt.bundle)
