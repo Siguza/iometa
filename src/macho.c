@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2024 Siguza
+/* Copyright (c) 2018-2025 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -21,10 +21,246 @@
 #include <sys/stat.h>           // fstat
 #include <CoreFoundation/CoreFoundation.h>
 
-extern CFTypeRef IOCFUnserialize(const char *buffer, CFAllocatorRef allocator, CFOptionFlags options, CFStringRef *errorString);
+extern CFTypeRef IOCFUnserializeWithSize(const char *buf, size_t len, CFAllocatorRef allocator, CFOptionFlags options, CFStringRef *err);
 
 #include "macho.h"
 #include "util.h"
+
+#ifdef CPU_TYPE_ARM64
+#   undef CPU_TYPE_ARM64
+#endif
+#ifdef CPU_SUBTYPE_MASK
+#   undef CPU_SUBTYPE_MASK
+#endif
+#ifdef CPU_SUBTYPE_ARM64_ALL
+#   undef CPU_SUBTYPE_ARM64_ALL
+#endif
+#ifdef CPU_SUBTYPE_ARM64E
+#   undef CPU_SUBTYPE_ARM64E
+#endif
+
+// Apple notation
+#define CPU_TYPE_ARM64              0x0100000c
+#define CPU_SUBTYPE_MASK            0x00ffffff
+#define CPU_SUBTYPE_ARM64_ALL              0x0
+#define CPU_SUBTYPE_ARM64E                 0x2
+#define FAT_CIGAM                   0xbebafeca
+#define MH_MAGIC_64                 0xfeedfacf
+#define MH_EXECUTE                  0x00000002
+#define MH_KEXT_BUNDLE              0x0000000b
+#define MH_FILESET                  0x0000000c
+#define MH_INCRLINK                 0x00000002
+#define MH_DYLIB_IN_CACHE           0x80000000
+#define LC_REQ_DYLD                 0x80000000
+#define LC_SYMTAB                   0x00000002
+#define LC_DYSYMTAB                 0x0000000b
+#define LC_SEGMENT_64               0x00000019
+#define LC_UUID                     0x0000001b
+#define LC_DYLD_CHAINED_FIXUPS      0x80000034
+#define LC_FILESET_ENTRY            0x80000035
+#define SECTION_TYPE                0x000000ff
+#define S_ZEROFILL                         0x1
+#define N_STAB                            0xe0
+#define N_TYPE                            0x0e
+#define N_EXT                             0x01
+#define N_SECT                            0x0e
+struct fat_header
+{
+    uint32_t magic;
+    uint32_t nfat_arch;
+};
+struct fat_arch
+{
+    uint32_t cputype;
+    uint32_t cpusubtype;
+    uint32_t offset;
+    uint32_t size;
+    uint32_t align;
+};
+struct mach_header_64
+{
+    uint32_t magic;
+    uint32_t cputype;
+    uint32_t cpusubtype;
+    uint32_t filetype;
+    uint32_t ncmds;
+    uint32_t sizeofcmds;
+    uint32_t flags;
+    uint32_t reserved;
+};
+struct load_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+};
+struct segment_command_64
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    char     segname[16];
+    uint64_t vmaddr;
+    uint64_t vmsize;
+    uint64_t fileoff;
+    uint64_t filesize;
+    uint32_t maxprot;
+    uint32_t initprot;
+    uint32_t nsects;
+    uint32_t flags;
+};
+struct section_64
+{
+    char     sectname[16];
+    char     segname[16];
+    uint64_t addr;
+    uint64_t size;
+    uint32_t offset;
+    uint32_t align;
+    uint32_t reloff;
+    uint32_t nreloc;
+    uint32_t flags;
+    uint32_t reserved1;
+    uint32_t reserved2;
+    uint32_t reserved3;
+};
+struct symtab_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint32_t symoff;
+    uint32_t nsyms;
+    uint32_t stroff;
+    uint32_t strsize;
+};
+struct dysymtab_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint32_t ilocalsym;
+    uint32_t nlocalsym;
+    uint32_t iextdefsym;
+    uint32_t nextdefsym;
+    uint32_t iundefsym;
+    uint32_t nundefsym;
+    uint32_t tocoff;
+    uint32_t ntoc;
+    uint32_t modtaboff;
+    uint32_t nmodtab;
+    uint32_t extrefsymoff;
+    uint32_t nextrefsyms;
+    uint32_t indirectsymoff;
+    uint32_t nindirectsyms;
+    uint32_t extreloff;
+    uint32_t nextrel;
+    uint32_t locreloff;
+    uint32_t nlocrel;
+};
+struct linkedit_data_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint32_t dataoff;
+    uint32_t datasize;
+};
+struct uuid_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint8_t  uuid[16];
+};
+struct fileset_entry_command
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint64_t vmaddr;
+    uint64_t fileoff;
+    uint32_t nameoff;
+};
+struct nlist_64
+{
+    uint32_t n_strx;
+    uint8_t  n_type;
+    uint8_t  n_sect;
+    uint16_t n_desc;
+    uint64_t n_value;
+};
+struct relocation_info
+{
+   int32_t  r_address;
+   uint32_t r_symbolnum : 24,
+            r_pcrel     :  1,
+            r_length    :  2,
+            r_extern    :  1,
+            r_type      :  4;
+};
+struct dyld_chained_fixups_header
+{
+    uint32_t fixups_version;
+    uint32_t starts_offset;
+    uint32_t imports_offset;
+    uint32_t symbols_offset;
+    uint32_t imports_count;
+    uint32_t imports_format;
+    uint32_t symbols_format;
+};
+struct dyld_chained_starts_in_image
+{
+    uint32_t seg_count;
+    uint32_t seg_info_offset[];
+};
+struct dyld_chained_starts_in_segment
+{
+    uint32_t size;
+    uint16_t page_size;
+    uint16_t pointer_format;
+    uint64_t segment_offset;
+    uint32_t max_valid_pointer;
+    uint16_t page_count;
+    uint16_t page_start[];
+};
+struct dyld_chained_import
+{
+    uint32_t lib_ordinal :  8,
+             weak_import :  1,
+             name_offset : 23;
+};
+
+#define KMOD_MAX_NAME 64
+#pragma pack(4)
+typedef struct
+{
+    kptr_t   next;
+    int32_t  info_version;
+    uint32_t id;
+    char     name[KMOD_MAX_NAME];
+    char     version[KMOD_MAX_NAME];
+    int32_t  reference_count;
+    kptr_t   reference_list;
+    kptr_t   address;
+    kptr_t   size;
+    kptr_t   hdr_size;
+    kptr_t   start;
+    kptr_t   stop;
+} kmod_info_t;
+#pragma pack()
+
+// My aliases
+//#define MACH_MAGIC                              MH_MAGIC_64
+//#define MACH_SEGMENT                            LC_SEGMENT_64
+typedef struct fat_header                       fat_hdr_t;
+typedef struct fat_arch                         fat_arch_t;
+typedef struct mach_header_64                   mach_hdr_t;
+typedef struct load_command                     mach_lc_t;
+typedef struct segment_command_64               mach_seg_t;
+typedef struct section_64                       mach_sec_t;
+typedef struct symtab_command                   mach_stab_t;
+typedef struct dysymtab_command                 mach_dstab_t;
+typedef struct fileset_entry_command            mach_fileent_t;
+typedef struct nlist_64                         mach_nlist_t;
+typedef struct relocation_info                  mach_reloc_t;
+typedef struct dyld_chained_fixups_header       fixup_hdr_t;
+typedef struct dyld_chained_starts_in_image     fixup_seg_t;
+typedef struct dyld_chained_starts_in_segment   fixup_starts_t;
+typedef struct dyld_chained_import              fixup_import_t;
 
 typedef enum
 {
@@ -105,6 +341,13 @@ typedef struct
     char secname[17]; // null terminator
 } macho_section_t;
 
+typedef struct
+{
+    kptr_t addr;
+    uint64_t size;
+    const char *bundle;
+} macho_bundle_range_t;
+
 struct _macho
 {
     int fd;
@@ -140,6 +383,9 @@ struct _macho
     size_t nreloc;
     CFTypeRef prelinkInfo;
     uint8_t **ptrBitmap;
+    const char **bundles;
+    macho_bundle_range_t *bundleMap;
+    size_t nbundles;
 };
 
 // High-level funcs needed during initialisation
@@ -213,6 +459,11 @@ static int macho_cmp_sym_name(const void *a, const void *b)
 static int macho_cmp_sym_addr(const void *a, const void *b)
 {
     return macho_cmp_u64(((const sym_t*)a)->addr, ((const sym_t*)b)->addr);
+}
+
+static int macho_cmp_bundle_map(const void *a, const void *b)
+{
+    return macho_cmp_u64(((const macho_bundle_range_t*)a)->addr, ((const macho_bundle_range_t*)b)->addr);
 }
 
 static inline bool macho_skip_symbol(const mach_nlist_t *sym)
@@ -1363,6 +1614,7 @@ macho_t* macho_open(const char *file)
                         goto out;
                     }
                     CFDataRef data = CFDictionaryGetValue(prelinkInfo, CFSTR("_PrelinkLinkKASLROffsets"));
+                    // TODO: parse nlocrel of kexts for even older kernelcaches (share code with macho_populate_bundles?)
                     if(!data || CFGetTypeID(data) != CFDataGetTypeID())
                     {
                         ERR("PrelinkLinkKASLROffsets missing or wrong type.");
@@ -1629,6 +1881,9 @@ macho_t* macho_open(const char *file)
     macho->nreloc = nreloc;
     macho->prelinkInfo = prelinkInfo;
     macho->ptrBitmap = ptrBitmap;
+    macho->bundles = NULL;
+    macho->bundleMap = NULL;
+    macho->nbundles = 0;
 
     // Prevent freeing
     fd = -1;
@@ -1676,6 +1931,8 @@ out:;
 
 void macho_close(macho_t *macho)
 {
+    if(macho->bundleMap) free(macho->bundleMap);
+    if(macho->bundles) free(macho->bundles);
     if(macho->ptrBitmap)
     {
         for(size_t i = 0, max = (macho->size + MACHO_BITMAP_PAGESIZE - 1) / MACHO_BITMAP_PAGESIZE; i < max; ++i)
@@ -2333,14 +2590,15 @@ const char* macho_reloc_for_addr(macho_t *macho, kptr_t loc)
 static CFTypeRef macho_prelink_info_internal(const macho_section_t *sectionsByName, size_t nsecs)
 {
     const void *xml = NULL;
-    if(!macho_section_internal(sectionsByName, nsecs, "__PRELINK_INFO", "__info", &xml, NULL, NULL, NULL))
+    size_t len = 0;
+    if(!macho_section_internal(sectionsByName, nsecs, "__PRELINK_INFO", "__info", &xml, NULL, &len, NULL))
     {
         //ERR("Failed to find PrelinkInfo");
         return NULL;
     }
 
     CFStringRef err = NULL;
-    CFTypeRef info = IOCFUnserialize(xml, NULL, 0, &err);
+    CFTypeRef info = IOCFUnserializeWithSize(xml, len, NULL, 0, &err);
     if(!info)
     {
         if(err)
@@ -2354,6 +2612,11 @@ static CFTypeRef macho_prelink_info_internal(const macho_section_t *sectionsByNa
         }
         return NULL;
     }
+    if(CFGetTypeID(info) != CFDictionaryGetTypeID())
+    {
+        ERR("IOCFUnserialize: wrong type");
+        return NULL;
+    }
     if(err)
     {
         WRN("IOCFUnserialize populated the error string but returned success???");
@@ -2362,13 +2625,353 @@ static CFTypeRef macho_prelink_info_internal(const macho_section_t *sectionsByNa
     return info;
 }
 
-CFTypeRef macho_prelink_info(macho_t *macho)
+static CFTypeRef macho_prelink_info(macho_t *macho)
 {
     if(!macho->prelinkInfo)
     {
         macho->prelinkInfo = macho_prelink_info_internal(macho->sectionsByName, macho->nsecs);
     }
     return macho->prelinkInfo;
+}
+
+static bool macho_populate_bundles(macho_t *macho)
+{
+    const char **bundles = NULL;
+    macho_bundle_range_t *bundleMap = NULL;
+    size_t nbundles = 0;
+    if(macho_is_kext(macho))
+    {
+        // TODO: find & parse Info.plist?
+        const kmod_info_t *kmod = NULL;
+        kptr_t kmod_addr = macho_symbol(macho, "_kmod_info");
+        if(kmod_addr)
+        {
+            DBG(2, "kmod: " ADDR, kmod_addr);
+            kmod = macho_vtop(macho, kmod_addr, sizeof(kmod_info_t));
+        }
+        if(!kmod)
+        {
+            ERR("Failed to find kmod_info.");
+            goto bad;
+        }
+        bundles = malloc(sizeof(*bundles));
+        if(!bundles)
+        {
+            ERRNO("malloc(bundles)");
+            goto bad;
+        }
+        WRN("Using kmod_info for bundle identifier. Result may not match runtime value.");
+        *bundles = kmod->name;
+        nbundles = 1;
+    }
+    else
+    {
+        CFTypeRef info = macho_prelink_info(macho);
+        if(!info)
+        {
+            bundles = malloc(sizeof(*bundles));
+            if(!bundles)
+            {
+                ERRNO("malloc(bundles)");
+                goto bad;
+            }
+        }
+        else
+        {
+            const kptr_t *kmod_info_ptr = NULL;
+            size_t kmod_info_size = 0;
+            bool have_kmod_info = macho_section(macho, "__PRELINK_INFO", "__kmod_info", (const void**)&kmod_info_ptr, NULL, &kmod_info_size, NULL);
+
+            const kptr_t *kmod_start_ptr = NULL;
+            size_t kmod_start_size = 0;
+            bool have_kmod_start = macho_section(macho, "__PRELINK_INFO", "__kmod_start", (const void**)&kmod_start_ptr, NULL, &kmod_start_size, NULL);
+
+            if(have_kmod_info != have_kmod_start)
+            {
+                ERR("Mismatching presence of kmod_info/kmod_start.");
+                goto bad;
+            }
+            bool builtin_kmod = have_kmod_info && have_kmod_start;
+            if(builtin_kmod)
+            {
+                if(kmod_start_size != kmod_info_size + sizeof(kptr_t))
+                {
+                    ERR("Mismatching size of kmod_info/kmod_start.");
+                    goto bad;
+                }
+                if(kmod_info_size % sizeof(kptr_t) != 0 || kmod_start_size % sizeof(kptr_t) != 0)
+                {
+                    ERR("Bad size of kmod_info/kmod_start.");
+                    goto bad;
+                }
+            }
+
+            CFArrayRef arr = CFDictionaryGetValue(info, CFSTR("_PrelinkInfoDictionary"));
+            if(!arr || CFGetTypeID(arr) != CFArrayGetTypeID())
+            {
+                ERR("PrelinkInfoDictionary missing or wrong type");
+                goto bad;
+            }
+            CFIndex arrlen = CFArrayGetCount(arr);
+            bundles = malloc((arrlen + 1) * sizeof(*bundles));
+            if(!bundles)
+            {
+                ERRNO("malloc(bundles)");
+                goto bad;
+            }
+            bundleMap = malloc(arrlen * sizeof(*bundleMap));
+            if(!bundleMap)
+            {
+                ERRNO("malloc(bundleMap)");
+                goto bad;
+            }
+            for(size_t i = 0; i < arrlen; ++i)
+            {
+                CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
+                if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
+                {
+                    ERR("Array entry %lu is not a dict.", i);
+                    goto bad;
+                }
+                CFStringRef cfbundle = CFDictionaryGetValue(dict, CFSTR("CFBundleIdentifier"));
+                if(!cfbundle || CFGetTypeID(cfbundle) != CFStringGetTypeID())
+                {
+                    ERR("CFBundleIdentifier missing or wrong type at entry %lu.", i);
+                    if(debug >= 2)
+                    {
+                        CFShow(dict);
+                    }
+                    goto bad;
+                }
+                const char *bundle = CFStringGetCStringPtr(cfbundle, kCFStringEncodingUTF8);
+                if(!bundle)
+                {
+                    ERR("Failed to get CFString contents at entry %lu.", i);
+                    if(debug >= 2)
+                    {
+                        CFShow(cfbundle);
+                    }
+                    goto bad;
+                }
+                kptr_t loadaddr = 0;
+                uint64_t loadsize = 0;
+                if(builtin_kmod)
+                {
+                    CFNumberRef cfidx = CFDictionaryGetValue(dict, CFSTR("ModuleIndex"));
+                    if(!cfidx)
+                    {
+                        DBG(2, "Kext %s is codeless, skipping...", bundle);
+                        continue;
+                    }
+                    if(CFGetTypeID(cfidx) != CFNumberGetTypeID())
+                    {
+                        ERR("ModuleIndex has wrong type for kext %s.", bundle);
+                        goto bad;
+                    }
+                    uint64_t idx = 0;
+                    if(!CFNumberGetValue(cfidx, kCFNumberLongLongType, &idx))
+                    {
+                        ERR("Failed to get CFNumber contents for kext %s", bundle);
+                        if(debug >= 2)
+                        {
+                            CFShow(cfidx);
+                        }
+                        goto bad;
+                    }
+                    if(idx >= kmod_info_size)
+                    {
+                        ERR("ModuleIndex out of bounds for kext %s.", bundle);
+                        goto bad;
+                    }
+                    loadaddr = macho_fixup(macho, kmod_start_ptr[idx], NULL, NULL, NULL, NULL);
+                    loadsize = macho_fixup(macho, kmod_start_ptr[idx + 1], NULL, NULL, NULL, NULL) - loadaddr;
+                }
+                else
+                {
+                    CFNumberRef cfaddr = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableLoadAddr"));
+                    if(!cfaddr)
+                    {
+                        DBG(2, "Kext %s has no PrelinkExecutableLoadAddr, skipping...", bundle);
+                        continue;
+                    }
+                    if(CFGetTypeID(cfaddr) != CFNumberGetTypeID())
+                    {
+                        ERR("PrelinkExecutableLoadAddr has wrong type for kext %s.", bundle);
+                        if(debug >= 2)
+                        {
+                            CFShow(cfaddr);
+                        }
+                        goto bad;
+                    }
+                    if(!CFNumberGetValue(cfaddr, kCFNumberLongLongType, &loadaddr))
+                    {
+                        ERR("Failed to get CFNumber contents for kext %s", bundle);
+                        if(debug >= 2)
+                        {
+                            CFShow(cfaddr);
+                        }
+                        goto bad;
+                    }
+                    if(loadaddr == 0x7fffffffffffffff)
+                    {
+                        DBG(2, "Kext %s is codeless, skipping...", bundle);
+                        continue;
+                    }
+                    CFNumberRef cfsize = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableSize"));
+                    if(!cfsize || CFGetTypeID(cfsize) != CFNumberGetTypeID())
+                    {
+                        ERR("PrelinkExecutableSize missing or wrong type for kext %s.", bundle);
+                        if(debug >= 2)
+                        {
+                            CFShow(cfsize);
+                        }
+                        goto bad;
+                    }
+                    if(!CFNumberGetValue(cfsize, kCFNumberLongLongType, &loadsize))
+                    {
+                        ERR("Failed to get CFNumber contents for kext %s", bundle);
+                        if(debug >= 2)
+                        {
+                            CFShow(cfsize);
+                        }
+                        goto bad;
+                    }
+                }
+                DBG(2, "Kext %s at " ADDR, bundle, loadaddr);
+                if(loadsize < sizeof(mach_hdr_t))
+                {
+                    ERR("PrelinkExecutableSize too small for kext %s.", bundle);
+                    goto bad;
+                }
+                const mach_hdr_t *mh = macho_vtop(macho, loadaddr, loadsize);
+                if(!mh)
+                {
+                    ERR("Failed to get Mach-O header for kext %s.", bundle);
+                    goto bad;
+                }
+                if(mh->magic != MH_MAGIC_64)
+                {
+                    ERR("Mach-O header for kext %s has wrong magic: 0x%08x", bundle, mh->magic);
+                    goto bad;
+                }
+                if(mh->cputype != macho->hdr->cputype || (mh->cpusubtype & CPU_SUBTYPE_MASK) != macho->subtype)
+                {
+                    ERR("Mach-O header for kext %s has mismatching cputype or cpusubtype.", bundle);
+                    goto bad;
+                }
+                if(mh->filetype != MH_KEXT_BUNDLE)
+                {
+                    ERR("Mach-O header for kext %s has bad type: 0x%x", bundle, mh->filetype);
+                    goto bad;
+                }
+                if(mh->flags & MH_INCRLINK)
+                {
+                    DBG(2, "Kext %s has MH_INCRLINK set, skipping...", bundle);
+                    continue;
+                }
+                if(mh->sizeofcmds > loadsize - sizeof(mach_hdr_t))
+                {
+                    ERR("Mach-O header for kext %s overflows PrelinkExecutableSize.", bundle);
+                    goto bad;
+                }
+                kptr_t textaddr = 0;
+                uint64_t textsize = 0;
+                const mach_lc_t * const firstlc = (const mach_lc_t*)(mh + 1);
+                const mach_lc_t *lc = firstlc;
+                for(uint32_t j = 0, num = mh->ncmds; j < num; ++j)
+                {
+                    size_t lcmax = mh->sizeofcmds - ((uintptr_t)lc - (uintptr_t)firstlc);
+                    uint32_t lcsize;
+                    if(sizeof(mach_lc_t) > lcmax || (lcsize = lc->cmdsize) > lcmax)
+                    {
+                        ERR("Mach-O header for kext %s load command %u out of bounds.", bundle, j);
+                        goto bad;
+                    }
+                    if(lcsize < sizeof(mach_lc_t))
+                    {
+                        ERR("Mach-O header for kext %s load command %u too short.", bundle, j);
+                        goto bad;
+                    }
+                    if(lc->cmd == LC_SEGMENT_64)
+                    {
+                        if(lc->cmdsize < sizeof(mach_seg_t))
+                        {
+                            ERR("Mach-O header for kext %s LC_SEGMENT_64 command (%u) too short.", bundle, j);
+                            goto bad;
+                        }
+                        const mach_seg_t *seg = (const mach_seg_t*)lc;
+                        // We're looking for the code segment
+                        if((seg->initprot & VM_PROT_EXECUTE) != 0 && seg->vmsize && seg->filesize)
+                        {
+                            textaddr = macho_is_ptr(macho, &seg->vmaddr) ? macho_fixup(macho, seg->vmaddr, NULL, NULL, NULL, NULL) : seg->vmaddr;
+                            textsize = seg->filesize;
+                            break;
+                        }
+                    }
+                    lc = (const mach_lc_t*)((uintptr_t)lc + lc->cmdsize);
+                }
+                if(!textaddr || !textsize)
+                {
+                    ERR("Failed to find code segment for kext %s.", bundle);
+                    goto bad;
+                }
+                DBG(3, "Kext %s code segment: " ADDR "-" ADDR, bundle, textaddr, textaddr + textsize);
+                bundles[nbundles] = bundle;
+                bundleMap[nbundles].addr = textaddr;
+                bundleMap[nbundles].size = textsize;
+                bundleMap[nbundles].bundle = bundle;
+                ++nbundles;
+            }
+            qsort(bundleMap, nbundles, sizeof(macho_bundle_range_t), &macho_cmp_bundle_map);
+        }
+        bundles[nbundles++] = "__kernel__";
+    }
+    macho->bundles = bundles;
+    macho->bundleMap = bundleMap;
+    macho->nbundles = nbundles;
+    return true;
+bad:;
+    if(bundles) free(bundles);
+    if(bundleMap) free(bundleMap);
+    return false;
+}
+
+const char* const* macho_bundles(macho_t *macho, size_t *n)
+{
+    if(!macho->nbundles && !macho_populate_bundles(macho))
+    {
+        return NULL;
+    }
+    *n = macho->nbundles;
+    return macho->bundles;
+}
+
+static int macho_bundle_for_addr_cb(const void *key, const void *value)
+{
+    const macho_bundle_range_t *range = value;
+    if((kptr_t)key < range->addr)
+    {
+        return -1;
+    }
+    if((kptr_t)key - range->addr >= range->size)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+const char* macho_bundle_for_addr(macho_t *macho, kptr_t addr)
+{
+    if(!macho->nbundles && !macho_populate_bundles(macho))
+    {
+        return NULL;
+    }
+    if(macho->nbundles == 1)
+    {
+        return macho->bundles[0];
+    }
+    macho_bundle_range_t *range = bsearch((const void*)addr, macho->bundleMap, macho->nbundles - 1, sizeof(macho_bundle_range_t), &macho_bundle_for_addr_cb);
+    return range ? range->bundle : "__kernel__";
 }
 
 #if 0
@@ -3201,7 +3804,7 @@ bool macho_extract_chained_imports(void *macho, kptr_t base, struct linkedit_dat
 #endif
 
 // XXX TMP TODO: going away
-const mach_hdr_t* __tmp_macho_get_hdr(macho_t *macho)
+/*const mach_hdr_t* __tmp_macho_get_hdr(macho_t *macho)
 {
     return macho->hdr;
-}
+}*/

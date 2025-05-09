@@ -68,6 +68,7 @@ How this works:
 
 #define NUM_KEXTS_EXPECT 0x200
 
+#if 0
 #define KMOD_MAX_NAME 64
 #pragma pack(4)
 typedef struct
@@ -86,6 +87,7 @@ typedef struct
     kptr_t      stop;
 } kmod_info_t;
 #pragma pack()
+#endif
 
 #if 0
 typedef struct
@@ -130,8 +132,8 @@ static bool get_import_target(const adr_t *adrp, kptr_t alias, bool space_for_4,
     const bra_t *bra = (const bra_t*)(adrp + 3);
     if
     (
-        is_ldr_uoff(ldr1) && ldr1->sf == 1 && is_br(br) &&  // Types
-        adrp->Rd == ldr1->Rn && ldr1->Rt == br->Rn              // Registers
+        is_ldr_uoff(ldr1) && ldr1->sf == 1 && is_br(br) && // Types
+        adrp->Rd == ldr1->Rn && ldr1->Rt == br->Rn         // Registers
     )
     {
         *addr = (alias & ~0xfffULL) + get_adr_off(adrp) + get_ldr_uoff(ldr1);
@@ -3995,10 +3997,13 @@ int main(int argc, const char **argv)
     }
 
     const char **filter = NULL;
+#if 0
     const char *__kernel__ = "__kernel__"; // Single ref for pointer comparisons
+#endif
 
     if(opt.bundle || opt.bfilt)
     {
+#if 0
         // XXX TMP TODO
         extern const mach_hdr_t* __tmp_macho_get_hdr(macho_t *macho);
         const mach_hdr_t *hdr = __tmp_macho_get_hdr(macho);
@@ -4475,6 +4480,78 @@ int main(int argc, const char **argv)
             }
             free(bundleList);
         }
+#else
+        for(size_t i = 0; i < metas.idx; ++i)
+        {
+            metaclass_t *meta = &metas.val[i];
+            meta->bundle = macho_bundle_for_addr(macho, meta->callsite);
+            if(!meta->bundle)
+            {
+                return -1;
+            }
+        }
+        if(filt_bundle)
+        {
+            size_t nbundles = 0;
+            const char * const *bundles = macho_bundles(macho, &nbundles);
+            if(!bundles)
+            {
+                return -1;
+            }
+            // Exact match
+            for(size_t i = 0; i < nbundles; ++i)
+            {
+                if(strcmp(bundles[i], filt_bundle) == 0)
+                {
+                    filter = malloc(sizeof(*filter) * 2);
+                    if(!filter)
+                    {
+                        ERRNO("malloc(filter)");
+                        return -1;
+                    }
+                    // Since these are strings, we can unique them even if there was more than one exact match
+                    filter[0] = filt_bundle;
+                    filter[1] = NULL;
+                    break;
+                }
+            }
+            // Partial match
+            if(!filter)
+            {
+                size_t num = 0;
+                for(size_t i = 0; i < nbundles; ++i)
+                {
+                    if(strstr(bundles[i], filt_bundle))
+                    {
+                        ++num;
+                    }
+                }
+                if(num)
+                {
+                    filter = malloc((num + 1) * sizeof(*filter));
+                    if(!filter)
+                    {
+                        ERRNO("malloc(filter)");
+                        return -1;
+                    }
+                    filter[num] = NULL;
+                    num = 0;
+                    for(size_t i = 0; i < nbundles; ++i)
+                    {
+                        if(strstr(bundles[i], filt_bundle))
+                        {
+                            filter[num++] = bundles[i];
+                        }
+                    }
+                }
+            }
+            if(!filter)
+            {
+                ERR("No bundle matching %s.", filt_bundle);
+                return -1;
+            }
+        }
+#endif
     }
 
     // If this is a kext, then all of these are fake, so remove them before printing.
