@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2024 Siguza
+/* Copyright (c) 2018-2025 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -238,6 +238,21 @@ typedef struct
              op1  : 10,
              sf   :  1;
 } csel_t, csinc_t;
+
+typedef struct
+{
+    uint32_t v    :  1,
+             c    :  1,
+             z    :  1,
+             n    :  1,
+             op3  :  1,
+             Rn   :  5,
+             op2  :  2,
+             cond :  4,
+             Rm   :  5,
+             op1  : 10,
+             sf   :  1;
+} ccmp_t;
 
 /*typedef struct
 {
@@ -813,6 +828,16 @@ static inline bool is_csel(const csel_t *csel)
 static inline bool is_csinc(const csinc_t *csinc)
 {
     return csinc->op1 == 0b0011010100 && csinc->op2 == 0b01;
+}
+
+static inline bool is_ccmp_imm(const ccmp_t *ccmp)
+{
+    return ccmp->op1 == 0b1111010010 && ccmp->op2 == 0b10 && ccmp->op3 == 0b0;
+}
+
+static inline bool is_ccmp_reg(const ccmp_t *ccmp)
+{
+    return ccmp->op1 == 0b1111010010 && ccmp->op2 == 0b00 && ccmp->op3 == 0b0;
 }
 
 static inline bool is_movz(const movz_t *movz)

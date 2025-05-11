@@ -51,6 +51,8 @@ bool is_linear_inst(const void *ptr)
            is_bl(ptr)          ||
            is_csel(ptr)        ||
            is_csinc(ptr)       ||
+           is_ccmp_imm(ptr)    ||
+           is_ccmp_reg(ptr)    ||
            is_movz(ptr)        ||
            is_movk(ptr)        ||
            is_movn(ptr)        ||
@@ -1403,6 +1405,35 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
                 state->valid |= 1 << csel->Rd;
                 state->wide = (state->wide & ~(1 << csel->Rd)) | (csel->sf << csel->Rd);
                 HOST_SET(state, csel->Rd, csel->sf ? HOST_GET(state, cond ? csel->Rn : csel->Rm) : 0);
+            }
+        }
+        else if(is_ccmp_imm(ptr) || is_ccmp_reg(ptr))
+        {
+            const ccmp_t *ccmp = ptr;
+            if(state->nzcv_valid) // Only if we have nzcv
+            {
+                // We can skip any register checks if we're not gonna look at regs
+                if(!evaluate_cond(state, ccmp->cond))
+                {
+                    state->n = ccmp->n;
+                    state->z = ccmp->z;
+                    state->c = ccmp->c;
+                    state->v = ccmp->v;
+                    state->nzcv_valid = 1;
+                }
+                // Now we need to check regs
+                else if((ccmp->Rn != 31 && !(state->valid & (1 << ccmp->Rn))) || (is_ccmp_reg(ccmp) && ccmp->Rm != 31 && !(state->valid & (1 << ccmp->Rm))))
+                {
+                    state->nzcv_valid = 0;
+                }
+                else
+                {
+                    uint64_t Rn = ccmp->Rn == 31 ? 0 : state->x[ccmp->Rn];
+                    uint64_t Rm = is_ccmp_imm(ptr) ? ccmp->Rm : (ccmp->Rm == 31 ? 0 : state->x[ccmp->Rm]);
+                    uint64_t Rd = Rn - Rm;
+                    Rd = ccmp->sf ? Rd : (Rd & 0xffffffffULL);
+                    update_nzcv_arithmetic(state, Rd, Rn, Rm, !!ccmp->sf);
+                }
             }
         }
         else if(is_movz(ptr))
