@@ -1096,7 +1096,7 @@ macho_t* macho_open(const char *file)
                     }
                     size_t sz = size - ent->fileoff;
                     const char *name = (const char*)((uintptr_t)ent + ent->nameoff);
-                    mach_hdr_t *mh = (void*)((uintptr_t)hdr + ent->fileoff);
+                    const mach_hdr_t *mh = (const mach_hdr_t*)((uintptr_t)hdr + ent->fileoff);
                     DBG(2, "Processing embedded header of %s", name);
                     if(mh->magic != MH_MAGIC_64)
                     {
@@ -1438,7 +1438,7 @@ macho_t* macho_open(const char *file)
                 if(cmd->cmd == LC_FILESET_ENTRY)
                 {
                     const mach_fileent_t *ent = (const mach_fileent_t*)cmd;
-                    mach_hdr_t *mh = (void*)((uintptr_t)hdr + ent->fileoff);
+                    const mach_hdr_t *mh = (const mach_hdr_t*)((uintptr_t)hdr + ent->fileoff);
                     const mach_lc_t * const firstlc = (const mach_lc_t*)(mh + 1);
                     const mach_lc_t *lc = firstlc;
                     for(uint32_t j = 0, num = mh->ncmds; j < num; ++j)
@@ -2754,7 +2754,6 @@ static bool macho_populate_bundles(macho_t *macho)
                     goto bad;
                 }
                 kptr_t loadaddr = 0;
-                uint64_t loadsize = 0;
                 if(builtin_kmod)
                 {
                     CFNumberRef cfidx = CFDictionaryGetValue(dict, CFSTR("ModuleIndex"));
@@ -2784,7 +2783,6 @@ static bool macho_populate_bundles(macho_t *macho)
                         goto bad;
                     }
                     loadaddr = macho_fixup(macho, kmod_start_ptr[idx], NULL, NULL, NULL, NULL);
-                    loadsize = macho_fixup(macho, kmod_start_ptr[idx + 1], NULL, NULL, NULL, NULL) - loadaddr;
                 }
                 else
                 {
@@ -2817,38 +2815,23 @@ static bool macho_populate_bundles(macho_t *macho)
                         DBG(2, "Kext %s is codeless, skipping...", bundle);
                         continue;
                     }
-                    CFNumberRef cfsize = CFDictionaryGetValue(dict, CFSTR("_PrelinkExecutableSize"));
-                    if(!cfsize || CFGetTypeID(cfsize) != CFNumberGetTypeID())
-                    {
-                        ERR("PrelinkExecutableSize missing or wrong type for kext %s.", bundle);
-                        if(debug >= 2)
-                        {
-                            CFShow(cfsize);
-                        }
-                        goto bad;
-                    }
-                    if(!CFNumberGetValue(cfsize, kCFNumberLongLongType, &loadsize))
-                    {
-                        ERR("Failed to get CFNumber contents for kext %s", bundle);
-                        if(debug >= 2)
-                        {
-                            CFShow(cfsize);
-                        }
-                        goto bad;
-                    }
                 }
                 DBG(2, "Kext %s at " ADDR, bundle, loadaddr);
-                if(loadsize < sizeof(mach_hdr_t))
-                {
-                    ERR("PrelinkExecutableSize too small for kext %s.", bundle);
-                    goto bad;
-                }
-                const mach_hdr_t *mh = macho_vtop(macho, loadaddr, loadsize);
-                if(!mh)
+                const void *segptr = NULL;
+                kptr_t segaddr = 0;
+                size_t segsize = 0;
+                if(!macho_segment_for_addr(macho, loadaddr, &segptr, &segaddr, &segsize, NULL))
                 {
                     ERR("Failed to get Mach-O header for kext %s.", bundle);
                     goto bad;
                 }
+                size_t maxsize = segsize - (loadaddr - segaddr);
+                if(maxsize < sizeof(mach_hdr_t))
+                {
+                    ERR("Segment size too small for Mach-O header for kext %s.", bundle);
+                    goto bad;
+                }
+                const mach_hdr_t *mh = (const mach_hdr_t*)((uintptr_t)segptr + (loadaddr - segaddr));
                 if(mh->magic != MH_MAGIC_64)
                 {
                     ERR("Mach-O header for kext %s has wrong magic: 0x%08x", bundle, mh->magic);
@@ -2869,9 +2852,9 @@ static bool macho_populate_bundles(macho_t *macho)
                     DBG(2, "Kext %s has MH_INCRLINK set, skipping...", bundle);
                     continue;
                 }
-                if(mh->sizeofcmds > loadsize - sizeof(mach_hdr_t))
+                if(mh->sizeofcmds > maxsize - sizeof(mach_hdr_t))
                 {
-                    ERR("Mach-O header for kext %s overflows PrelinkExecutableSize.", bundle);
+                    ERR("Mach-O header for kext %s overflows segment.", bundle);
                     goto bad;
                 }
                 kptr_t textaddr = 0;
