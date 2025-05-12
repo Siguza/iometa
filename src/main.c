@@ -1036,23 +1036,21 @@ static bool vtab_via_getMetaClass_ptr_cb(const kptr_t *ptr, void *arg)
         size_t segsize = 0;
         if(!macho_segment_for_ptr(args->macho, ptr, &segptr, &segaddr, &segsize, NULL))
         {
-            ERR("getMetaClass vtable ptr is not in any segment.");
+            ERR("%s::getMetaClass vtable ptr is not in any segment.", meta->name);
             return false;
         }
-
+        kptr_t ref = (uintptr_t)(ptr - VtabGetMetaClassIdx) - (uintptr_t)segptr + segaddr;
         if((uintptr_t)ptr - (uintptr_t)segptr < (VtabGetMetaClassIdx + 2) * sizeof(kptr_t))
         {
-            ERR("getMetaClass vtable ptr too close to start of segment.");
+            ERR("%s::getMetaClass vtable ptr too close to start of segment (" ADDR ").", meta->name, ref);
             return false;
         }
-
         if(ptr[-(VtabGetMetaClassIdx + 1)] != 0x0 || ptr[-(VtabGetMetaClassIdx + 2)] != 0x0)
         {
-            ERR("getMetaClass vtable ptr vtable not preceded by zero ptrs.");
+            ERR("%s::getMetaClass vtable ptr vtable not preceded by zero ptrs (" ADDR ").", meta->name, ref);
             return false;
         }
 
-        kptr_t ref = (uintptr_t)(ptr - VtabGetMetaClassIdx) - (uintptr_t)segptr + segaddr;
         if(meta->vtab == 0)
         {
             meta->vtab = ref;
