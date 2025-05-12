@@ -38,13 +38,10 @@ How this works:
     ret
 
 7.  To all of those locations we search a hardcoded pointer in the kernel.
-    If we find one in an array of pointers preceded by two NULL pointers, we accept this as class vtable.
-8.  If we want bundle names, we first get the kernel's __PRELINK_INFO segment and feed it to IOCFUnserialize (CoreFoundation can't handle it).
-    For all entries with a _PrelinkExecutableLoadAddr, we parse the kext header and check for each metaclass
-    whether its address is inside the kext's __DATA segment. If so, we set the bundle name that we can get from CFBundleIdentifier.
-9.  In the case of 1469 kernels, _PrelinkExecutableLoadAddr no longer exists as kexts seems to have been compiled directly into the kernel.
-    We do however get __PRELINK_INFO.__kmod_info __PRELINK_INFO.__kmod_start in their place, giving us names & mach headers. Pretty much
-    everything has been removed, but the leftover __TEXT_EXEC entry is just enough to match against OSMetaClass constructor callsites.
+    If we find one in an array of pointers preceded by two NULL pointers, we accept this as the class vtable.
+8.  We go through all vtable entries until we hit another NULL pointer marking the end (this is an -mkernel exclusive)
+    and do things like comparing against the parent, computing C++ symbols for PAC diversifier, etc.
+9.  If we want bundle names, we shill out to the Mach-O layer and ask it to match against metaclass constructor callsites.
 10. Finally we do some filtering and sorting, and print our findings.
 #endif
 

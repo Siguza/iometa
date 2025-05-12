@@ -9,6 +9,76 @@
 **/
 
 #if 0
+There are four significantly different formats we support here:
+
+1. Prelinked kernelcache. This is the oldest format, with filetype MH_EXECUTE
+   and non-zero-sized __PRELINK_TEXT/__PLK_TEXT_EXEC where kexts live.
+2. Statically linked kernelcache. This was introduced in iOS 12.0 for some devices. Filetype is still MH_EXECUTE,
+   but __PRELINK_TEXT/__PLK_TEXT_EXEC are empty and it has kexts compiled directly into the kernel. Only the __TEXT_EXEC
+   segments of kexts are still discernible, all other segments have been irreversibly merged with the ones of XNU.
+3. Fileset. This uses the MH_FILESET filetype and was first introduced for Apple Silicon Macs in macOS 11.0.
+   Since iOS 16.0 it is used for all arm64e devices. This is the only type where XNU is not the top-level binary.
+4. Standalone kext. Filetype MH_KEXT_BUNDLE.
+
+We also support standalone XNU (without kexts), but that is a strict subset of types 1 and 2.
+
+Now, documenting some quirks:
+
+- The authoritative source of truth regarding kexts is the __PRELINK_INFO.__info section. This *must* be parsed with
+  an IOKit plist parser (i.e. IOCFUnserialize), CoreFoundation will not give correct results. A lot of the info contained
+  therein is duplicated in kmod_info and fileset entries, but they can and do mismatch sometimes (e.g. the bundle ID of
+  the kext containing the "IOReportHub" class is reported as "com.apple.iokit.IOReportFamily" at runtime by IOObjectCopyBundleIdentifierForClass(),
+  but in the static kmod_info it says com.apple.iokit.IOReporting) - only the plist should be trusted.
+  For standalone kexts this is even worse, because the correct value is only in the Info.plist, a whole separate file!
+- The plist entries contain the keys "_PrelinkExecutableLoadAddr" and "_PrelinkKmodInfo", which are the addresses of the
+  kext's Mach-O header and kmod_info, respectively. Except in the case of statically linked kernelcaches, where it contains
+  a "ModuleIndex" key instead, which indexes into the sections __PRELINK_INFO.__kmod_start and __PRELINK_INFO.__kmod_info,
+  which are only present on this type of kernelcache. For kernelcaches that do have "_PrelinkExecutableLoadAddr", the special
+  value 0x7fffffffffffffff means that the kext is codeless and doesn't have a header. However, this value is only used since
+  iOS 14.0/macOS 11.0. Before then, codeless kexts did still have a header, and actually a malformed one at that, because their
+  "ncmds" says 3 but they really only have 2 load commands (LINKEDIT and LC_SYMTAB). I don't know how or why this happens, but
+  these headers happen to also have the MH_INCRLINK, so we use that as a marker to skip them.
+- Symbols are a mess.
+  - In prelinked kernelcaches, XNU has between 4k and 5k exported symbols if stripped, and between 40k and 50k if unstripped.
+    I have never seen embedded kexts with symbols in this type of kernelcache.
+  - In statically linked kernelcaches, all symbols are moved to the top level, which is either fully stripped, or has well above
+    100k symbols if unstripped.
+  - In fileset kernelcaches, the top-level binary has no symbol table, and you need to parse each embedded binary to get its symbols.
+  In principle, symbols are never needed unless we're looking at a standalone kext.
+- KASLR is a mess as well. There exist at least four different setups:
+  - The top-level binary has local relocations in its LC_DYSYMTAB, and each embedded binary does too.
+    This is used by prelinked kernelcaches before iOS 10.0, and here iBoot rebases XNU, but not kexts.
+    TODO: this is not currently handled correctly by this Mach-O parsing layer.
+  - The top-level binary has local relocations in its LC_DYSYMTAB, and the prelink info plist contains
+    a "_PrelinkLinkKASLROffsets" key with "packed" KASLR offsets for all kexts.
+    This is used by prelinked kernelcaches on iOS 10.0 and later.
+  - Chained fixups via __TEXT.__thread_starts. This is used by statically linked kernelcaches and is
+    so aggressive that it even affects things like the "vmaddr" field in embedded binaries' Mach-O header.
+    In this configuration, iBoot rebases the entire kernelcache, including kexts.
+  - Chained fixups via LC_DYLD_CHAINED_FIXUPS load command. This is used by fileset kernelcaches and standalone kexts.
+    This supports two different encodings of fixup chain elements, which are of course also different from the __thread_starts one.
+  In principle, we would only have to parse KASLR info for chained fixups (since otherwise we can't read the pointers),
+  but knowing which values are pointers is actually really useful for vtable bounds detection.
+- Function starts are the biggest mess of all.
+  - For statically linked kernelcaches, they are present at the top level and span the entire kernelcache.
+  - For prelinked kernelcaches, they are also present at the top level but only span XNU, not kexts.
+  - For standalone kexts, they are present since macOS 15.0.
+  - For fileset kernelcaches, we have five different situations going on:
+    - Since iOS 18.0/macOS 15.0, all fileset entries have their own LC_FUNCTION_STARTS load command.
+    - Before iOS 18.0/macOS 15.0, only the embedded XNU header has function starts, and they do not span kexts.
+    - Before macOS 13.0, the embedded XNU had its segments rebased relative to each other but function starts were not updated accordingly.
+    - Between iOS 16.4 and 17.0 (exclusive), some kernelcaches are lacking the terminating zero in function starts data.
+    - Between iOS 17.0 and 17.4 (exclusive), devices that have SPTM had their executable segments rearranged relative to each other,
+      and the kernelcache builder tried to update the function starts info accordingly, but did not account for the fact that it would
+      now need more space, so the emitted info is truncated.
+- Fileset kernelcaches have weird segment handling. For one, they have certain segments without any sections,
+  which is really annoying because that means we have to use segments in many places where we'd want to be more
+  conservative with bounds. For another, offsets are inconsistent. For example, the function starts offset in the
+  linkedit data commands are from the beginning of the binary, but the starting point for each starts chain is
+  the vmaddress specified in the fileset entry.
+#endif
+
+#if 0
 #include <stdlib.h>             // realloc
 #endif
 
@@ -56,10 +126,13 @@ extern CFTypeRef IOCFUnserializeWithSize(const char *buf, size_t len, CFAllocato
 #define LC_DYSYMTAB                 0x0000000b
 #define LC_SEGMENT_64               0x00000019
 #define LC_UUID                     0x0000001b
+#define LC_FUNCTION_STARTS          0x00000026
 #define LC_DYLD_CHAINED_FIXUPS      0x80000034
 #define LC_FILESET_ENTRY            0x80000035
 #define SECTION_TYPE                0x000000ff
 #define S_ZEROFILL                         0x1
+#define S_ATTR_SOME_INSTRUCTIONS    0x00000400
+#define S_ATTR_PURE_INSTRUCTIONS    0x80000000
 #define N_STAB                            0xe0
 #define N_TYPE                            0x0e
 #define N_EXT                             0x01
@@ -383,6 +456,8 @@ struct _macho
     size_t nreloc;
     CFTypeRef prelinkInfo;
     uint8_t **ptrBitmap;
+    kptr_t *fnstarts;
+    size_t nfnstarts;
     const char **bundles;
     macho_bundle_range_t *bundleMap;
     size_t nbundles;
@@ -393,6 +468,7 @@ static kptr_t macho_fixup_internal(fixup_kind_t fixupKind, kptr_t base, kptr_t p
 static kptr_t macho_ptov_internal(const macho_map_t *mapP, size_t nmapP, const void *ptr);
 static const void* macho_vtop_internal(const macho_map_t *mapV, size_t nmapV, kptr_t addr, size_t size);
 static bool macho_section_for_addr_internal(const macho_section_t *sectionsByAddr, size_t nsecs, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
+static bool macho_segment_for_addr_internal(const macho_segment_t *segmentsByAddr, size_t nsegs, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot);
 static bool macho_foreach_ptr_internal(uintptr_t hdr, fixup_kind_t fixupKind, union fixup_data fixup, kptr_t base, macho_map_t *mapV, size_t nmapV, bool (*cb)(const kptr_t *ptr, void *arg), void *arg);
 static CFTypeRef macho_prelink_info_internal(const macho_section_t *sectionsByName, size_t nsecs);
 
@@ -409,6 +485,11 @@ static inline int macho_cmp_u64(uint64_t a, uint64_t b)
         return 0;
     }
     return a < b ? -1 : 1;
+}
+
+static int macho_cmp_kptr(const void *a, const void *b)
+{
+    return macho_cmp_u64(*(const kptr_t*)a, *(const kptr_t*)b);
 }
 
 static int macho_cmp_map_addr(const void *a, const void *b)
@@ -585,6 +666,8 @@ macho_t* macho_open(const char *file)
     kaslrPackedOffsets_t *kxld = NULL;
     CFTypeRef prelinkInfo = NULL;
     uint8_t **ptrBitmap = NULL;
+    kptr_t *fnstarts = NULL;
+    size_t nfnstarts = 0;
 
     fd = open(file, O_RDONLY);
     if(fd == -1)
@@ -726,6 +809,7 @@ macho_t* macho_open(const char *file)
     const mach_dstab_t *dstab = NULL;
     size_t nsyms = 0;
     size_t nreloc = 0;
+    size_t nfilesetfnstarts = 0;
 
     const uint32_t ncmds = hdr->ncmds;
     const uint32_t sizeofcmds = hdr->sizeofcmds;
@@ -933,6 +1017,81 @@ macho_t* macho_open(const char *file)
 
                 // TODO: LC_SEGMENT_SPLIT_INFO?
 
+                case LC_FUNCTION_STARTS:
+                    if(cmdsize < sizeof(struct linkedit_data_command))
+                    {
+                        ERR("LC_FUNCTION_STARTS command too short.");
+                        goto out;
+                    }
+                    if(filetype == MH_FILESET)
+                    {
+                        ERR("LC_FUNCTION_STARTS command in MH_FILESET Mach-O.");
+                        goto out;
+                    }
+                    if(nfnstarts)
+                    {
+                        ERR("Multiple LC_FUNCTION_STARTS commands.");
+                        goto out;
+                    }
+                    const struct linkedit_data_command *fndata = (const struct linkedit_data_command*)cmd;
+                    if(!fndata->datasize)
+                    {
+                        ERR("Mach-O function starts with size zero?");
+                        goto out;
+                    }
+                    if(fndata->dataoff > size || fndata->datasize > size - fndata->dataoff)
+                    {
+                        ERR("Mach-O function starts data out of bounds.");
+                        goto out;
+                    }
+                    const uint8_t *fn = (const uint8_t*)((uintptr_t)hdr + fndata->dataoff);
+                    size_t bits = 0;
+                    bool end = false;
+                    for(size_t k = 0; k < fndata->datasize; ++k)
+                    {
+                        uint8_t slice = fn[k];
+                        if(bits > 63 || (bits == 63 && (slice & 0x7e) != 0))
+                        {
+                            ERR("Mach-O function starts overflows (offset 0x%zx).", k);
+                            goto out;
+                        }
+                        if(bits == 0)
+                        {
+                            if(slice == 0)
+                            {
+                                end = true;
+                                break;
+                            }
+                            if(slice & 0x3)
+                            {
+                                ERR("Mach-O function starts unaligned (offset 0x%zx).", k);
+                                goto out;
+                            }
+                        }
+                        bits += 7;
+                        if((slice & 0x80) == 0)
+                        {
+                            bits = 0;
+                            ++nfnstarts;
+                        }
+                    }
+                    if(bits != 0)
+                    {
+                        ERR("Mach-O function starts incomplete.");
+                        goto out;
+                    }
+                    if(!end)
+                    {
+                        ERR("Mach-O function starts is missing end marker.");
+                        goto out;
+                    }
+                    if(!nfnstarts)
+                    {
+                        ERR("Mach-O function starts encodes zero offsets.");
+                        goto out;
+                    }
+                    break;
+
                 case LC_DYLD_CHAINED_FIXUPS:
                     if(fixupKind != DYLD_CHAINED_PTR_NONE)
                     {
@@ -1125,6 +1284,7 @@ macho_t* macho_open(const char *file)
                     }
                     const mach_stab_t *st = NULL;
                     const mach_dstab_t *dst = NULL;
+                    const struct linkedit_data_command *fns = NULL;
                     const mach_lc_t * const firstlc = (const mach_lc_t*)(mh + 1);
                     const mach_lc_t *lc = firstlc;
                     for(uint32_t j = 0, num = mh->ncmds; j < num; ++j)
@@ -1203,6 +1363,89 @@ macho_t* macho_open(const char *file)
                                     ERR("Embedded Mach-O has local relocs (%s).", name);
                                     goto out;
                                 }
+                                break;
+
+                            case LC_FUNCTION_STARTS:
+                                if(lcsize < sizeof(struct linkedit_data_command))
+                                {
+                                    ERR("Embedded LC_FUNCTION_STARTS command too short (%s).", name);
+                                    goto out;
+                                }
+                                if(fns)
+                                {
+                                    ERR("Multiple embedded LC_FUNCTION_STARTS commands (%s).", name);
+                                    goto out;
+                                }
+                                fns = (const struct linkedit_data_command*)lc;
+                                if(!fns->datasize)
+                                {
+                                    ERR("Embedded Mach-O function starts with size zero (%s)?", name);
+                                    goto out;
+                                }
+                                if(fns->dataoff > size || fns->datasize > size - fns->dataoff)
+                                {
+                                    ERR("Embedded Mach-O function starts data out of bounds (%s).", name);
+                                    goto out;
+                                }
+                                const uint8_t *fn = (const uint8_t*)((uintptr_t)hdr + fns->dataoff);
+                                size_t bits = 0;
+                                bool end = false;
+                                size_t nfn = 0;
+                                for(size_t k = 0; k < fns->datasize; ++k)
+                                {
+                                    uint8_t slice = fn[k];
+                                    if(bits > 63 || (bits == 63 && (slice & 0x7e) != 0))
+                                    {
+                                        ERR("Embedded Mach-O function starts overflows (offset 0x%zx, %s).", k, name);
+                                        goto out;
+                                    }
+                                    if(bits == 0)
+                                    {
+                                        if(slice == 0)
+                                        {
+                                            end = true;
+                                            break;
+                                        }
+                                        if(slice & 0x3)
+                                        {
+                                            ERR("Embedded Mach-O function starts unaligned (offset 0x%zx, %s).", k, name);
+                                            goto out;
+                                        }
+                                    }
+                                    bits += 7;
+                                    if((slice & 0x80) == 0)
+                                    {
+                                        bits = 0;
+                                        ++nfn;
+                                    }
+                                }
+                                if(bits != 0)
+                                {
+                                    // Fleset kernelcaches between iOS 17.0 and 17.4 (exclusive) that live under SPTM had XNU's
+                                    // executable segments rearranged relative to each other when creating the fileset, and the
+                                    // kernelcache builder tried to update the function starts info, but didn't account for the
+                                    // fact that this would need more space than before, so this can actually be truncated.
+                                    // But that's better than nothing, just work with what we've got...
+                                    DBG(2, "Embedded Mach-O function starts incomplete (%s).", name);
+                                    //ERR("Embedded Mach-O function starts incomplete (%s).", name);
+                                    //goto out;
+                                }
+                                else if(!end)
+                                {
+                                    // Some fileset kernelcaches between iOS 16.4 and 17.0 (exclusive) are lacking this end marker.
+                                    // Only a few kernelcaches seem to be affected, all of them filesets, and when it happens, it seems
+                                    // to affect all devices of a given SoC. I don't know why, but the info seems complete nonetheless.
+                                    DBG(2, "Embedded Mach-O function starts is missing end marker (%s).", name);
+                                    //ERR("Embedded Mach-O function starts is missing end marker (%s).", name);
+                                    //goto out;
+                                }
+                                if(!nfn)
+                                {
+                                    ERR("Embedded Mach-O function starts encodes zero offsets (%s).", name);
+                                    goto out;
+                                }
+                                nfnstarts += nfn;
+                                ++nfilesetfnstarts;
                                 break;
 
                             default:
@@ -1829,6 +2072,200 @@ macho_t* macho_open(const char *file)
         qsort(relocByAddr, nreloc, sizeof(sym_t), &macho_cmp_sym_addr);
     }
 
+    if(nfnstarts)
+    {
+        fnstarts = malloc(sizeof(kptr_t) * (nfnstarts + 1));
+        if(!fnstarts)
+        {
+            ERRNO("malloc(fnstarts)");
+            goto out;
+        }
+
+        size_t fnidx = 0;
+        const mach_lc_t *cmd = firstcmd;
+        for(uint32_t i = 0; i < ncmds; ++i)
+        {
+            const struct linkedit_data_command *fndata = NULL;
+            kptr_t last = 0;
+            kptr_t exec[10] = {};
+            size_t nexec = 0;
+            switch(cmd->cmd)
+            {
+                case LC_FUNCTION_STARTS:
+                    fndata = (const struct linkedit_data_command*)cmd;
+                    last = base;
+                    break;
+
+                case LC_FILESET_ENTRY:;
+                    const mach_fileent_t *ent = (const mach_fileent_t*)cmd;
+                    const mach_hdr_t *mh = (const mach_hdr_t*)((uintptr_t)hdr + ent->fileoff);
+                    const mach_lc_t * const firstlc = (const mach_lc_t*)(mh + 1);
+                    const mach_lc_t *lc = firstlc;
+                    for(uint32_t j = 0, num = mh->ncmds; j < num; ++j)
+                    {
+                        switch(lc->cmd)
+                        {
+                            case LC_SEGMENT_64:;
+                                const mach_seg_t *seg = (const mach_seg_t*)lc;
+                                if(!seg->vmsize)
+                                {
+                                    break;
+                                }
+                                kptr_t vmaddr = 0;
+                                if(seg->initprot & VM_PROT_EXECUTE)
+                                {
+                                    vmaddr = seg->vmaddr;
+                                }
+                                else
+                                {
+                                    const mach_sec_t *sec = (const mach_sec_t*)(seg + 1);
+                                    for(uint32_t k = 0; k < seg->nsects; ++k)
+                                    {
+                                        if(!sec[k].size)
+                                        {
+                                            continue;
+                                        }
+                                        if(sec[k].flags & (S_ATTR_SOME_INSTRUCTIONS | S_ATTR_PURE_INSTRUCTIONS))
+                                        {
+                                            vmaddr = sec[k].addr;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if(vmaddr)
+                                {
+                                    if(nexec >= 10)
+                                    {
+                                        ERR("More than 10 executable segments in embedded Mach-O (%s).", (const char*)((uintptr_t)ent + ent->nameoff));
+                                        goto out;
+                                    }
+                                    exec[nexec++] = vmaddr;
+                                }
+                                break;
+
+                            case LC_FUNCTION_STARTS:
+                                fndata = (const struct linkedit_data_command*)lc;
+                                last = ent->vmaddr;
+                                break;
+                        }
+                        lc = (const mach_lc_t*)((uintptr_t)lc + lc->cmdsize);
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+            if(fndata)
+            {
+                const uint8_t *fn = (const uint8_t*)((uintptr_t)hdr + fndata->dataoff);
+                size_t bits = 0;
+                uint64_t off = 0;
+                bool first = true;
+                for(size_t k = 0; k < fndata->datasize; ++k)
+                {
+                    uint8_t slice = fn[k];
+                    if(bits == 0 && slice == 0)
+                    {
+                        break;
+                    }
+                    off |= (uint64_t)(slice & 0x7f) << bits;
+                    bits += 7;
+                    if((slice & 0x80) == 0)
+                    {
+                        last += off;
+                        off = 0;
+                        bits = 0;
+                        // This is a really cursed case. macOS fileset kernelcaches before macOS 13.0 did not have their
+                        // function starts adjusted after XNU's segments have been rebased during kernelcachification,
+                        // so they still apply to the old addresses XNU had before it was merged into the fileset.
+                        // Trying to use them will break a lot of stuff, so we need to detect this case here and
+                        // filter it out. It's better to have no data than to have wrong data.
+                        //
+                        // In the future, we may actually be able to use this data, because even though some segments are
+                        // rearranged relative to each other, the only executable segment affected by this is __LAST, which
+                        // does not show up in function starts because it's hand-rolled asm, not emitted by LLVM. So the
+                        // targets for our function starts are still in the same linear order (unlike under SPTM), but
+                        // we'd still have to come up with a way of finding the correct start address and idk how to do that yet.
+                        if(first)
+                        {
+                            first = false;
+                            if(nexec)
+                            {
+                                bool found = false;
+                                for(size_t j = 0; j < nexec; ++j)
+                                {
+                                    if(last == exec[j])
+                                    {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if(!found)
+                                {
+                                    // Only handle this gracefully if we have a single fileset entry with funtion starts (i.e. XNU).
+                                    if(nfilesetfnstarts == 1)
+                                    {
+                                        DBG(2, "Detected malformed function starts, skipping...");
+                                        break;
+                                    }
+                                    else
+                                    {
+                                        ERR("Mach-O function starts don't match the beginning of any segment or section.");
+                                        goto out;
+                                    }
+                                }
+                            }
+                        }
+                        DBG(3, "Fnstart: " ADDR, last);
+                        //uint32_t prot = 0;
+                        if(!macho_segment_for_addr_internal(segmentsByAddr, nsegs, last, NULL, NULL, NULL, /*&prot*/ NULL))
+                        {
+                            ERR("Mach-O function start doesn't map to any segment (" ADDR ").", last);
+                            goto out;
+                        }
+                        // TODO: Can't do this, because __KLD on old kernels...
+                        /*if(!(prot & VM_PROT_EXECUTE))
+                        {
+                            ERR("Mach-O function start not in executable segment (" ADDR ").", last);
+                            goto out;
+                        }*/
+                        fnstarts[fnidx++] = last;
+                    }
+                }
+            }
+            cmd = (const mach_lc_t*)((uintptr_t)cmd + cmd->cmdsize);
+        }
+
+        if(fnidx != nfnstarts)
+        {
+            // This should only be possible if we bailed out above due to the macOS 11/12 thing, and in that case we have nothing.
+            if(fnidx != 0)
+            {
+                __builtin_trap();
+            }
+            free(fnstarts);
+            fnstarts = NULL;
+            nfnstarts = 0;
+        }
+        else
+        {
+            // Since there can be multiple chunks, it's possible that these are not in order already.
+            qsort(fnstarts, nfnstarts, sizeof(kptr_t), &macho_cmp_kptr);
+
+            // Populate one past the last element with a safe end marker, so we don't mark everything up to 0xffffffffffffffff as belonging to the last func.
+            kptr_t last = fnstarts[nfnstarts - 1];
+            kptr_t boundaddr = 0;
+            size_t boundsize = 0;
+            // Use sections for this if possible, otherwise (fileset) just do segment.
+            if(!macho_section_for_addr_internal(sectionsByAddr, nsecs, last, NULL, &boundaddr, &boundsize, NULL))
+            {
+                // Guaranteed to succeed since it succeeded above...
+                macho_segment_for_addr_internal(segmentsByAddr, nsegs, last, NULL, &boundaddr, &boundsize, NULL);
+            }
+            fnstarts[nfnstarts] = boundaddr + boundsize;
+        }
+    }
+
     macho = malloc(sizeof(macho_t));
     if(!macho)
     {
@@ -1881,6 +2318,8 @@ macho_t* macho_open(const char *file)
     macho->nreloc = nreloc;
     macho->prelinkInfo = prelinkInfo;
     macho->ptrBitmap = ptrBitmap;
+    macho->fnstarts = fnstarts;
+    macho->nfnstarts = nfnstarts;
     macho->bundles = NULL;
     macho->bundleMap = NULL;
     macho->nbundles = 0;
@@ -1902,8 +2341,10 @@ macho_t* macho_open(const char *file)
     kxld = NULL;
     prelinkInfo = NULL;
     ptrBitmap = NULL;
+    fnstarts = NULL;
 
 out:;
+    if(fnstarts) free(fnstarts);
     if(ptrBitmap) free(ptrBitmap);
     if(prelinkInfo) CFRelease(prelinkInfo);
     if(kxld) free(kxld);
@@ -1933,6 +2374,7 @@ void macho_close(macho_t *macho)
 {
     if(macho->bundleMap) free(macho->bundleMap);
     if(macho->bundles) free(macho->bundles);
+    if(macho->fnstarts) free(macho->fnstarts);
     if(macho->ptrBitmap)
     {
         for(size_t i = 0, max = (macho->size + MACHO_BITMAP_PAGESIZE - 1) / MACHO_BITMAP_PAGESIZE; i < max; ++i)
@@ -2206,9 +2648,9 @@ static int macho_segment_for_addr_cb(const void *key, const void *value)
     return 0;
 }
 
-bool macho_segment_for_addr(macho_t *macho, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot)
+static bool macho_segment_for_addr_internal(const macho_segment_t *segmentsByAddr, size_t nsegs, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot)
 {
-    macho_segment_t *seg = bsearch((const void*)target, macho->segmentsByAddr, macho->nsegs, sizeof(macho_segment_t), &macho_segment_for_addr_cb);
+    macho_segment_t *seg = bsearch((const void*)target, segmentsByAddr, nsegs, sizeof(macho_segment_t), &macho_segment_for_addr_cb);
     if(!seg)
     {
         return false;
@@ -2218,6 +2660,11 @@ bool macho_segment_for_addr(macho_t *macho, kptr_t target, const void **ptr, kpt
     if(size) *size = seg->size;
     if(prot) *prot = seg->prot;
     return true;
+}
+
+bool macho_segment_for_addr(macho_t *macho, kptr_t target, const void **ptr, kptr_t *addr, size_t *size, uint32_t *prot)
+{
+    return macho_segment_for_addr_internal(macho->segmentsByAddr, macho->nsegs, target, ptr, addr, size, prot);
 }
 
 static int macho_section_for_addr_cb(const void *key, const void *value)
@@ -2632,6 +3079,31 @@ static CFTypeRef macho_prelink_info(macho_t *macho)
         macho->prelinkInfo = macho_prelink_info_internal(macho->sectionsByName, macho->nsecs);
     }
     return macho->prelinkInfo;
+}
+
+static int macho_fnstart_cb(const void *a, const void *b)
+{
+    kptr_t key = (kptr_t)a;
+    const kptr_t *ptr = (const kptr_t*)b;
+    if(key < ptr[0])
+    {
+        return -1;
+    }
+    if(key >= ptr[1]) // we alloc 1 more and populate it with the end of the section, so this is ok
+    {
+        return 1;
+    }
+    return 0;
+}
+
+kptr_t macho_fnstart(macho_t *macho, kptr_t addr)
+{
+    if(!macho->fnstarts)
+    {
+        return 0;
+    }
+    kptr_t *ptr = bsearch((const void*)addr, macho->fnstarts, macho->nfnstarts, sizeof(kptr_t), &macho_fnstart_cb);
+    return ptr ? *ptr : 0;
 }
 
 static bool macho_populate_bundles(macho_t *macho)

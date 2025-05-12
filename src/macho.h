@@ -104,6 +104,8 @@ const char* macho_reloc_for_addr(macho_t *macho, kptr_t loc);
 
 //CFTypeRef macho_prelink_info(macho_t *macho);
 
+kptr_t macho_fnstart(macho_t *macho, kptr_t addr);
+
 const char* const* macho_bundles(macho_t *macho, size_t *n);
 const char* macho_bundle_for_addr(macho_t *macho, kptr_t addr);
 #endif
