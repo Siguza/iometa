@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2024 Siguza
+/* Copyright (c) 2018-2025 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -70,7 +70,7 @@ typedef bool (*a64cb_t)(const uint32_t *pos, void *arg);
 
 bool is_linear_inst(const void *ptr);
 
-const uint32_t* find_function_start(macho_t *macho, const char *name, const uint32_t *fnstart, const uint32_t *bound, bool have_stack_frame);
+const uint32_t* find_function_start(macho_t *macho, const char *name, kptr_t addr, const uint32_t *ptr, const uint32_t *bound, bool have_stack_frame);
 
 bool a64cb_check_equal(const uint32_t *pos, void *arg);
 bool a64cb_check_bl(const uint32_t *pos, void *arg);

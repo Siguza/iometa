@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2024 Siguza
+/* Copyright (c) 2018-2025 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -327,7 +327,7 @@ static bool find_meta_constructor_calls_cb(const void *ptr, kptr_t addr, size_t 
             {
                 if(bltarg == aliases->val[i])
                 {
-                    const uint32_t *fnstart = find_function_start(args->macho, "OSMetaClass constructor call", mem, ptr, is_bl(bl));
+                    const uint32_t *fnstart = find_function_start(args->macho, "OSMetaClass constructor call", bladdr, mem, ptr, is_bl(bl));
                     if(fnstart)
                     {
                         a64_state_t state;

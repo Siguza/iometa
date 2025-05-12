@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2024 Siguza
+/* Copyright (c) 2018-2025 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -135,31 +135,47 @@ bool is_linear_inst(const void *ptr)
 // part of the function, once we leave it, they are no longer considered to be "linear".
 // We also always start seeking backwards from a function call, and in the case of "bl"
 // we assume we have a stack frame, in the case of "b" we assume we do not.
-const uint32_t* find_function_start(macho_t *macho, const char *name, const uint32_t *fnstart, const uint32_t *bound, bool have_stack_frame)
+const uint32_t* find_function_start(macho_t *macho, const char *name, kptr_t addr, const uint32_t *ptr, const uint32_t *bound, bool have_stack_frame)
 {
-    while(1)
+    // Restrict bound if we have function starts info
+    kptr_t start = macho_fnstart(macho, addr);
+    const uint32_t *fnstart = NULL;
+    if(start)
     {
-        --fnstart;
+        fnstart = (const uint32_t*)((uintptr_t)ptr - (addr - start));
         if(fnstart < bound)
         {
-            ++fnstart;
+            WRN("Function start for %s is in previous segment.", name);
+            return NULL;
+        }
+        bound = fnstart;
+    }
+    while(1)
+    {
+        --ptr;
+        if(ptr < bound)
+        {
+            ++ptr;
             // If we expect a stack frame, this is fatal.
             if(have_stack_frame)
             {
-                WRN("Hit start of segment at " ADDR " for %s", macho_ptov(macho, fnstart), name);
+                WRN("Hit start of segment at " ADDR " for %s.", macho_ptov(macho, ptr), name);
                 return NULL;
             }
-            // Otherwise ehh whatever.
-            DBG(1, "Hit start of segment at " ADDR " for %s", macho_ptov(macho, fnstart), name);
+            // Otherwise this is fine, especially if we reached the actual function start.
+            if(!fnstart)
+            {
+                DBG(1, "Hit start of segment at " ADDR " for %s.", macho_ptov(macho, ptr), name);
+            }
             break;
         }
-        if(!is_linear_inst(fnstart) || (is_bl((bl_t*)fnstart) && !have_stack_frame))
+        if(!is_linear_inst(ptr) || (is_bl((bl_t*)ptr) && !have_stack_frame))
         {
-            ++fnstart;
+            ++ptr;
             break;
         }
-        const stp_t *stp = (const stp_t*)fnstart;
-        const ldp_t *ldp = (const ldp_t*)fnstart;
+        const stp_t *stp = (const stp_t*)ptr;
+        const ldp_t *ldp = (const ldp_t*)ptr;
         if((is_stp_pre(stp) || is_stp_uoff(stp)) && stp->Rt == 29 && stp->Rt2 == 30)
         {
             have_stack_frame = false;
@@ -169,7 +185,16 @@ const uint32_t* find_function_start(macho_t *macho, const char *name, const uint
             have_stack_frame = true;
         }
     }
-    return fnstart;
+    if(fnstart && ptr != fnstart)
+    {
+        // TODO: I'd like for this to be a warning, but currently this happens way too often.
+        //       Failure to seek to the function start means multi-call emulation will not find any refs,
+        //       but jumping there directly can lead to hitting unexpected instructions or conditionals
+        //       that we can't decide due to missing nzcv, which then leaves us unable to find the
+        //       actual metaclass instances, which is way worse.
+        DBG(1, "Failed to reach function start at " ADDR " for %s.", macho_ptov(macho, ptr), name);
+    }
+    return ptr;
 }
 
 bool a64cb_check_equal(const uint32_t *pos, void *arg)
@@ -1822,7 +1847,7 @@ bool multi_call_emulate(macho_t *macho, const uint32_t *fncall, const uint32_t *
         ERR("Bug in multi_call_emulate: fncall at " ADDR " is neither b nor bl.", fncalladdr);
         __builtin_trap();
     }
-    const uint32_t *fnstart = find_function_start(macho, name, fncall, segptr, have_stack_frame);
+    const uint32_t *fnstart = find_function_start(macho, name, fncalladdr, fncall, segptr, have_stack_frame);
     if(!fnstart)
     {
         return false;
