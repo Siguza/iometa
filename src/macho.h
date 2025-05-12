@@ -33,37 +33,6 @@ typedef struct
     const char *name;
 } sym_t;
 
-#if 0
-#define FOREACH_CMD(_hdr, _cmd) \
-for( \
-    mach_lc_t *_cmd = (mach_lc_t*)(_hdr + 1), *_end = (mach_lc_t*)((uintptr_t)_cmd + _hdr->sizeofcmds - sizeof(mach_lc_t)); \
-    _cmd <= _end; \
-    _cmd = (mach_lc_t*)((uintptr_t)_cmd + _cmd->cmdsize) \
-)
-
-#define SEG_IS_EXEC(seg, fixupKind, have_plk_text_exec) (((seg)->initprot & VM_PROT_EXECUTE) || ((fixupKind) == DYLD_CHAINED_PTR_NONE && !(have_plk_text_exec) && strcmp("__PRELINK_TEXT", (seg)->segname) == 0))
-
-kptr_t off2addr(void *macho, size_t off);
-void* addr2ptr(void *macho, kptr_t addr);
-mach_seg_t* seg4ptr(void *macho, void *ptr);
-
-kptr_t kuntag(kptr_t base, fixup_kind_t fixupKind, kptr_t ptr, bool *bind, bool *auth, uint16_t *pac, size_t *skip);
-
-bool is_in_fixup_chain(void *macho, kptr_t base, void *ptr);
-
-int validate_macho(void **machop, size_t *machosizep, mach_hdr_t **hdrp, const char *name);
-
-int compare_sym_addrs(const void *a, const void *b);
-int compare_sym_names(const void *a, const void *b);
-int compare_sym_addr(const void *a, const void *b);
-int compare_sym_name(const void *a, const void *b);
-const char* find_sym_by_addr(kptr_t addr, sym_t *asyms, size_t nsyms);
-kptr_t find_sym_by_name(const char *name, sym_t *bsyms, size_t nsyms);
-
-bool macho_extract_symbols(void *macho, mach_stab_t *stab, sym_t **symp, size_t *nsymp);
-bool macho_extract_reloc(void *macho, kptr_t base, mach_dstab_t *dstab, mach_nlist_t *symtab, char *strtab, sym_t **exrelocp, size_t *nexrelocp);
-bool macho_extract_chained_imports(void *macho, kptr_t base, struct linkedit_data_command *cmd, sym_t **exrelocp, size_t *nexrelocp);
-#else
 typedef struct _macho macho_t;
 
 macho_t* macho_open(const char *file);
@@ -108,6 +77,5 @@ kptr_t macho_fnstart(macho_t *macho, kptr_t addr);
 
 const char* const* macho_bundles(macho_t *macho, size_t *n);
 const char* macho_bundle_for_addr(macho_t *macho, kptr_t addr);
-#endif
 
 #endif
