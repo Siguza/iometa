@@ -830,6 +830,7 @@ macho_t* macho_open(const char *file)
             switch(cmd->cmd)
             {
                 case LC_SYMTAB:
+                {
                     if(cmdsize < sizeof(mach_stab_t))
                     {
                         ERR("LC_SYMTAB command too short.");
@@ -871,8 +872,10 @@ macho_t* macho_open(const char *file)
                         ++nsyms;
                     }
                     break;
+                }
 
                 case LC_DYSYMTAB:
+                {
                     if(cmdsize < sizeof(mach_dstab_t))
                     {
                         ERR("LC_DYSYMTAB command too short.");
@@ -896,8 +899,10 @@ macho_t* macho_open(const char *file)
                     }
                     nreloc = dstab->nextrel;
                     break;
+                }
 
                 case LC_SEGMENT_64:
+                {
                     if(cmdsize < sizeof(mach_seg_t))
                     {
                         ERR("LC_SEGMENT_64 command (%u) too short.", i);
@@ -1010,10 +1015,12 @@ macho_t* macho_open(const char *file)
                         ++nmaps;
                     }
                     break;
+                }
 
                 // TODO: LC_SEGMENT_SPLIT_INFO?
 
                 case LC_FUNCTION_STARTS:
+                {
                     if(cmdsize < sizeof(struct linkedit_data_command))
                     {
                         ERR("LC_FUNCTION_STARTS command too short.");
@@ -1087,8 +1094,10 @@ macho_t* macho_open(const char *file)
                         goto out;
                     }
                     break;
+                }
 
                 case LC_DYLD_CHAINED_FIXUPS:
+                {
                     if(fixupKind != DYLD_CHAINED_PTR_NONE)
                     {
                         ERR("Mach-O has multiple fixup types.");
@@ -1226,8 +1235,10 @@ macho_t* macho_open(const char *file)
                     }
                     chained_fixups = fixup;
                     break;
+                }
 
                 case LC_FILESET_ENTRY:
+                {
                     if(cmdsize < sizeof(mach_fileent_t))
                     {
                         ERR("LC_FILESET_ENTRY command (%u) too short.", i);
@@ -1460,6 +1471,7 @@ macho_t* macho_open(const char *file)
                         goto out;
                     }
                     break;
+                }
 
                 default:
                     if(cmd->cmd & LC_REQ_DYLD)

@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2024 Siguza
+/* Copyright (c) 2018-2025 Siguza
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -40,7 +40,7 @@ extern const char *colorGray,
 #define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
 
 #define STEP_MEM(_type, _var, _base, _size, _min) \
-for(const _type *_var = (const _type*)(_base), *_end = (const _type*)((uintptr_t)(_var) + (_size)) - (_min); _var <= _end; ++_var)
+for(const _type *_var = (const _type*)(_base), *_end##_var = (const _type*)((uintptr_t)(_var) + (_size)) - (_min); _var <= _end##_var; ++_var)
 
 #define ARRDECL(type, name) \
 struct \

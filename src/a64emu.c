@@ -169,7 +169,7 @@ const uint32_t* find_function_start(macho_t *macho, const char *name, kptr_t add
             }
             break;
         }
-        if(!is_linear_inst(ptr) || (is_bl((bl_t*)ptr) && !have_stack_frame))
+        if(!is_linear_inst(ptr) || (is_bl((const bl_t*)ptr) && !have_stack_frame))
         {
             ++ptr;
             break;
@@ -1833,12 +1833,12 @@ bool multi_call_emulate(macho_t *macho, const uint32_t *fncall, const uint32_t *
     kptr_t fncalladdr = (uintptr_t)fncall - (uintptr_t)segptr + segaddr;
 
     bool have_stack_frame;
-    const bl_t *bl = (const bl_t*)fncall;
-    if(is_bl(bl))
+    const bl_t *call = (const bl_t*)fncall;
+    if(is_bl(call))
     {
         have_stack_frame = true;
     }
-    else if(is_b(bl))
+    else if(is_b(call))
     {
         have_stack_frame = false;
     }
@@ -1926,7 +1926,7 @@ bool multi_call_emulate(macho_t *macho, const uint32_t *fncall, const uint32_t *
     DBG(1, "Searching for function calls to " ADDR, fnaddr);
     STEP_MEM(uint32_t, mem, segptr, segsize, 1)
     {
-        bl_t *bl = (bl_t*)mem;
+        const bl_t *bl = (const bl_t*)mem;
         if(is_bl(bl) || is_b(bl))
         {
             kptr_t bladdr = (uintptr_t)bl - (uintptr_t)segptr + segaddr;

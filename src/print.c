@@ -501,9 +501,9 @@ bool print_all(void *classes, opt_t opt, metaclass_t *OSMetaClass, const char *f
         for(size_t i = 0; i < lsize; ++i)
         {
             metaclass_t *m = list[i];
-            for(size_t i = 0; i < m->nmethods; ++i)
+            for(size_t j = 0; j < m->nmethods; ++j)
             {
-                vtab_entry_t *ent = &m->methods[i];
+                vtab_entry_t *ent = &m->methods[j];
                 if(ent->overrides && strncmp(ent->method, filt_override, slen) == 0 && ent->method[slen] == '(') // Pretty sure this is as proper as it gets
                 {
                     list[nsize++] = m;
