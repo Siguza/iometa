@@ -90,6 +90,11 @@ Now, documenting some quirks:
 
 extern CFTypeRef IOCFUnserializeWithSize(const char *buf, size_t len, CFAllocatorRef allocator, CFOptionFlags options, CFStringRef *err);
 
+// TODO: Implement this to some extent?
+#ifndef __APPLE__
+#   define CFShow(...) do {} while(0)
+#endif
+
 #include "macho.h"
 #include "util.h"
 
