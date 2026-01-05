@@ -97,7 +97,7 @@ do \
             ++mem;
         }
         if(mem >= end) break;
-        DBG(2, "Symmap line %lu", line);
+        DBG(2, "Symmap line %zu", line);
 
         ch = *mem;
 
@@ -117,7 +117,7 @@ do \
             // Must have seen a class name before
             if(!current.class)
             {
-                ERR("Symbol map, line %lu: method declaration before first class declaration", line);
+                ERR("Symbol map, line %zu: method declaration before first class declaration", line);
                 goto bad;
             }
             ++mem; // Skip dash
@@ -154,20 +154,20 @@ do \
             int r = cxx_consume_name((const char**)&mem, end, true);
             if(r == 0 || mem >= end)
             {
-                ERR("Symbol map, line %lu: incomplete method declaration", line);
+                ERR("Symbol map, line %zu: incomplete method declaration", line);
                 goto bad;
             }
             ch = *mem;
             if(ch != '(')
             {
-                ERR("Symbol map, line %lu: expected '(', got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
+                ERR("Symbol map, line %zu: expected '(', got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
                 goto bad;
             }
             if(r == 2) // We have a class name
             {
                 if(mem - namestart < 4)
                 {
-                    ERR("Symbol map, line %lu: bad identifier", line);
+                    ERR("Symbol map, line %zu: bad identifier", line);
                     goto bad;
                 }
                 char *start = mem - 3;
@@ -180,7 +180,7 @@ do \
                 }
                 if(start == namestart)
                 {
-                    ERR("Symbol map, line %lu: failed to parse class name", line);
+                    ERR("Symbol map, line %zu: failed to parse class name", line);
                     goto bad;
                 }
                 *start = '\0'; // terminate class name
@@ -239,7 +239,7 @@ do \
             const char *classname = mem;
             if(cxx_consume_name((const char**)&mem, end, false) == 0)
             {
-                ERR("Symbol map, line %lu: incomplete class name", line);
+                ERR("Symbol map, line %zu: incomplete class name", line);
                 goto bad;
             }
             char *pos = mem;
@@ -256,7 +256,7 @@ do \
             }
             if(mem < end && (ch = *mem) != '\n')
             {
-                ERR("Symbol map, line %lu: expected newline, got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
+                ERR("Symbol map, line %zu: expected newline, got '%c' (0x%hhu)", line, ch, (unsigned char)ch);
                 goto bad;
             }
             if(mem == pos)
@@ -278,7 +278,7 @@ do \
     next:;
         if(mem < end && *mem != '\n')
         {
-            ERR("Symbol map, line %lu: error in parse_symmap implementation, loop does not end on newline", line);
+            ERR("Symbol map, line %zu: error in parse_symmap implementation, loop does not end on newline", line);
             goto bad;
         }
     }
@@ -309,7 +309,7 @@ do \
             cur->duplicate = 1;
             if(prev->num != cur->num)
             {
-                WRN("Duplicate symmap classes %s have different number of methods (%lu vs %lu)", cur->name, prev->num, cur->num);
+                WRN("Duplicate symmap classes %s have different number of methods (%zu vs %zu)", cur->name, prev->num, cur->num);
             }
             else
             {
@@ -407,7 +407,7 @@ bool print_symmap(void *classes, symmap_t *symmap, opt_t opt)
             cur->duplicate = 1;
             if(prev->nmethods != cur->nmethods)
             {
-                WRN("Duplicate classes %s have different number of methods (%lu vs %lu)", cur->name, prev->nmethods, cur->nmethods);
+                WRN("Duplicate classes %s have different number of methods (%zu vs %zu)", cur->name, prev->nmethods, cur->nmethods);
             }
             else
             {

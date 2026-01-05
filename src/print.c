@@ -8,6 +8,7 @@
  * defined by the Mozilla Public License, v. 2.0.
 **/
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>              // printf
@@ -59,7 +60,7 @@ static bool iometa_print_class(metaclass_t *meta, opt_t opt, metaclass_t *OSMeta
     }
     if(opt.size)
     {
-        printf("size=0x%08x ", meta->objsize);
+        printf("size=0x%08"PRIx32" ", meta->objsize);
     }
     if(opt.meta)
     {
@@ -103,11 +104,11 @@ static bool iometa_print_class(metaclass_t *meta, opt_t opt, metaclass_t *OSMeta
             for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
             if(opt.mangle)
             {
-                printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->mangled, colorReset);
+                printf("%s    %*s%zx func=" ADDR " overrides=" ADDR " pac=0x%04"PRIx16" %s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->mangled, colorReset);
             }
             else
             {
-                printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
+                printf("%s    %*s%zx func=" ADDR " overrides=" ADDR " pac=0x%04"PRIx16" %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
             }
         }
     }
@@ -158,11 +159,11 @@ static bool iometa_print_class(metaclass_t *meta, opt_t opt, metaclass_t *OSMeta
                 for(size_t h = hex; h >= 0x10; h >>= 4) --hexlen;
                 if(opt.mangle)
                 {
-                    printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->mangled, colorReset);
+                    printf("%s    %*s%zx func=" ADDR " overrides=" ADDR " pac=0x%04"PRIx16" %s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->mangled, colorReset);
                 }
                 else
                 {
-                    printf("%s    %*s%lx func=" ADDR " overrides=" ADDR " pac=0x%04hx %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
+                    printf("%s    %*s%zx func=" ADDR " overrides=" ADDR " pac=0x%04"PRIx16" %s::%s%s\n", color, hexlen, "0x", hex, ent->addr, pent ? pent->addr : 0, ent->pac, ent->class, ent->method, colorReset);
                 }
             }
         }
@@ -310,19 +311,19 @@ static bool default_print_class(metaclass_t *meta, opt_t opt, metaclass_t *OSMet
 
     if(opt.vtab && meta->vtab != 0 && meta->vtab != -1)
     {
-        if(opt.mangle) snprintf(buf, buflen, "__ZTV%lu%s", len, meta->name);
+        if(opt.mangle) snprintf(buf, buflen, "__ZTV%zu%s", len, meta->name);
         else           snprintf(buf, buflen, "vtablefor%s", meta->name);
         if(!print_sym(buf, meta->vtab, arg)) return false;
     }
     if(opt.meta && meta->addr)
     {
-        if(opt.mangle) snprintf(buf, buflen, "__ZN%lu%s10gMetaClassE", len, meta->name);
+        if(opt.mangle) snprintf(buf, buflen, "__ZN%zu%s10gMetaClassE", len, meta->name);
         else           snprintf(buf, buflen, "%s::gMetaClass", meta->name);
         if(!print_sym(buf, meta->addr, arg)) return false;
     }
     if(opt.meta && meta->metavtab != 0 && meta->metavtab != -1)
     {
-        if(opt.mangle) snprintf(buf, buflen, "__ZTVN%lu%s9MetaClassE", len, meta->name);
+        if(opt.mangle) snprintf(buf, buflen, "__ZTVN%zu%s9MetaClassE", len, meta->name);
         else           snprintf(buf, buflen, "vtablefor%s::MetaClass", meta->name);
         if(!print_sym(buf, meta->metavtab, arg)) return false;
     }

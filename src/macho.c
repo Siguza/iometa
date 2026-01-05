@@ -79,6 +79,7 @@ Now, documenting some quirks:
 #endif
 
 #include <fcntl.h>              // open
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>             // malloc, free, qsort, bsearch, exit
@@ -589,7 +590,7 @@ static bool macho_validate_fixup_chain(const mach_hdr_t *hdr, kptr_t base, fixup
         {
             if(val >= imports_count)
             {
-                ERR("Mach-O chained import number out of bounds: 0x%x", (uint32_t)val);
+                ERR("Mach-O chained import number out of bounds: 0x%"PRIx32, (uint32_t)val);
                 return false;
             }
             ++*nreloc;
@@ -761,7 +762,7 @@ macho_t* macho_open(const char *file)
 
     if(hdr->magic != MH_MAGIC_64)
     {
-        ERR("Wrong magic: 0x%08x", hdr->magic);
+        ERR("Wrong magic: 0x%08"PRIx32, hdr->magic);
         goto out;
     }
     if(hdr->cputype != CPU_TYPE_ARM64)
@@ -772,13 +773,13 @@ macho_t* macho_open(const char *file)
     uint32_t subtype = hdr->cpusubtype & CPU_SUBTYPE_MASK;
     if(subtype != CPU_SUBTYPE_ARM64_ALL && subtype != CPU_SUBTYPE_ARM64E)
     {
-        ERR("Unknown cpusubtype: 0x%x", subtype);
+        ERR("Unknown cpusubtype: 0x%"PRIx32, subtype);
         goto out;
     }
     uint32_t filetype = hdr->filetype;
     if(filetype != MH_EXECUTE && filetype != MH_KEXT_BUNDLE && filetype != MH_FILESET)
     {
-        ERR("Wrong Mach-O type: 0x%x", filetype);
+        ERR("Wrong Mach-O type: 0x%"PRIx32, filetype);
         goto out;
     }
     if(hdr->flags & MH_DYLIB_IN_CACHE)
@@ -820,12 +821,12 @@ macho_t* macho_open(const char *file)
             uint32_t cmdsize;
             if(sizeof(mach_lc_t) > max || (cmdsize = cmd->cmdsize) > max)
             {
-                ERR("Mach-O load command %u out of bounds.", i);
+                ERR("Mach-O load command %"PRIu32" out of bounds.", i);
                 goto out;
             }
             if(cmdsize < sizeof(mach_lc_t))
             {
-                ERR("Mach-O load command %u too short.", i);
+                ERR("Mach-O load command %"PRIu32" too short.", i);
                 goto out;
             }
             switch(cmd->cmd)
@@ -906,7 +907,7 @@ macho_t* macho_open(const char *file)
                 {
                     if(cmdsize < sizeof(mach_seg_t))
                     {
-                        ERR("LC_SEGMENT_64 command (%u) too short.", i);
+                        ERR("LC_SEGMENT_64 command (%"PRIu32") too short.", i);
                         goto out;
                     }
                     const mach_seg_t *seg = (const mach_seg_t*)cmd;
@@ -916,27 +917,27 @@ macho_t* macho_open(const char *file)
                     }
                     if(seg->fileoff > size)
                     {
-                        ERR("LC_SEGMENT_64 (%u) starts out of bounds.", i);
+                        ERR("LC_SEGMENT_64 (%"PRIu32") starts out of bounds.", i);
                         goto out;
                     }
                     if(seg->filesize > size - seg->fileoff)
                     {
-                        ERR("LC_SEGMENT_64 (%u) ends out of bounds.", i);
+                        ERR("LC_SEGMENT_64 (%"PRIu32") ends out of bounds.", i);
                         goto out;
                     }
                     if(seg->vmsize < seg->filesize)
                     {
-                        ERR("LC_SEGMENT_64 (%u) maps less than filesize.", i);
+                        ERR("LC_SEGMENT_64 (%"PRIu32") maps less than filesize.", i);
                         goto out;
                     }
                     if(seg->initprot & ~VM_PROT_ALL)
                     {
-                        ERR("LC_SEGMENT_64 (%u) has invalid permissions.", i);
+                        ERR("LC_SEGMENT_64 (%"PRIu32") has invalid permissions.", i);
                         goto out;
                     }
                     if(seg->nsects * sizeof(mach_sec_t) < cmdsize - sizeof(mach_seg_t))
                     {
-                        ERR("LC_SEGMENT_64 command (%u) too short for its sections.", i);
+                        ERR("LC_SEGMENT_64 command (%"PRIu32") too short for its sections.", i);
                         goto out;
                     }
                     const mach_sec_t *sec = (const mach_sec_t*)(seg + 1);
@@ -949,12 +950,12 @@ macho_t* macho_open(const char *file)
                         }
                         if(sec[j].addr - seg->vmaddr != sec[j].offset - seg->fileoff)
                         {
-                            ERR("Section (%u/%u) has mismatching address/offset.", i, j);
+                            ERR("Section (%"PRIu32"/%"PRIu32") has mismatching address/offset.", i, j);
                             goto out;
                         }
                         if(sec[j].offset < seg->fileoff || sec[j].size > seg->fileoff + seg->filesize - sec[j].offset)
                         {
-                            ERR("Section (%u/%u) overflows its segment.", i, j);
+                            ERR("Section (%"PRIu32"/%"PRIu32") overflows its segment.", i, j);
                             goto out;
                         }
                         if(memcmp(seg->segname, sec[j].segname, 16) != 0)
@@ -973,13 +974,13 @@ macho_t* macho_open(const char *file)
                             fixupKind = DYLD_CHAINED_PTR_ARM64E_FIRMWARE;
                             if(sec[j].size % sizeof(uint32_t) != 0)
                             {
-                                ERR("Mach-O chained fixup section has bad size: 0x%llx", sec[j].size);
+                                ERR("Mach-O chained fixup section has bad size: 0x%"PRIx64, sec[j].size);
                                 goto out;
                             }
                             uint32_t stride = ((const thread_starts_t*)((uintptr_t)hdr + sec[j].offset))->stride;
                             if(stride != 0)
                             {
-                                ERR("Mach-O chained fixup has bad stride: 0x%x", stride);
+                                ERR("Mach-O chained fixup has bad stride: 0x%"PRIx32, stride);
                                 goto out;
                             }
                             thread_starts = &sec[j];
@@ -1123,19 +1124,19 @@ macho_t* macho_open(const char *file)
                     const fixup_hdr_t *fixup = (const fixup_hdr_t*)((uintptr_t)hdr + data->dataoff);
                     if(fixup->fixups_version != 0)
                     {
-                        ERR("Unsupported chained fixup version: %u", fixup->fixups_version);
+                        ERR("Unsupported chained fixup version: %"PRIu32, fixup->fixups_version);
                         goto out;
                     }
                     if(fixup->imports_count)
                     {
                         if(fixup->imports_count > 0xffff)
                         {
-                            ERR("More imports that the pointer format can handle: 0x%x", fixup->imports_count);
+                            ERR("More imports that the pointer format can handle: 0x%"PRIx32, fixup->imports_count);
                             goto out;
                         }
                         if(fixup->imports_format != 0x1 || fixup->symbols_format != 0x0)
                         {
-                            ERR("Unsupported chained imports or symbols format: 0x%x/0x%x", fixup->imports_format, fixup->symbols_format);
+                            ERR("Unsupported chained imports or symbols format: 0x%"PRIx32"/0x%"PRIx32, fixup->imports_format, fixup->symbols_format);
                             goto out;
                         }
                         if(fixup->imports_offset > data->datasize || fixup->imports_count * sizeof(fixup_import_t) > data->datasize - fixup->imports_offset)
@@ -1159,12 +1160,12 @@ macho_t* macho_open(const char *file)
                             }
                             if(imp->lib_ordinal != 0xfe) // flat namespace import
                             {
-                                ERR("Unsupported chained import ordinal: 0x%x (import %u)", imp->lib_ordinal, j);
+                                ERR("Unsupported chained import ordinal: 0x%"PRIx32" (import %"PRIu32")", imp->lib_ordinal, j);
                                 goto out;
                             }
                             if(imp->name_offset >= max_name_offset)
                             {
-                                ERR("Mach-O chained import out of bounds: 0x%x (import %u)", imp->name_offset, j);
+                                ERR("Mach-O chained import out of bounds: 0x%"PRIx32" (import %"PRIu32")", imp->name_offset, j);
                                 goto out;
                             }
                         }
@@ -1191,18 +1192,18 @@ macho_t* macho_open(const char *file)
                         uint32_t max_start_off;
                         if(segs->seg_info_offset[j] > max_seg_off || (max_start_off = max_seg_off - segs->seg_info_offset[j]) < sizeof(fixup_starts_t))
                         {
-                            ERR("Mach-O chained fixup starts out of bounds (%u).", j);
+                            ERR("Mach-O chained fixup starts out of bounds (%"PRIu32").", j);
                             goto out;
                         }
                         const fixup_starts_t *starts = (const fixup_starts_t*)((uintptr_t)segs + segs->seg_info_offset[j]);
                         if(starts->size > max_start_off || starts->size < __builtin_offsetof(fixup_starts_t, page_start) + starts->page_count * sizeof(uint16_t))
                         {
-                            ERR("Mach-O chained fixup starts has bad size (%u).", j);
+                            ERR("Mach-O chained fixup starts has bad size (%"PRIu32").", j);
                             goto out;
                         }
                         if(starts->page_size != 0x1000 && starts->page_size != 0x4000)
                         {
-                            ERR("Mach-O chained fixup starts has bad page size: 0x%x (%u)", starts->page_size, j);
+                            ERR("Mach-O chained fixup starts has bad page size: 0x%"PRIx32" (%"PRIu32")", starts->page_size, j);
                             goto out;
                         }
                         if(fixup_page_size == 0)
@@ -1216,7 +1217,7 @@ macho_t* macho_open(const char *file)
                         }
                         if(starts->pointer_format != DYLD_CHAINED_PTR_ARM64E_KERNEL && starts->pointer_format != DYLD_CHAINED_PTR_64_KERNEL_CACHE)
                         {
-                            ERR("Unsupported chained fixup pointer format: 0x%x (%u)", starts->pointer_format, j);
+                            ERR("Unsupported chained fixup pointer format: 0x%"PRIx32" (%"PRIu32")", starts->pointer_format, j);
                             goto out;
                         }
                         if(fixupKind == DYLD_CHAINED_PTR_NONE)
@@ -1230,7 +1231,7 @@ macho_t* macho_open(const char *file)
                         }
                         if(starts->max_valid_pointer != 0)
                         {
-                            ERR("Mach-O chained fixup starts has bad max_valid_pointer: 0x%x (%u)", starts->max_valid_pointer, j);
+                            ERR("Mach-O chained fixup starts has bad max_valid_pointer: 0x%"PRIx32" (%"PRIu32")", starts->max_valid_pointer, j);
                             goto out;
                         }
                     }
@@ -1242,23 +1243,23 @@ macho_t* macho_open(const char *file)
                 {
                     if(cmdsize < sizeof(mach_fileent_t))
                     {
-                        ERR("LC_FILESET_ENTRY command (%u) too short.", i);
+                        ERR("LC_FILESET_ENTRY command (%"PRIu32") too short.", i);
                         goto out;
                     }
                     if(filetype != MH_FILESET)
                     {
-                        ERR("LC_FILESET_ENTRY command (%u) in non-MH_FILESET Mach-O.", i);
+                        ERR("LC_FILESET_ENTRY command (%"PRIu32") in non-MH_FILESET Mach-O.", i);
                         goto out;
                     }
                     const mach_fileent_t *ent = (const mach_fileent_t*)cmd;
                     if(ent->fileoff > size || size - ent->fileoff < sizeof(mach_hdr_t) || ent->nameoff >= ent->cmdsize)
                     {
-                        ERR("LC_FILESET_ENTRY command (%u) out of bounds.", i);
+                        ERR("LC_FILESET_ENTRY command (%"PRIu32") out of bounds.", i);
                         goto out;
                     }
                     if(((const char*)ent)[ent->cmdsize - 1] != '\0')
                     {
-                        ERR("LC_FILESET_ENTRY (%u) name is missing null terminator.", i);
+                        ERR("LC_FILESET_ENTRY (%"PRIu32") name is missing null terminator.", i);
                         goto out;
                     }
                     size_t sz = size - ent->fileoff;
@@ -1267,7 +1268,7 @@ macho_t* macho_open(const char *file)
                     DBG(2, "Processing embedded header of %s", name);
                     if(mh->magic != MH_MAGIC_64)
                     {
-                        ERR("Embedded Mach-O header has wrong magic: 0x%08x (%s)", mh->magic, name);
+                        ERR("Embedded Mach-O header has wrong magic: 0x%08"PRIx32" (%s)", mh->magic, name);
                         goto out;
                     }
                     if(mh->cputype != hdr->cputype || (mh->cpusubtype & CPU_SUBTYPE_MASK) != subtype)
@@ -1282,7 +1283,7 @@ macho_t* macho_open(const char *file)
                     }
                     if(mh->filetype != MH_EXECUTE && mh->filetype != MH_KEXT_BUNDLE)
                     {
-                        ERR("Embedded Mach-O has bad type: 0x%x", mh->filetype);
+                        ERR("Embedded Mach-O has bad type: 0x%"PRIx32, mh->filetype);
                         goto out;
                     }
                     if(mh->sizeofcmds > sz - sizeof(mach_hdr_t))
@@ -1301,12 +1302,12 @@ macho_t* macho_open(const char *file)
                         uint32_t lcsize;
                         if(sizeof(mach_lc_t) > lcmax || (lcsize = lc->cmdsize) > lcmax)
                         {
-                            ERR("Embedded Mach-O load command %u out of bounds (%s).", j, name);
+                            ERR("Embedded Mach-O load command %"PRIu32" out of bounds (%s).", j, name);
                             goto out;
                         }
                         if(lcsize < sizeof(mach_lc_t))
                         {
-                            ERR("Embedded Mach-O load command %u too short (%s).", j, name);
+                            ERR("Embedded Mach-O load command %"PRIu32" too short (%s).", j, name);
                             goto out;
                         }
                         switch(lc->cmd)
@@ -1459,7 +1460,7 @@ macho_t* macho_open(const char *file)
                             default:
                                 if(lc->cmd & LC_REQ_DYLD)
                                 {
-                                    ERR("Unknown load command %u marked as required in embedded Mach-O (%s).", j, name);
+                                    ERR("Unknown load command %"PRIu32" marked as required in embedded Mach-O (%s).", j, name);
                                     goto out;
                                 }
                                 break;
@@ -1477,7 +1478,7 @@ macho_t* macho_open(const char *file)
                 default:
                     if(cmd->cmd & LC_REQ_DYLD)
                     {
-                        ERR("Unknown load command %u marked as required.", i);
+                        ERR("Unknown load command %"PRIu32" marked as required.", i);
                         goto out;
                     }
                     break;
@@ -1663,7 +1664,7 @@ macho_t* macho_open(const char *file)
     }
     for(size_t i = 0; i < nmapV; ++i)
     {
-        DBG(2, "Map " ADDR " 0x%016lx 0x%08zx 0x%x", mapV[i].addr, mapV[i].mem, mapV[i].size, mapV[i].prot);
+        DBG(2, "Map " ADDR " 0x%016"PRIxPTR" 0x%08zx 0x%"PRIx32, mapV[i].addr, mapV[i].mem, mapV[i].size, mapV[i].prot);
     }
 
     if(nsyms)
@@ -1787,12 +1788,12 @@ macho_t* macho_open(const char *file)
                     size_t off = (size_t)j * (size_t)starts->page_size + (size_t)idx;
                     if(idx > starts->page_size) // don't subtract sizeof(kptr_t) here - see note below
                     {
-                        ERR("Mach-O chained fixup start at 0x%zx overflows pagesize (0x%hx).", off, idx);
+                        ERR("Mach-O chained fixup start at 0x%zx overflows pagesize (0x%"PRIx16").", off, idx);
                         goto out;
                     }
                     if(idx & 0x3)
                     {
-                        ERR("Mach-O chained fixup start at 0x%zx is not aligned to 4 bytes (0x%hx).", off, idx);
+                        ERR("Mach-O chained fixup start at 0x%zx is not aligned to 4 bytes (0x%"PRIx16").", off, idx);
                         goto out;
                     }
                     const kptr_t *ptr = (const kptr_t*)(seg->mem + off);
@@ -1825,7 +1826,7 @@ macho_t* macho_open(const char *file)
                 }
                 if(off & 0x3)
                 {
-                    ERR("Mach-O chained fixup start at 0x%x is not aligned to 4 bytes.", off);
+                    ERR("Mach-O chained fixup start at 0x%"PRIx32" is not aligned to 4 bytes.", off);
                     goto out;
                 }
                 kptr_t addr = base + off;
@@ -1887,7 +1888,7 @@ macho_t* macho_open(const char *file)
                     count += kaslr->count;
                 }
             }
-            DBG(2, "Got %lu local relocations", count);
+            DBG(2, "Got %zu local relocations", count);
             if(count > UINT32_MAX)
             {
                 ERR("kxld fixup count overflows.");
@@ -1911,17 +1912,17 @@ macho_t* macho_open(const char *file)
                     int32_t off = reloc[i].r_address;
                     if(reloc[i].r_extern)
                     {
-                        ERR("Local relocation entry %zu at 0x%x has external bit set.", i, off);
+                        ERR("Local relocation entry %zu at 0x%"PRIx32" has external bit set.", i, off);
                         goto out;
                     }
                     if(reloc[i].r_length != 0x3)
                     {
-                        ERR("Local relocation entry %zu at 0x%x is not 8 bytes.", i, off);
+                        ERR("Local relocation entry %zu at 0x%"PRIx32" is not 8 bytes.", i, off);
                         goto out;
                     }
                     if(off & 0x3)
                     {
-                        ERR("Local relocation entry %zu at 0x%x is not aligned to 4 bytes.", i, off);
+                        ERR("Local relocation entry %zu at 0x%"PRIx32" is not aligned to 4 bytes.", i, off);
                         goto out;
                     }
                     kptr_t addr = base + off;
@@ -1952,7 +1953,7 @@ macho_t* macho_open(const char *file)
                     uint32_t off = kaslr->offsetsArray[i];
                     if(off & 0x3)
                     {
-                        ERR("Prelink relocation entry %zu at 0x%x is not aligned to 4 bytes.", i, off);
+                        ERR("Prelink relocation entry %zu at 0x%"PRIx32" is not aligned to 4 bytes.", i, off);
                         goto out;
                     }
                     kptr_t addr = plk_base + off;
@@ -2014,17 +2015,17 @@ macho_t* macho_open(const char *file)
                 int32_t off = reloc[i].r_address;
                 if(!reloc[i].r_extern)
                 {
-                    ERR("External relocation entry %zu at 0x%x has external bit set.", i, off);
+                    ERR("External relocation entry %zu at 0x%"PRIx32" has external bit set.", i, off);
                     goto out;
                 }
                 if(reloc[i].r_length != 0x3)
                 {
-                    ERR("External relocation entry %zu at 0x%x is not 8 bytes.", i, off);
+                    ERR("External relocation entry %zu at 0x%"PRIx32" is not 8 bytes.", i, off);
                     goto out;
                 }
                 if(off & 0x3)
                 {
-                    ERR("External relocation entry %zu at 0x%x is not aligned to 4 bytes.", i, off);
+                    ERR("External relocation entry %zu at 0x%"PRIx32" is not aligned to 4 bytes.", i, off);
                     goto out;
                 }
                 uint32_t symnum = reloc[i].r_symbolnum;
@@ -2457,7 +2458,7 @@ static kptr_t macho_fixup_internal(fixup_kind_t fixupKind, kptr_t base, kptr_t p
         case DYLD_CHAINED_PTR_64_KERNEL_CACHE:
             if(pp.cache.cache != 0)
             {
-                ERR("Cannot resolve pointer in cache %u: " ADDR, pp.cache.cache, ptr);
+                ERR("Cannot resolve pointer in cache %"PRIu32": " ADDR, pp.cache.cache, ptr);
                 exit(-1);
             }
             if(bind) *bind = false;
@@ -3211,13 +3212,13 @@ static bool macho_populate_bundles(macho_t *macho)
                 CFDictionaryRef dict = CFArrayGetValueAtIndex(arr, i);
                 if(!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID())
                 {
-                    ERR("Array entry %lu is not a dict.", i);
+                    ERR("Array entry %zu is not a dict.", i);
                     goto bad;
                 }
                 CFStringRef cfbundle = CFDictionaryGetValue(dict, CFSTR("CFBundleIdentifier"));
                 if(!cfbundle || CFGetTypeID(cfbundle) != CFStringGetTypeID())
                 {
-                    ERR("CFBundleIdentifier missing or wrong type at entry %lu.", i);
+                    ERR("CFBundleIdentifier missing or wrong type at entry %zu.", i);
                     if(debug >= 2)
                     {
                         CFShow(dict);
@@ -3227,7 +3228,7 @@ static bool macho_populate_bundles(macho_t *macho)
                 const char *bundle = CFStringGetCStringPtr(cfbundle, kCFStringEncodingUTF8);
                 if(!bundle)
                 {
-                    ERR("Failed to get CFString contents at entry %lu.", i);
+                    ERR("Failed to get CFString contents at entry %zu.", i);
                     if(debug >= 2)
                     {
                         CFShow(cfbundle);
@@ -3315,7 +3316,7 @@ static bool macho_populate_bundles(macho_t *macho)
                 const mach_hdr_t *mh = (const mach_hdr_t*)((uintptr_t)segptr + (loadaddr - segaddr));
                 if(mh->magic != MH_MAGIC_64)
                 {
-                    ERR("Mach-O header for kext %s has wrong magic: 0x%08x", bundle, mh->magic);
+                    ERR("Mach-O header for kext %s has wrong magic: 0x%08"PRIx32, bundle, mh->magic);
                     goto bad;
                 }
                 if(mh->cputype != macho->hdr->cputype || (mh->cpusubtype & CPU_SUBTYPE_MASK) != macho->subtype)
@@ -3325,7 +3326,7 @@ static bool macho_populate_bundles(macho_t *macho)
                 }
                 if(mh->filetype != MH_KEXT_BUNDLE)
                 {
-                    ERR("Mach-O header for kext %s has bad type: 0x%x", bundle, mh->filetype);
+                    ERR("Mach-O header for kext %s has bad type: 0x%"PRIx32, bundle, mh->filetype);
                     goto bad;
                 }
                 if(mh->flags & MH_INCRLINK)
@@ -3348,19 +3349,19 @@ static bool macho_populate_bundles(macho_t *macho)
                     uint32_t lcsize;
                     if(sizeof(mach_lc_t) > lcmax || (lcsize = lc->cmdsize) > lcmax)
                     {
-                        ERR("Mach-O header for kext %s load command %u out of bounds.", bundle, j);
+                        ERR("Mach-O header for kext %s load command %"PRIu32" out of bounds.", bundle, j);
                         goto bad;
                     }
                     if(lcsize < sizeof(mach_lc_t))
                     {
-                        ERR("Mach-O header for kext %s load command %u too short.", bundle, j);
+                        ERR("Mach-O header for kext %s load command %"PRIu32" too short.", bundle, j);
                         goto bad;
                     }
                     if(lc->cmd == LC_SEGMENT_64)
                     {
                         if(lc->cmdsize < sizeof(mach_seg_t))
                         {
-                            ERR("Mach-O header for kext %s LC_SEGMENT_64 command (%u) too short.", bundle, j);
+                            ERR("Mach-O header for kext %s LC_SEGMENT_64 command (%"PRIu32") too short.", bundle, j);
                             goto bad;
                         }
                         const mach_seg_t *seg = (const mach_seg_t*)lc;

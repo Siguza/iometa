@@ -8,6 +8,7 @@
  * defined by the Mozilla Public License, v. 2.0.
 **/
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>             // size_t
 #include <stdint.h>
@@ -334,16 +335,16 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
     {
         const void *ptr = from;
         kptr_t addr = macho_ptov(macho, from);
-        DBG(4, "a64emu trace: 0x%08x " ADDR, *(const uint32_t*)ptr, addr);
-        DBG(5, "%08x %08x %016llx %c %c%c%c%c", state->valid, state->wide, state->host, state->nzcv_valid ? 'y' : 'n', state->n ? 'n' : '-', state->z ? 'z' : '-', state->c ? 'c' : '-', state->v ? 'v' : '-');
-        DBG(5, " x0: 0x%016llx  x1: 0x%016llx  x2: 0x%016llx  x3: 0x%016llx", state->x[ 0], state->x[ 1], state->x[ 2], state->x[3]);
-        DBG(5, " x4: 0x%016llx  x5: 0x%016llx  x6: 0x%016llx  x7: 0x%016llx", state->x[ 4], state->x[ 5], state->x[ 6], state->x[7]);
-        DBG(5, " x8: 0x%016llx  x9: 0x%016llx x10: 0x%016llx x11: 0x%016llx", state->x[ 8], state->x[ 9], state->x[10], state->x[11]);
-        DBG(5, "x12: 0x%016llx x13: 0x%016llx x14: 0x%016llx x15: 0x%016llx", state->x[12], state->x[13], state->x[14], state->x[15]);
-        DBG(5, "x16: 0x%016llx x17: 0x%016llx x18: 0x%016llx x19: 0x%016llx", state->x[16], state->x[17], state->x[18], state->x[19]);
-        DBG(5, "x20: 0x%016llx x21: 0x%016llx x22: 0x%016llx x23: 0x%016llx", state->x[20], state->x[21], state->x[22], state->x[23]);
-        DBG(5, "x24: 0x%016llx x25: 0x%016llx x26: 0x%016llx x27: 0x%016llx", state->x[24], state->x[25], state->x[26], state->x[27]);
-        DBG(5, "x28: 0x%016llx x29: 0x%016llx x30: 0x%016llx  sp: 0x%016llx", state->x[28], state->x[29], state->x[30], state->x[31]);
+        DBG(4, "a64emu trace: 0x%08"PRIx32" " ADDR, *(const uint32_t*)ptr, addr);
+        DBG(5, "%08"PRIx32" %08"PRIx32" %016"PRIx64" %c %c%c%c%c", state->valid, state->wide, state->host, state->nzcv_valid ? 'y' : 'n', state->n ? 'n' : '-', state->z ? 'z' : '-', state->c ? 'c' : '-', state->v ? 'v' : '-');
+        DBG(5, " x0: 0x%016"PRIx64"  x1: 0x%016"PRIx64"  x2: 0x%016"PRIx64"  x3: 0x%016"PRIx64, state->x[ 0], state->x[ 1], state->x[ 2], state->x[3]);
+        DBG(5, " x4: 0x%016"PRIx64"  x5: 0x%016"PRIx64"  x6: 0x%016"PRIx64"  x7: 0x%016"PRIx64, state->x[ 4], state->x[ 5], state->x[ 6], state->x[7]);
+        DBG(5, " x8: 0x%016"PRIx64"  x9: 0x%016"PRIx64" x10: 0x%016"PRIx64" x11: 0x%016"PRIx64, state->x[ 8], state->x[ 9], state->x[10], state->x[11]);
+        DBG(5, "x12: 0x%016"PRIx64" x13: 0x%016"PRIx64" x14: 0x%016"PRIx64" x15: 0x%016"PRIx64, state->x[12], state->x[13], state->x[14], state->x[15]);
+        DBG(5, "x16: 0x%016"PRIx64" x17: 0x%016"PRIx64" x18: 0x%016"PRIx64" x19: 0x%016"PRIx64, state->x[16], state->x[17], state->x[18], state->x[19]);
+        DBG(5, "x20: 0x%016"PRIx64" x21: 0x%016"PRIx64" x22: 0x%016"PRIx64" x23: 0x%016"PRIx64, state->x[20], state->x[21], state->x[22], state->x[23]);
+        DBG(5, "x24: 0x%016"PRIx64" x25: 0x%016"PRIx64" x26: 0x%016"PRIx64" x27: 0x%016"PRIx64, state->x[24], state->x[25], state->x[26], state->x[27]);
+        DBG(5, "x28: 0x%016"PRIx64" x29: 0x%016"PRIx64" x30: 0x%016"PRIx64"  sp: 0x%016"PRIx64, state->x[28], state->x[29], state->x[30], state->x[31]);
         if(is_nop(ptr) || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr) || is_bti(ptr))
         {
             // Ignore/no change

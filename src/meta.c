@@ -8,6 +8,7 @@
  * defined by the Mozilla Public License, v. 2.0.
 **/
 
+#include <inttypes.h>
 #include <stddef.h>             // size_t
 #include <stdio.h>
 #include <stdlib.h>             // realloc, free
@@ -92,8 +93,8 @@ void add_metaclass(macho_t *macho, void *arg, a64_state_t *state, const uint32_t
         if(macho_have_symbols(macho))
         {
             char buf[512];
-            uint32_t len = strlen(name);
-            if(snprintf(buf, sizeof(buf), "__ZTV%u%s", len, name) >= sizeof(buf))
+            size_t len = strlen(name);
+            if(snprintf(buf, sizeof(buf), "__ZTV%zu%s", len, name) >= sizeof(buf))
             {
                 WRN("Class name too big for buffer: %s", name);
             }
@@ -104,7 +105,7 @@ void add_metaclass(macho_t *macho, void *arg, a64_state_t *state, const uint32_t
                 {
                     meta->vtab += 2 * sizeof(kptr_t);
                 }
-                if(snprintf(buf, sizeof(buf), "__ZTVN%u%s9MetaClassE", len, name) >= sizeof(buf))
+                if(snprintf(buf, sizeof(buf), "__ZTVN%zu%s9MetaClassE", len, name) >= sizeof(buf))
                 {
                     WRN("MetaClass name too big for buffer: %s", name);
                 }
@@ -214,7 +215,7 @@ bool meta_constructor_cb(macho_t *macho, bool want_vtabs, void *metas, void *nam
                 }
             }
         }
-        WRN("Skipping constructor call without x1-x3 (%x) at " ADDR, state->valid, bladdr);
+        WRN("Skipping constructor call without x1-x3 (%08"PRIx32") at " ADDR, state->valid, bladdr);
         // Fall through
     }
     else if((state->valid & 0x1) != 0x1)
@@ -225,7 +226,7 @@ bool meta_constructor_cb(macho_t *macho, bool want_vtabs, void *metas, void *nam
     }
     else if((state->wide & 0xf) != 0x7)
     {
-        WRN("Skipping constructor call with unexpected register widths (%x) at " ADDR, state->wide, bladdr);
+        WRN("Skipping constructor call with unexpected register widths (%08"PRIx32") at " ADDR, state->wide, bladdr);
         // Fall through
     }
     else
@@ -263,17 +264,17 @@ bool meta_alt_constructor_cb(macho_t *macho, bool want_vtabs, void *metas, void 
     DBG(1, "Alt constructor candidate for %s", name ? name : "???");
     if((state->valid & 0x7e) != 0x7e)
     {
-        WRN("Skipping alt constructor call without x1-x6 (%x) at " ADDR, state->valid, bladdr);
+        WRN("Skipping alt constructor call without x1-x6 (%08"PRIx32") at " ADDR, state->valid, bladdr);
         // Fall through
     }
     else if((state->valid & 0x1) != 0x1)
     {
-        DBG(1, "Skipping alt constructor call without x0 (%x) at " ADDR, state->valid, bladdr);
+        DBG(1, "Skipping alt constructor call without x0 (%08"PRIx32") at " ADDR, state->valid, bladdr);
         // Fall through
     }
     else if((state->wide & 0x7f) != 0x37)
     {
-        WRN("Skipping alt constructor call with unexpected register widths (%x) at " ADDR, state->wide, bladdr);
+        WRN("Skipping alt constructor call with unexpected register widths (%08"PRIx32") at " ADDR, state->wide, bladdr);
         // Fall through
     }
     else

@@ -8,6 +8,7 @@
  * defined by the Mozilla Public License, v. 2.0.
 **/
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>              // asprintf
 #include <stdlib.h>             // malloc, free
@@ -410,7 +411,7 @@ int main(int argc, const char **argv)
         fprintf(stderr, "Symbol must start with underscore\n");
         return -1;
     }
-    printf("PAC: 0x%04hx\n", pac);
+    printf("PAC: 0x%04"PRIx16"\n", pac);
     return 0;
 }
 #endif

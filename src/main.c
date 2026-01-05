@@ -45,6 +45,7 @@ How this works:
 10. Finally we do some filtering and sorting, and print our findings.
 #endif
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>             // uintptr_t
 #include <stdio.h>              // fprintf, stderr
@@ -280,7 +281,7 @@ static vtab_check_t check_vtab_elem(macho_t *macho, uint32_t objsize, const kptr
     }
     if((0ULL - val) >= objsize)
     {
-        ERR("vtable (" ADDR ") offset-to-top exceeds object size (idx 0x%zx, size 0x%x)", vtabaddr, idx, objsize);
+        ERR("vtable (" ADDR ") offset-to-top exceeds object size (idx 0x%zx, size 0x%"PRIx32")", vtabaddr, idx, objsize);
         exit(-1);
     }
     ++idx;
@@ -1288,7 +1289,7 @@ int main(int argc, const char **argv)
     }
 
     // This is a safety check to try and detect metaclass names that we see, but don't end up finding constructors for
-    DBG(1, "Got %lu names (probably a ton of dupes)", namelist.idx);
+    DBG(1, "Got %zu names (probably a ton of dupes)", namelist.idx);
     qsort(namelist.val, namelist.idx, sizeof(*namelist.val), &compare_meta_candidates);
     for(size_t i = 0; i < namelist.idx; ++i)
     {
@@ -1326,7 +1327,7 @@ int main(int argc, const char **argv)
                 kptr_t bladdr = macho_ptov(macho, current->fncall);
                 if((state.wide & 0xf) != 0x7)
                 {
-                    WRN("Skipping constructor call with unexpected registers width (%x) at " ADDR, state.wide, bladdr);
+                    WRN("Skipping constructor call with unexpected registers width (%08"PRIx32") at " ADDR, state.wide, bladdr);
                     // Fall through
                 }
                 else
@@ -1355,7 +1356,7 @@ int main(int argc, const char **argv)
     }
     ARRFREE(namelist);
 
-    DBG(1, "Got %lu metaclasses", metas.idx);
+    DBG(1, "Got %zu metaclasses", metas.idx);
     for(size_t i = 0; i < metas.idx; ++i)
     {
         metaclass_t *meta = &metas.val[i];
@@ -1485,7 +1486,7 @@ int main(int argc, const char **argv)
                         {
                             if(!(state.valid & (1 << str->Rn)) || !(state.wide & (1 << str->Rn)) || !(state.valid & (1 << str->Rt)) || !(state.wide & (1 << str->Rt)))
                             {
-                                DBG(1, "Bad valid/wide flags (%x/%x)", state.valid, state.wide);
+                                DBG(1, "Bad valid/wide flags (%08"PRIx32"/%08"PRIx32")", state.valid, state.wide);
                             }
                             else
                             {
@@ -1559,7 +1560,7 @@ int main(int argc, const char **argv)
                         continue;
                     }
                     VtabGetMetaClassIdx = i;
-                    DBG(1, "VtabGetMetaClassIdx: 0x%lx", VtabGetMetaClassIdx);
+                    DBG(1, "VtabGetMetaClassIdx: 0x%zx", VtabGetMetaClassIdx);
                     break;
                 }
             }
@@ -1587,7 +1588,7 @@ int main(int argc, const char **argv)
                 }
                 else
                 {
-                    DBG(1, "Found \"__cxa_pure_virtual\" %lu times", strref.idx);
+                    DBG(1, "Found \"__cxa_pure_virtual\" %zu times", strref.idx);
                     pure_virtual_args_t args =
                     {
                         .macho = macho,
@@ -1627,7 +1628,7 @@ int main(int argc, const char **argv)
                     if(macho_fixup(macho, ovtab[i], NULL, NULL, NULL, NULL) == pure_virtual)
                     {
                         VtabAllocIdx = i;
-                        DBG(1, "VtabAllocIdx: 0x%lx", VtabAllocIdx);
+                        DBG(1, "VtabAllocIdx: 0x%zx", VtabAllocIdx);
                         break;
                     }
                 }
@@ -1792,7 +1793,7 @@ int main(int argc, const char **argv)
                             {
                                 //if(meta->vtab == -1)
                                 {
-                                    WRN("Bad pre-bl state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
+                                    WRN("Bad pre-bl state in %s::MetaClass::alloc (%08"PRIx32" %08"PRIx32" %016"PRIx64")", meta->name, state.valid, state.wide, state.host);
                                 }
                                 break;
                             }
@@ -1800,7 +1801,7 @@ int main(int argc, const char **argv)
                             {
                                 //if(meta->vtab == -1)
                                 {
-                                    WRN("Alloc has wrong size in %s::MetaClass::alloc (0x%llx vs 0x%x)", meta->name, allocsz, meta->objsize);
+                                    WRN("Alloc has wrong size in %s::MetaClass::alloc (0x%"PRIx64" vs 0x%"PRIx32")", meta->name, allocsz, meta->objsize);
                                 }
                                 break;
                             }
@@ -1838,7 +1839,7 @@ int main(int argc, const char **argv)
                             }
                             if(!(state.valid & 0x1) || !(state.wide & 0x1) || !HOST_GET(&state, 0))
                             {
-                                WRN("Bad end state in %s::MetaClass::alloc (%08x %08x %016llx)", meta->name, state.valid, state.wide, state.host);
+                                WRN("Bad end state in %s::MetaClass::alloc (%08"PRIx32" %08"PRIx32" %016"PRIx64")", meta->name, state.valid, state.wide, state.host);
                                 break;
                             }
                             kptr_t vt = *(kptr_t*)state.x[0];
@@ -1932,7 +1933,7 @@ int main(int argc, const char **argv)
                     //   In that case we wanna silence this warning, because if it had children, the symmap would probably be right.
                     if(meta->symclass && meta->symclass->num != 0 && meta->has_dependents)
                     {
-                        WRN("Symmap entry for %s has %lu methods, but class has no vtab.", meta->name, meta->symclass->num);
+                        WRN("Symmap entry for %s has %zu methods, but class has no vtab.", meta->name, meta->symclass->num);
                     }
                     goto done;
                 }
@@ -1981,7 +1982,7 @@ int main(int argc, const char **argv)
                 size_t pnmeth = parent ? parent->nmethods : 0;
                 if(nmeth < pnmeth)
                 {
-                    WRN("%s has fewer methods than its parent (%lu vs %lu).", meta->name, nmeth, pnmeth);
+                    WRN("%s has fewer methods than its parent (%zu vs %zu).", meta->name, nmeth, pnmeth);
                     meta->methods_err = 1;
                     goto done;
                 }
@@ -2000,7 +2001,7 @@ int main(int argc, const char **argv)
                     {
                         if(symcls->num > nmeth)
                         {
-                            WRN("Symmap entry for %s has %lu methods, vtab has %lu.", meta->name, symcls->num, nmeth);
+                            WRN("Symmap entry for %s has %zu methods, vtab has %zu.", meta->name, symcls->num, nmeth);
                             ignore_symmap = true;
                         }
                         else
@@ -2010,7 +2011,7 @@ int main(int argc, const char **argv)
                     }
                     else if(symcls->num + pnmeth != nmeth)
                     {
-                        WRN("Symmap entry for %s has %lu methods, vtab has %lu.", meta->name, symcls->num, nmeth - pnmeth);
+                        WRN("Symmap entry for %s has %zu methods, vtab has %zu.", meta->name, symcls->num, nmeth - pnmeth);
                         ignore_symmap = true;
                     }
                 }
@@ -2135,7 +2136,7 @@ int main(int argc, const char **argv)
                         }
                         if(bent && pac != bent->pac)
                         {
-                            WRN("PAC mismatch method 0x%lx: %s 0x%04hx vs 0x%04hx %s", idx * sizeof(kptr_t), meta->name, pac, bent->pac, bcls->name);
+                            WRN("PAC mismatch method 0x%zx: %s 0x%04"PRIx16" vs 0x%04"PRIx16" %s", idx * sizeof(kptr_t), meta->name, pac, bent->pac, bcls->name);
                         }
                     }
 
@@ -2194,7 +2195,7 @@ int main(int argc, const char **argv)
                     if(!method)
                     {
                         char *meth = NULL;
-                        asprintf(&meth, "fn_0x%lx()", idx * sizeof(kptr_t));
+                        asprintf(&meth, "fn_0x%zx()", idx * sizeof(kptr_t));
                         if(!meth)
                         {
                             ERRNO("asprintf(method)");
@@ -2304,7 +2305,7 @@ int main(int argc, const char **argv)
                                 ERR("Failed to compute PAC diversifier. This means something is very broken.");
                                 return -1;
                             }
-                            DBG(1, "Computed PAC 0x%04hx for symbol %s", div, sym);
+                            DBG(1, "Computed PAC 0x%04"PRIx16" for symbol %s", div, sym);
 
                             // Optimisation: if we computed the symbol for the current class and don't have one yet,
                             // we may as well keep it. Otherwise this may be done later, but no need to duplicate work.
@@ -2395,7 +2396,7 @@ int main(int argc, const char **argv)
                         {
                             if(!meta->methods_done || meta->methods_err || meta->vtab == 0)
                             {
-                                WRN("Bad OSMetaClass state: %u/%u/" ADDR, meta->methods_done, meta->methods_err, meta->vtab);
+                                WRN("Bad OSMetaClass state: %"PRIu32"/%"PRIu32"/" ADDR, meta->methods_done, meta->methods_err, meta->vtab);
                             }
                             else
                             {
@@ -2454,7 +2455,7 @@ int main(int argc, const char **argv)
                     }
                     if(nmetameth != -1 && nmeth != nmetameth)
                     {
-                        WRN("%s::MetaClass has a different amount of methods than the base class (%lu vs %lu).", meta->name, nmeth, nmetameth);
+                        WRN("%s::MetaClass has a different amount of methods than the base class (%zu vs %zu).", meta->name, nmeth, nmetameth);
                         goto done;
                     }
                     meta->metamethods = malloc(nmeth * sizeof(*meta->metamethods));
@@ -2603,7 +2604,7 @@ int main(int argc, const char **argv)
                         if(!method)
                         {
                             char *meth = NULL;
-                            asprintf(&meth, "fn_0x%lx()", idx * sizeof(kptr_t));
+                            asprintf(&meth, "fn_0x%zx()", idx * sizeof(kptr_t));
                             if(!meth)
                             {
                                 ERRNO("asprintf(method)");
