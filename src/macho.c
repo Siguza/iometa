@@ -564,6 +564,7 @@ static bool macho_bitmap_set(uint8_t **ptrBitmap, size_t off)
             ERRNO("malloc(bitmap)");
             return false;
         }
+        bzero(bitmap, MACHO_BITMAP_PAGESIZE >> 5);
         ptrBitmap[MACHO_BITMAP_PAGE(off)] = bitmap;
     }
     bitmap[MACHO_BITMAP_IDX(off)] |= 0x1 << MACHO_BITMAP_BIT(off);
