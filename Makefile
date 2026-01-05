@@ -3,7 +3,7 @@ TARGET  := iometa
 SRCDIR  := src
 GENDIR  := gen
 DEPDIR  := IOCFBootleg
-FLAGS   := -Wall -Wshadow-all -std=gnu17 -D_GNU_SOURCE=1 -O3 -flto -DVERSION=$(VERSION) -DTIMESTAMP="`date +'%d. %B %Y %H:%M:%S'`" -I$(SRCDIR) $(CFLAGS)
+FLAGS   := -Wall -Wshadow-all -std=gnu17 -O3 -flto -D_GNU_SOURCE=1 -DVERSION=$(VERSION) -DTIMESTAMP="`date +'%d. %B %Y %H:%M:%S'`" -I$(SRCDIR) -lc++abi $(CFLAGS)
 DEP_C   :=
 DEP_H   :=
 
@@ -16,9 +16,9 @@ ifndef HOST_OS
 endif
 
 ifeq ($(HOST_OS),Darwin)
-    FLAGS += -framework CoreFoundation -framework IOKit -lc++abi
+    FLAGS += -framework CoreFoundation -framework IOKit
 else
-    FLAGS += -Wno-unused-but-set-variable -isystem $(DEPDIR)/include -isystem $(DEPDIR)/src -lstdc++
+    FLAGS += -Wno-unused-but-set-variable -isystem $(DEPDIR)/include -isystem $(DEPDIR)/src
     DEP_C += $(DEPDIR)/src/CoreFoundation/*.c $(DEPDIR)/src/IOKit/*.c
     DEP_H += $(DEPDIR)/src/CoreFoundation/*.h $(DEPDIR)/src/device/*.h $(DEPDIR)/src/*.h $(DEPDIR)/include/CoreFoundation/*.h $(DEPDIR)/include/IOKit/*.h $(DEPDIR)/include/System/libkern/*.h
 endif

@@ -5,11 +5,17 @@ Class names, inheritance, vtables, methods, etc.
 
 ### Building
 
-Should be simple enough:
+Besides the main `iometa` binary, the helper tools `mangle` and `pac` can be built.  
+On macOS, everything should build out of the box:
 
-    make
+    make        # Builds iometa
+    make all    # Same as above
+    make aux    # Builds mangle and pac
 
-Links against CoreFoundation and IOKit though, so probably only works on Darwin platforms.
+Linux is now supported via the `IOCFBootleg` submodule, but you will need to build with `clang` and you need to have `libc++abi` from LLVM installed.
+
+    git submodule update --init
+    CC=clang make
 
 ### Usage
 
@@ -29,6 +35,10 @@ Examples:
     iometa -R kernel map.txt                        # Generate a radare2 script file with all symbols
 
 For more info on symbol maps and resymbolication, see [`/sym`](https://github.com/Siguza/iometa/tree/master/sym).
+
+The helper tools `mangle` and `pac` each take a single command line argument.  
+`mangle` turns a source-level C++ function signature into a mangled symbol (the opposite of `c++filt`).  
+`pac` computes the 16-bit PAC for a mangled symbol name.
 
 ### License
 
