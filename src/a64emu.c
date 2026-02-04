@@ -354,7 +354,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
             const sys_t *mrs = ptr;
             if(mrs->Rt != 31)
             {
-                // We have no concept of system registers, so just threat them as invalid
+                // We have no concept of system registers, so just treat them as invalid
                 state->valid &= ~(1 << mrs->Rt);
             }
         }

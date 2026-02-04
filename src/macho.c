@@ -1435,7 +1435,7 @@ macho_t* macho_open(const char *file)
                                 }
                                 if(bits != 0)
                                 {
-                                    // Fleset kernelcaches between iOS 17.0 and 17.4 (exclusive) that live under SPTM had XNU's
+                                    // Fileset kernelcaches between iOS 17.0 and 17.4 (exclusive) that live under SPTM had XNU's
                                     // executable segments rearranged relative to each other when creating the fileset, and the
                                     // kernelcache builder tried to update the function starts info, but didn't account for the
                                     // fact that this would need more space than before, so this can actually be truncated.
@@ -2217,7 +2217,7 @@ macho_t* macho_open(const char *file)
                                 }
                                 if(!found)
                                 {
-                                    // Only handle this gracefully if we have a single fileset entry with funtion starts (i.e. XNU).
+                                    // Only handle this gracefully if we have a single fileset entry with function starts (i.e. XNU).
                                     if(nfilesetfnstarts == 1)
                                     {
                                         DBG(2, "Detected malformed function starts, skipping...");
