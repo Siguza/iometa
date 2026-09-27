@@ -340,6 +340,14 @@ typedef struct
 
 typedef struct
 {
+    uint32_t Rd  :  5,
+             imm : 16,
+             key :  1,
+             op  : 10;
+} pacimm_t;
+
+typedef struct
+{
     uint32_t Rt  :  5,
              op2 :  3,
              CRm :  4,
@@ -880,6 +888,11 @@ static inline bool is_pac(const pac_t *pac)
     return pac->op1 == 0x36b04 && pac->op2 == 0;
 }
 
+static inline bool is_pacsppc(const pac_t *pac)
+{
+    return pac->op1 == 0x36b06 && pac->op2 == 0 && pac->data == 0 && pac->Rn == 31 && pac->Rd == 30;
+}
+
 static inline bool is_pacsys(const pacsys_t *pacsys)
 {
     return pacsys->op1 == 0x3540c8 && pacsys->op2 == 0x2 && pacsys->op3 == 0x1f && (pacsys->x == 0 || pacsys->C == 1);
@@ -893,6 +906,16 @@ static inline bool is_pacga(const pacga_t *pacga)
 static inline bool is_aut(const pac_t *pac)
 {
     return pac->op1 == 0x36b04 && pac->op2 == 1;
+}
+
+static inline bool is_autsppc(const pacimm_t *pacimm)
+{
+    return pacimm->op == 0b1111001110 && pacimm->Rd == 31;
+}
+
+static inline bool is_autsppcr(const pac_t *pac)
+{
+    return pac->op1 == 0b110110101100000110 && pac->Z == 0 && pac->op2 == 1 && pac->data == 0 && pac->Rd == 30;
 }
 
 static inline bool is_autsys(const pacsys_t *pacsys)
@@ -932,10 +955,16 @@ static inline bool is_nop(const nop_t *nop)
 
 static inline bool is_ret(const ret_t *ret)
 {
-    ret_t r = *ret;
-    return r == 0xd65f03c0 || // ret
-           r == 0xd65f0bff || // retaa
-           r == 0xd65f0fff;   // retab
+    union
+    {
+        ret_t r;
+        bra_t bra;
+        pacimm_t pacimm;
+    } u;
+    u.r = *ret;
+    return u.r == 0xd65f03c0                                        // ret
+        || (u.bra.op == 0b110101100101111100001 && u.bra.Rn == 31)  // reta{a,b}[sppcr]
+        || (u.pacimm.op == 0b0101010100 && u.pacimm.Rd == 31);      // ret{a,b}sppc
 }
 
 static inline bool is_and_reg(const and_reg_t *and)

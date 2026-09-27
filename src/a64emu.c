@@ -93,9 +93,12 @@ bool is_linear_inst(const void *ptr)
            is_strb_uoff(ptr)   ||
            is_strh_uoff(ptr)   ||
            is_pac(ptr)         ||
+           is_pacsppc(ptr)     ||
            is_pacsys(ptr)      ||
            is_pacga(ptr)       ||
            is_aut(ptr)         ||
+           is_autsppc(ptr)     ||
+           is_autsppcr(ptr)    ||
            is_autsys(ptr)      ||
            is_mrs(ptr)         ||
            is_dc_zva(ptr)      ||
@@ -345,7 +348,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
         DBG(5, "x20: 0x%016"PRIx64" x21: 0x%016"PRIx64" x22: 0x%016"PRIx64" x23: 0x%016"PRIx64, state->x[20], state->x[21], state->x[22], state->x[23]);
         DBG(5, "x24: 0x%016"PRIx64" x25: 0x%016"PRIx64" x26: 0x%016"PRIx64" x27: 0x%016"PRIx64, state->x[24], state->x[25], state->x[26], state->x[27]);
         DBG(5, "x28: 0x%016"PRIx64" x29: 0x%016"PRIx64" x30: 0x%016"PRIx64"  sp: 0x%016"PRIx64, state->x[28], state->x[29], state->x[30], state->x[31]);
-        if(is_nop(ptr) || is_pac(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsys(ptr) || is_bti(ptr))
+        if(is_nop(ptr) || is_pac(ptr) || is_pacsppc(ptr) || is_pacsys(ptr) || is_pacga(ptr) || is_aut(ptr) || is_autsppc(ptr) || is_autsppcr(ptr) || is_autsys(ptr) || is_bti(ptr))
         {
             // Ignore/no change
         }
@@ -354,7 +357,7 @@ emu_ret_t a64_emulate(macho_t *macho, a64_state_t *state, const uint32_t *from, 
             const sys_t *mrs = ptr;
             if(mrs->Rt != 31)
             {
-                // We have no concept of system registers, so just threat them as invalid
+                // We have no concept of system registers, so just treat them as invalid
                 state->valid &= ~(1 << mrs->Rt);
             }
         }

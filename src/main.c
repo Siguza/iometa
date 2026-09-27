@@ -645,8 +645,8 @@ static bool pure_virtual_cb(const void *ptr, kptr_t addr, size_t size, uint32_t 
                 loc--;
                 refloc -= sizeof(uint32_t);
             }
-            pacsys_t *pac = (pacsys_t*)(loc - 1);
-            if(is_pacsys(pac))
+            void *pac = loc - 1;
+            if(is_pacsys(pac) || is_pacsppc(pac))
             {
                 loc--;
                 refloc -= sizeof(uint32_t);

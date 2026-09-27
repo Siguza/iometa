@@ -110,12 +110,16 @@ extern CFTypeRef IOCFUnserializeWithSize(const char *buf, size_t len, CFAllocato
 #ifdef CPU_SUBTYPE_ARM64E
 #   undef CPU_SUBTYPE_ARM64E
 #endif
+#ifdef CPU_SUBTYPE_ARM64E_X1
+#   undef CPU_SUBTYPE_ARM64E_X1
+#endif
 
 // Apple notation
 #define CPU_TYPE_ARM64              0x0100000c
 #define CPU_SUBTYPE_MASK            0x00ffffff
 #define CPU_SUBTYPE_ARM64_ALL              0x0
 #define CPU_SUBTYPE_ARM64E                 0x2
+#define CPU_SUBTYPE_ARM64E_X1              0xc
 #define FAT_CIGAM                   0xbebafeca
 #define MH_MAGIC_64                 0xfeedfacf
 #define MH_EXECUTE                  0x00000002
@@ -650,6 +654,26 @@ static bool macho_chained_imports_cb(const kptr_t *ptr, void *arg)
     return true;
 }
 
+static bool macho_arch_compatible(uint32_t outer_cputype, uint32_t inner_cputype, uint32_t outer_subtype, uint32_t inner_subtype)
+{
+    if(outer_cputype == inner_cputype)
+    {
+        if(outer_subtype == inner_subtype)
+        {
+            return true;
+        }
+        if(outer_cputype == CPU_TYPE_ARM64 && outer_subtype == CPU_SUBTYPE_ARM64E_X1 && inner_subtype == CPU_SUBTYPE_ARM64E)
+        {
+            return true;
+        }
+        return false;
+    }
+    else
+    {
+        return false;
+    }
+}
+
 macho_t* macho_open(const char *file)
 {
     macho_t *macho = NULL;
@@ -746,7 +770,7 @@ macho_t* macho_open(const char *file)
 
                 best = &arch[i];
                 // Prefer arm64e
-                if((subtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E)
+                if((subtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E || (subtype & CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E_X1)
                 {
                     break;
                 }
@@ -776,7 +800,7 @@ macho_t* macho_open(const char *file)
         goto out;
     }
     uint32_t subtype = hdr->cpusubtype & CPU_SUBTYPE_MASK;
-    if(subtype != CPU_SUBTYPE_ARM64_ALL && subtype != CPU_SUBTYPE_ARM64E)
+    if(subtype != CPU_SUBTYPE_ARM64_ALL && subtype != CPU_SUBTYPE_ARM64E && subtype != CPU_SUBTYPE_ARM64E_X1)
     {
         ERR("Unknown cpusubtype: 0x%"PRIx32, subtype);
         goto out;
@@ -1276,7 +1300,7 @@ macho_t* macho_open(const char *file)
                         ERR("Embedded Mach-O header has wrong magic: 0x%08"PRIx32" (%s)", mh->magic, name);
                         goto out;
                     }
-                    if(mh->cputype != hdr->cputype || (mh->cpusubtype & CPU_SUBTYPE_MASK) != subtype)
+                    if(!macho_arch_compatible(hdr->cputype, mh->cputype, subtype, mh->cpusubtype & CPU_SUBTYPE_MASK))
                     {
                         ERR("Embedded Mach-O has mismatching cputype or cpusubtype (%s).", name);
                         goto out;
@@ -2432,7 +2456,7 @@ bool macho_is_kext(macho_t *macho)
 
 bool macho_has_pac(macho_t *macho)
 {
-    return macho->subtype == CPU_SUBTYPE_ARM64E;
+    return macho->subtype == CPU_SUBTYPE_ARM64E || macho->subtype == CPU_SUBTYPE_ARM64E_X1;
 }
 
 bool macho_is_ptr(macho_t *macho, const void *loc)
